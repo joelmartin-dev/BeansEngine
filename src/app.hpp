@@ -27,11 +27,10 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/hash.hpp>
 
-// for declaring fastgltf members
-#include "fastgltf/types.hpp"
-
 // for ktxTexture2 type
 #include "ktx.h"
+
+#include "cgltf.h"
 
 // for camera member (stores universal uniform buffer)
 #include "camera.hpp"
@@ -42,19 +41,8 @@ constexpr uint32_t HEIGHT = 600;
 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
-// path to gltf, can be defined through compile-line preprocessor
-//#ifndef MODEL_PATH
-//#define MODEL_PATH "../assets/sponza/Sponza.gltf"
-//#endif
-
-static char model_path[256] = "../assets/sponza/Sponza.gltf";
-
-// path to spv, can be defined through compile-line preprocessor
-//#ifndef SHADER_PATH
-//#define SHADER_PATH "../assets/shaders/shader.spv"
-//#endif
-
-static char shader_path[256] = "../assets/shaders/shader.spv";
+static char model_path[] = "assets/sponza/Sponza.gltf";
+static char shader_path[] = "assets/shaders/shader.spv";
 
 // not array, implicit typing and contents are immutable
 const std::vector validationLayers = {
@@ -79,9 +67,9 @@ struct EngineStats {
 
 struct Vertex {
   // Attributes
-  glm::vec3 pos;
-  glm::vec3 colour;
-  glm::vec2 texCoord;
+  glm::vec3 pos = {};
+  glm::vec3 colour = {};
+  glm::vec2 texCoord = {};
 
   // How the struct is passed
   static vk::VertexInputBindingDescription getBindingDescription()
@@ -129,14 +117,12 @@ struct MVP {
 
 // stores the unique data of each primitive in a gltf
 struct PrimData {
-  fastgltf::Mesh* parent;
-
-  std::vector<uint32_t> indices;
+  std::vector<uint32_t> indices = { 0 };
   
   vk::raii::Buffer indexBuffer = nullptr;
   vk::raii::DeviceMemory indexBufferMemory = nullptr;
   
-  size_t imageViewIndex;
+  size_t imageViewIndex = 0;
 
   std::vector<vk::raii::DescriptorSet> descriptorSets;
 };
@@ -169,15 +155,14 @@ class App
   private:
   // Class Variables
   GLFWwindow* pWindow = nullptr;
-  
 
   static int xpos, ypos;
   
   EngineStats stats;
+
+  cgltf_data* asset;
   
   std::vector<Vertex> vertices;
-
-  fastgltf::Asset asset;
 
   std::vector<MeshData> meshes;
   std::vector<PrimData> prims;
@@ -288,7 +273,7 @@ class App
   ) const;
   void loadAsset(std::filesystem::path path);
   void loadTextures(std::filesystem::path path);
-  [[nodiscard]] std::pair<vk::raii::Image, vk::raii::DeviceMemory> createTextureImage(const char* texturePath);
+  [[nodiscard]] std::pair<vk::raii::Image, vk::raii::DeviceMemory> createTextureImage(const std::string texturePath);
   void createBuffer(
     vk::DeviceSize size,
     vk::BufferUsageFlags usage,

@@ -93,7 +93,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <AdditionalIncludeDirectories>$(SolutionDir)deps;$(SolutionDir)include;$(VULKAN_SDK)\include\</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>GLM_FORCE_CXX20;KHRONOS_STATIC;IMGUI_IMPL_VULKAN_USE_VOLK;VULKAN_HPP_NO_STRUCT_CONSTRUCTORS;_DEBUG;WINDOWS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;GLM_FORCE_CXX20;KHRONOS_STATIC;IMGUI_IMPL_VULKAN_USE_VOLK;VULKAN_HPP_NO_STRUCT_CONSTRUCTORS;_DEBUG;WINDOWS</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -133,8 +133,6 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="deps\base64.cpp" />
-    <ClCompile Include="deps\fastgltf.cpp" />
     <ClCompile Include="deps\imgui.cpp" />
     <ClCompile Include="deps\imgui_demo.cpp" />
     <ClCompile Include="deps\imgui_draw.cpp" />
@@ -142,8 +140,6 @@
     <ClCompile Include="deps\imgui_impl_vulkan.cpp" />
     <ClCompile Include="deps\imgui_tables.cpp" />
     <ClCompile Include="deps\imgui_widgets.cpp" />
-    <ClCompile Include="deps\io.cpp" />
-    <ClCompile Include="deps\simdjson.cpp" />
     <ClCompile Include="src\app.cpp" />
     <ClCompile Include="src\camera.cpp" />
     <ClCompile Include="src\main.cpp" />
@@ -157,15 +153,7 @@
     <ClInclude Include="deps\imstb_rectpack.h" />
     <ClInclude Include="deps\imstb_textedit.h" />
     <ClInclude Include="deps\imstb_truetype.h" />
-    <ClInclude Include="deps\simdjson.h" />
-    <ClInclude Include="include\fastgltf\base64.hpp" />
-    <ClInclude Include="include\fastgltf\core.hpp" />
-    <ClInclude Include="include\fastgltf\dxmath_element_traits.hpp" />
-    <ClInclude Include="include\fastgltf\glm_element_traits.hpp" />
-    <ClInclude Include="include\fastgltf\math.hpp" />
-    <ClInclude Include="include\fastgltf\tools.hpp" />
-    <ClInclude Include="include\fastgltf\types.hpp" />
-    <ClInclude Include="include\fastgltf\util.hpp" />
+    <ClInclude Include="include\cgltf.h" />
     <ClInclude Include="include\GLFW\glfw3.h" />
     <ClInclude Include="include\GLFW\glfw3native.h" />
     <ClInclude Include="include\KHR\khr_df.h" />
@@ -181,9 +169,8 @@
     <Library Include="lib\Windows\volk.lib" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\..\..\..\Downloads\main_sponza\main_sponza\NewSponza_Main_glTF_003.gltf" />
     <None Include="assets\shaders\shader.slang" />
-    <None Include="assets\sponza\Sponza.gltf" />
+    <None Include="assets\sponza\out\out.gltf" />
     <None Include="lib\Windows\ktx.pdb" />
     <None Include="lib\Windows\ktx_read.pdb" />
     <None Include="lib\Windows\volk.pdb" />

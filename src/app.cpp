@@ -50,11 +50,10 @@ static std::vector<char> readFile(const std::string& fileName)
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 
-#include "fastgltf/core.hpp"
-#include "fastgltf/tools.hpp"
-#include "fastgltf/glm_element_traits.hpp"
-
 #include "ktxvulkan.h"
+
+#define CGLTF_IMPLEMENTATION
+#include "cgltf.h"
 
 void App::run()
 {
@@ -104,8 +103,8 @@ void App::initVulkan()
   createGraphicsPipeline();
   createCommandPool();
   createDepthResources();
-  loadAsset(static_cast<std::filesystem::path>(model_path));
-  loadTextures(static_cast<std::filesystem::path>(model_path));
+  loadAsset(std::filesystem::path(model_path).make_preferred());
+  loadTextures(std::filesystem::path(model_path).make_preferred());
   createTextureSampler();
   loadGeometry();
   createVertexBuffer();
@@ -700,26 +699,25 @@ uint32_t App::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags proper
 
 void App::loadAsset(std::filesystem::path path)
 {
-  fastgltf::Parser parser;
-  constexpr auto options = fastgltf::Options::LoadExternalBuffers;
-  auto data = fastgltf::GltfDataBuffer::FromPath(path);
-  if (data.error() != fastgltf::Error::None)
-    throw std::runtime_error(std::string("failed to load ").append(path.string()));
-  else
-    std::clog << "loaded " << path << std::endl;
+  cgltf_options options = {};
+  asset = NULL;
+  if (cgltf_parse_file(&options, path.generic_string().c_str(), &asset) != cgltf_result_success)
+  {
+    throw std::runtime_error(std::string("failed to load ").append(path.generic_string()));
+    cgltf_free(asset);
+  }
 
-  auto parsed = parser.loadGltf(data.get(), path.parent_path(), options);
-  if (parsed.error() != fastgltf::Error::None)
-    throw std::runtime_error(std::string("failed to parse ").append(path.string()));
-  else
-    std::clog << "parsed " << path << std::endl;
+  if (cgltf_validate(asset) != cgltf_result_success)
+  {
+    throw std::runtime_error(std::string("failed to validate ").append(path.generic_string()));
+    cgltf_free(asset);
+  }
 
-  if (fastgltf::validate(parsed.get()) != fastgltf::Error::None)
-    throw std::runtime_error(std::string("failed to validate ").append(path.string()));
-  else
-    std::clog << "validated " << path << std::endl;
-
-  asset = std::move(parsed.get());
+  if (cgltf_load_buffers(&options, asset, path.generic_string().c_str()) != cgltf_result_success)
+  {
+    throw std::runtime_error(std::string("failed to load buffers for ").append(path.generic_string()));
+    cgltf_free(asset);
+  }
 }
 
 void App::loadTextures(std::filesystem::path path)
@@ -728,32 +726,39 @@ void App::loadTextures(std::filesystem::path path)
   textureImagesMemory.clear();
   textureImageViews.clear();
 
-  //std::for_each(std::execution::par, asset.materials.begin(), asset.materials.end(), [&](auto& material)
-  for (auto& material : asset.materials)
+  for (size_t i = 0; i < asset->materials_count; i++)
   {
-    fastgltf::Image image = asset.images[asset.textures[material.pbrData.baseColorTexture->textureIndex].imageIndex.value()];
-    std::visit(
-      fastgltf::visitor { [](auto& args) { (void)args; }, [&](fastgltf::sources::URI& filePath)
-        {
-            const std::string texturePath = path.parent_path().append(filePath.uri.path().begin(), filePath.uri.path().end()).string();
-            auto image = createTextureImage(texturePath.c_str());
-            textureImages.emplace_back(std::move(image.first));
-            textureImagesMemory.emplace_back(std::move(image.second));
-        }
-      },
-      image.data);
+    std::filesystem::path uri = asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri;
+    const std::string texturePath = (path.parent_path() / uri).string();
+    auto image = createTextureImage(texturePath);
+    textureImages.emplace_back(std::move(image.first));
+    textureImagesMemory.emplace_back(std::move(image.second));
   }
-  //);
 }
 
-[[nodiscard]] std::pair<vk::raii::Image, vk::raii::DeviceMemory> App::createTextureImage(const char* texturePath)
+[[nodiscard]] std::pair<vk::raii::Image, vk::raii::DeviceMemory> App::createTextureImage(const std::string texturePath)
 {
   ktxTexture2* kTexture;
-  auto result = ktxTexture2_CreateFromNamedFile(texturePath, KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &kTexture);
+  auto result = ktxTexture2_CreateFromNamedFile(texturePath.c_str(), KTX_TEXTURE_CREATE_NO_FLAGS, &kTexture);
 
   if (result != KTX_SUCCESS)
   {
-    throw std::runtime_error("failed to load ktx texture image!");
+    throw std::runtime_error(std::string("failed to load ktx texture image: ").append(texturePath));
+  }
+
+  if (ktxTexture2_NeedsTranscoding(kTexture))
+  {
+    ktx_transcode_fmt_e tf;
+    auto deviceFeatures = physicalDevice.getFeatures();
+    if (deviceFeatures.textureCompressionBC)
+    {
+      tf = KTX_TTF_BC3_RGBA;
+    }
+    result = ktxTexture2_TranscodeBasis(kTexture, tf, 0);
+    if (result != KTX_SUCCESS)
+    {
+      throw std::runtime_error(std::string("failed to transcode ktx texture image: ").append(texturePath));
+    }
   }
 
   auto texWidth = kTexture->baseWidth;
@@ -761,6 +766,7 @@ void App::loadTextures(std::filesystem::path path)
   auto mipLevels = kTexture->numLevels;
   auto imageSize = ktxTexture_GetDataSize(ktxTexture(kTexture));
   auto ktxTextureData = ktxTexture_GetData(ktxTexture(kTexture));
+
 
   vk::Format textureFormat = static_cast<vk::Format>(ktxTexture2_GetVkFormat(kTexture));
 
@@ -783,9 +789,6 @@ void App::loadTextures(std::filesystem::path path)
   vk::raii::DeviceMemory textureImageMemory = nullptr;
   
   createImage(texWidth, texHeight, mipLevels, textureFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled, vk::MemoryPropertyFlagBits::eDeviceLocal, textureImage, textureImageMemory);
-  
-  //textureImages.emplace_back(std::move(tempImage));
-  //textureImagesMemory.emplace_back(std::move(tempMemory));
   
   transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, mipLevels);
   copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight, mipLevels, kTexture);
@@ -963,61 +966,157 @@ void App::createTextureSampler()
   textureSampler = vk::raii::Sampler(device, samplerInfo);
 }
 
-void App::loadGeometry()
+template<typename T>
+std::vector<T> getAccessorData(const cgltf_accessor* accessor)
 {
-  for (auto& mesh : asset.meshes)
+  cgltf_size num_comps = cgltf_num_components(accessor->type);
+  cgltf_size num_elems = num_comps * accessor->count;
+  cgltf_float* unpacked_data = static_cast<cgltf_float*>(malloc(num_elems * sizeof(cgltf_float)));
+
+  std::vector<T> result;
+  result.resize(accessor->count);
+
+  if (unpacked_data)
   {
-    meshes.emplace_back(MeshData{});
-    for (auto& p : mesh.primitives)
+    cgltf_size written_elems = cgltf_accessor_unpack_floats(accessor, unpacked_data, num_elems);
+    for (cgltf_size i = 0; i < written_elems; i += num_comps)
     {
-      prims.emplace_back(PrimData{});
-
-      uint32_t v_offset = static_cast<uint32_t>(vertices.size());
-
-      if (p.indicesAccessor.has_value())
+      for (cgltf_size j = 0; j < num_comps; j++)
       {
-        auto& accessor = asset.accessors[p.indicesAccessor.value()];
-        prims.back().indices.resize(accessor.count);
-        fastgltf::iterateAccessorWithIndex<uint32_t>(
-          asset, accessor, [&](uint32_t index, size_t idx)
-            {
-              prims.back().indices[idx] = index + v_offset;
-            }
-        );
+        result[static_cast<size_t>(i / num_comps)][static_cast<glm::length_t>(j)] = unpacked_data[i + j];
       }
-      
-      auto pos = p.findAttribute("POSITION");
-      auto uv = p.findAttribute("TEXCOORD_0");
-      
-      if (pos != p.attributes.end())
-      {
-        auto& accessor = asset.accessors[pos->accessorIndex];
-        vertices.resize(v_offset + accessor.count);
-        
-        fastgltf::iterateAccessorWithIndex<glm::vec3>(
-          asset, accessor, [&](glm::vec3 position, uint32_t idx)
-          {
-            vertices[idx + v_offset].pos = position / 500.0f;
-          }
-        );
-      }
-      
-      if (uv != p.attributes.end())
-      {  
-        auto& accessor = asset.accessors[uv->accessorIndex];
-        fastgltf::iterateAccessorWithIndex<glm::vec2>(
-          asset, accessor, [&](glm::vec2 uv, uint32_t idx)
-          {
-            vertices[idx + v_offset].texCoord = uv;
-          }
-        );
-      }
-
-      prims.back().imageViewIndex = p.materialIndex.value();
-
-      prims.back().parent = &mesh;
     }
   }
+
+  free(unpacked_data);
+
+  return result;
+}
+
+void App::loadGeometry()
+{
+  for (cgltf_size meshIt = 0; meshIt < asset->meshes_count; meshIt++)
+  {
+    meshes.emplace_back();
+
+    auto m = &asset->meshes[meshIt];
+
+    for (cgltf_size primIt = 0; primIt < m->primitives_count; primIt++)
+    {
+      prims.emplace_back();
+
+      auto p = &m->primitives[primIt];
+
+      uint32_t v_offset = static_cast<uint32_t>(vertices.size());
+      //uint32_t i_offset = static_cast<uint32_t>(indices.size());
+
+      auto indexAccessor = p->indices;
+
+      cgltf_size num_idx_elems = cgltf_num_components(indexAccessor->type) * indexAccessor->count;
+      uint32_t* unpacked_indices = static_cast<uint32_t*>(malloc(num_idx_elems * sizeof(uint32_t)));
+
+      if (unpacked_indices)
+      {
+        cgltf_size written_uints = cgltf_accessor_unpack_indices(indexAccessor, unpacked_indices, static_cast<cgltf_size>(sizeof(uint32_t)), num_idx_elems);
+        //std::clog << "Unpacked " << written_uints << " indices, ";
+        prims.back().indices.resize(indexAccessor->count);
+
+        for (cgltf_size i = 0; i < written_uints; i++)
+        {
+          prims.back().indices[i] = unpacked_indices[i] + v_offset;
+        }
+        free(unpacked_indices);
+      }
+
+
+      for (cgltf_size i = 0; i < asset->materials_count; i++)
+      {
+        if (strcmp(p->material->pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri, asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri) == 0)
+        {
+          prims.back().imageViewIndex = i;
+          break;
+        }
+      }
+
+      cgltf_accessor* posAccessor = NULL; cgltf_accessor *uvAccessor = NULL;
+      for (cgltf_size attrIt = 0; attrIt < p->attributes_count; attrIt++)
+      {
+        auto attr = &p->attributes[attrIt];
+        switch (attr->type)
+        {
+          case cgltf_attribute_type_position:
+            posAccessor = attr->data;
+            break;
+          case cgltf_attribute_type_texcoord:
+            uvAccessor = attr->data;
+            break;
+          default:
+            break;
+        }
+      }
+
+      std::vector<glm::vec3> positions = getAccessorData<glm::vec3>(posAccessor);
+      std::vector<glm::vec2> uvs = getAccessorData<glm::vec2>(uvAccessor);
+
+      glm::vec3 scale(1.0f);
+
+      if (asset->nodes[0].has_scale)
+      {
+        scale.x = asset->nodes[0].scale[0];
+        scale.y = asset->nodes[0].scale[1];
+        scale.z = asset->nodes[0].scale[2];
+      }
+
+      vertices.resize(vertices.size() + posAccessor->count);
+      for (size_t i = 0; i < posAccessor->count; i++)
+      {
+        vertices[v_offset + i].pos = positions[i] * scale;
+        vertices[v_offset + i].texCoord = uvs[i];
+      }
+
+      //cgltf_size num_pos_elems = cgltf_num_components(posAccessor->type) * posAccessor->count;
+      //cgltf_float* unpacked_positions= static_cast<cgltf_float*>(malloc(num_pos_elems * sizeof(cgltf_float)));
+      //
+      //cgltf_size num_uv_elems = cgltf_num_components(uvAccessor->type) * uvAccessor->count;
+      //cgltf_float* unpacked_uvs = static_cast<cgltf_float*>(malloc(num_uv_elems * sizeof(cgltf_float)));
+
+      //if (unpacked_positions && unpacked_uvs)
+      //{
+      //  cgltf_size position_floats = cgltf_accessor_unpack_floats(posAccessor, unpacked_positions, num_pos_elems);
+      //  //std::clog << position_floats << " position floats, ";
+
+      //  cgltf_size uv_floats = cgltf_accessor_unpack_floats(uvAccessor, unpacked_uvs, num_uv_elems);
+      //  //std::clog << uv_floats << " uv floats" << std::endl;
+
+      //  vertices.resize(vertices.size() + posAccessor->count);
+      //  
+      //  for (cgltf_size i = 0; i < num_pos_elems; i += 3)
+      //  {
+      //    vertices[v_offset + i / 3].pos.x = unpacked_positions[i + 0];
+      //    vertices[v_offset + i / 3].pos.y = unpacked_positions[i + 1];
+      //    vertices[v_offset + i / 3].pos.z = unpacked_positions[i + 2];
+
+      //    if (asset->nodes[0].has_scale)
+      //    {
+      //      vertices[v_offset + i / 3].pos.x *= asset->nodes[0].scale[0];
+      //      vertices[v_offset + i / 3].pos.y *= asset->nodes[0].scale[1];
+      //      vertices[v_offset + i / 3].pos.z *= asset->nodes[0].scale[2];
+      //    }
+      //  }
+
+      //  for (cgltf_size i = 0; i < num_uv_elems; i += 2)
+      //  {
+      //    vertices[v_offset + i / 2].texCoord.x = unpacked_uvs[i + 0];
+      //    vertices[v_offset + i / 2].texCoord.y = unpacked_uvs[i + 1];
+      //  }
+      //    std::clog << vertices[v_offset + 3].texCoord.x << ", " << vertices[v_offset + 3].texCoord.y << std::endl;
+      //  
+      //  free(unpacked_positions);
+      //  free(unpacked_uvs);
+      //}
+    }
+  }
+  cgltf_free(asset);
 }
 
 void App::copyBuffer(
@@ -1297,6 +1396,9 @@ void App::mainLoop()
   stats.tris /= 3;
   camera.update(1.0f);
   double xpos, ypos;
+  std::chrono::system_clock::time_point start = std::chrono::system_clock::now();
+  std::chrono::system_clock::time_point end = std::chrono::system_clock::time_point::max();
+
   while (glfwWindowShouldClose(pWindow) != GLFW_TRUE)
   {
     glfwPollEvents();
@@ -1348,10 +1450,16 @@ void App::mainLoop()
     }
 
     ImGui::Render();
+    
+    // Lock to 60fps
+    while (std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() < 16667)
+    {
+      end = std::chrono::system_clock::now();
+    }
 
-    auto start = std::chrono::system_clock::now();
+    start = std::chrono::system_clock::now();
     drawFrame();
-    auto end = std::chrono::system_clock::now();
+    end = std::chrono::system_clock::now();
     stats.frametime = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
   }
   device.waitIdle();
