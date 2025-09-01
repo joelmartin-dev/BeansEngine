@@ -1,13 +1,17 @@
 # Controls
-WASDQE -> Camera Translation
-Shift -> Translation Speed Modifier
-Arrow Keys -> Camera Rotation (smooth)
-\-\+ -> FOV
-Mouse Motion -> Camera Rotation (jittery)
-F -> Toggle Mouse Motion
+
+| Key/Button   | Action                     |
+| ------------ | -------------------------- |
+| WASDQE       | Camera Translation         |
+| LeftShift    | Translation Speed Modifier |
+| Arrow Keys   | Camera Rotation (smooth)   |
+| - +          | FOV                        |
+| Mouse Motion | Camera Rotation (jittery)  |
+| F            | Toggle Mouse Motion        |
+| R            | Reload Shaders             |
 
 # Running the Program
-Navigate to project root folder
+Navigate to project root folder\
 Run the executable: ./bin/GlobalIllumination
 
 # Compilation Requirements
@@ -27,6 +31,6 @@ Using software rasterisation instead.
  * vulkan-swrast
 
 # Further Ideas
-Save precompiled shader paths to number keys for quick-switching
-Beauty Pass -> Colour and Gamma Correction, Anti-aliasing, etc.
+Save precompiled shader paths to number keys for quick-switching\
+Beauty Pass -> Colour and Gamma Correction, Anti-aliasing, etc.\
 FXAA
