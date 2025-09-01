@@ -80,6 +80,8 @@ class App
   std::vector<Mesh> meshes;
   std::vector<Primitive> prims;
 
+  std::mutex m;
+
   vk::raii::Context context;
   vk::raii::Instance instance = nullptr;
   vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
@@ -188,7 +190,7 @@ class App
   ) const;
   void loadAsset(std::filesystem::path path);
   void loadTextures(std::filesystem::path path);
-  [[nodiscard]] std::pair<vk::raii::Image, vk::raii::DeviceMemory> createTextureImage(const std::string texturePath);
+  [[nodiscard]] std::pair<vk::raii::Image, vk::raii::DeviceMemory> createTextureImage(const std::string texturePath, size_t idx);
   void createBuffer(
     vk::DeviceSize size,
     vk::BufferUsageFlags usage,
@@ -212,7 +214,8 @@ class App
   void createTextureImageView(
     const vk::raii::Image& image, 
     vk::Format format, 
-    uint32_t mipLevels
+    uint32_t mipLevels,
+    size_t idx
   );
   void createTextureSampler();
   void loadGeometry();

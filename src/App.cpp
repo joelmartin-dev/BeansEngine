@@ -35,7 +35,7 @@ static std::vector<char> readFile(const std::string& fileName)
 #include <stdexcept>
 #include <vector>
 #include <algorithm>
-#include <execution>
+#include <future>
 #include <chrono>
 #include <memory>
 
@@ -730,13 +730,34 @@ void App::loadTextures(std::filesystem::path path)
 
   for (size_t i = 0; i < asset->materials_count; i++)
   {
-    std::filesystem::path uri = asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri;
-    const std::string texturePath = (path.parent_path() / uri).string();
-    textureImages.emplace_back(createTextureImage(texturePath));
+    textureImages.emplace_back(std::pair(nullptr, nullptr));
+    textureImageViews.emplace_back(nullptr);
+  }
+
+  // for (size_t i = 0; i < asset->materials_count; i++)
+  // {
+  //   std::filesystem::path uri = asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri;
+  //   const std::string texturePath = (path.parent_path() / uri).string();
+  //   textureImages[i] = (createTextureImage(texturePath, i));
+  // }
+  std::vector<std::future<void>> futures;
+  futures.reserve(asset->materials_count);
+
+  for (size_t i = 0; i < asset->materials_count; ++i) {
+      futures.emplace_back(std::async(std::launch::async, [this, &path, i]() {
+          std::filesystem::path uri = asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri;
+          const std::string texturePath = (path.parent_path() / uri).string();
+          textureImages[i] = createTextureImage(texturePath, i);
+      }));
+  }
+
+  // Wait for futures
+  for (auto& future : futures) {
+      future.wait();
   }
 }
 
-[[nodiscard]] std::pair<vk::raii::Image, vk::raii::DeviceMemory> App::createTextureImage(const std::string texturePath)
+[[nodiscard]] std::pair<vk::raii::Image, vk::raii::DeviceMemory> App::createTextureImage(const std::string texturePath, size_t idx)
 {
   ktxTexture2* kTexture;
   auto result = ktxTexture2_CreateFromNamedFile(texturePath.c_str(), KTX_TEXTURE_CREATE_NO_FLAGS, &kTexture);
@@ -748,11 +769,11 @@ void App::loadTextures(std::filesystem::path path)
 
   if (ktxTexture2_NeedsTranscoding(kTexture))
   {
-    ktx_transcode_fmt_e tf;
+    ktx_transcode_fmt_e tf = KTX_TTF_BC3_RGBA;
     auto deviceFeatures = physicalDevice.getFeatures();
-    if (deviceFeatures.textureCompressionBC)
+    if (!deviceFeatures.textureCompressionBC)
     {
-      tf = KTX_TTF_BC3_RGBA;
+      throw std::runtime_error("device cannot transcode to BC");
     }
     result = ktxTexture2_TranscodeBasis(kTexture, tf, 0);
     if (result != KTX_SUCCESS)
@@ -772,6 +793,9 @@ void App::loadTextures(std::filesystem::path path)
 
   vk::raii::Buffer stagingBuffer({});
   vk::raii::DeviceMemory stagingBufferMemory({});
+
+  while (m.try_lock() == false)
+    ;
 
   createBuffer(
     imageSize,
@@ -796,7 +820,8 @@ void App::loadTextures(std::filesystem::path path)
   
   ktxTexture2_Destroy(kTexture);
   
-  createTextureImageView(textureImage, textureFormat, mipLevels);
+  textureImageViews[idx] = (createImageView(textureImage, textureFormat, vk::ImageAspectFlagBits::eColor, mipLevels));
+  m.unlock();
   return std::pair(std::move(textureImage), std::move(textureImageMemory));
 }
 
@@ -939,10 +964,10 @@ void App::copyBufferToImage(
   endSingleTimeCommands(*commandBuffer);
 }
 
-void App::createTextureImageView(const vk::raii::Image& image, vk::Format format, uint32_t mipLevels)
-{
-  textureImageViews.emplace_back(createImageView(image, format, vk::ImageAspectFlagBits::eColor, mipLevels));
-}
+// void App::createTextureImageView(const vk::raii::Image& image, vk::Format format, uint32_t mipLevels)
+// {
+//   textureImageViews.emplace_back(createImageView(image, format, vk::ImageAspectFlagBits::eColor, mipLevels));
+// }
 
 void App::createTextureSampler()
 {
