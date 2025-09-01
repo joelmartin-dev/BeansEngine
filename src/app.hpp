@@ -13,7 +13,6 @@
 
 #include <vulkan/vulkan_raii.hpp> // C++ bindings and RAII definitions for vulkan
 
-#define GLM_FORCE_CXX20
 #include <glm/glm.hpp>
 
 #define GLFW_INCLUDE_VULKAN
@@ -30,8 +29,8 @@
 #include "Vertex.hpp"
 #include "Particle.hpp"
 
-constexpr uint32_t WIDTH = 800;
-constexpr uint32_t HEIGHT = 600;
+constexpr uint32_t WIDTH = 1440;
+constexpr uint32_t HEIGHT = 900;
 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 

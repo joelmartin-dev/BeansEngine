@@ -1395,23 +1395,26 @@ void App::mainLoop()
     ImGui::NewFrame();
     auto pi = glm::pi<double>();
     auto neg_pi = -pi;
+    auto pi_2 = glm::pi<double>() / 2.0;
+    auto neg_pi_2 = -pi_2;
 
     {
       ImGui::Begin("Delta Frametime", &showWindow, ImGuiWindowFlags_AlwaysAutoResize);
       ImGui::Text("%llius", stats.frametime);
       ImGui::Text("%i tris", stats.tris);
       ImGui::Spacing();
-      ImGui::SliderFloat("Cam X", &camera.position.x, -30.0f, 30.0f);
-      ImGui::SliderFloat("Cam Y", &camera.position.y, -30.0f, 30.0f);
-      ImGui::SliderFloat("Cam Z", &camera.position.z, -30.0f, 30.0f);
+      ImGui::SliderFloat("X", &camera.position.x, -30.0f, 30.0f);
+      ImGui::SliderFloat("Y", &camera.position.y, -30.0f, 30.0f);
+      ImGui::SliderFloat("Z", &camera.position.z, -30.0f, 30.0f);
       ImGui::SliderFloat("Move Speed", &camera.moveSpeed, 0.01f, 100.0f);
       ImGui::Spacing();
-      ImGui::SliderScalar("Rot Pitch", ImGuiDataType_Double, &camera.pitch, &neg_pi, &pi);
-      ImGui::SliderScalar("Rot Pitch", ImGuiDataType_Double, &camera.yaw, &neg_pi, &pi);
+      ImGui::SliderScalar("Pitch", ImGuiDataType_Double, &camera.pitch, &neg_pi_2, &pi_2);
+      ImGui::SliderScalar("Yaw", ImGuiDataType_Double, &camera.yaw, &neg_pi, &pi);
       ImGui::SliderFloat("Pitch Speed", &camera.pitchSpeed, 0.01f, 40.0f);
       ImGui::SliderFloat("Yaw Speed", &camera.yawSpeed, 0.01f, 40.0f);
       ImGui::Spacing();
       ImGui::SliderFloat("FOV", &camera.fov, 20.0f, 170.0f);
+      ImGui::SliderFloat("FOV Speed", &camera.fovSpeed, 0.01f, 1000.0f);
       ImGui::Spacing();
       ImGui::SliderFloat("Shift Speed", &camera.shiftSpeed, 0.01f, 4.0f);
       ImGui::InputFloat("Delta Mult", &deltaMultiplier);

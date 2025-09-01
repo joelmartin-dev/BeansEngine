@@ -22,6 +22,8 @@ class Camera
   float shiftSpeed { 2.0f };
 
   float fov { 45.0f };
+  double deltaFOV { 0.0 };
+  float fovSpeed { 500.0f };
 
   double oldXpos { 0.0 };
   double oldYpos { 0.0 };

@@ -23,11 +23,13 @@ void Camera::update(double delta)
   right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
 
   pitch += deltaPitch * static_cast<double>(pitchSpeed) * delta;
-  pitch = glm::mod(pitch + glm::pi<double>(), glm::pi<double>() * 2.0f) - glm::pi<double>();
+  pitch = glm::clamp(pitch, -glm::pi<double>() / 2.0 + 0.01, glm::pi<double>() / 2.0 - 0.01);
   yaw += deltaYaw * static_cast<double>(yawSpeed) * delta;
   yaw = glm::mod(yaw + glm::pi<double>(), glm::pi<double>() * 2.0f) - glm::pi<double>();
 
   float mod = shiftMod ? shiftSpeed : 1.0f;
+
+  fov += deltaFOV * static_cast<double>(fovSpeed) * delta;
 
   position += (forward * velocity.z + right * velocity.x + glm::vec3(0.0f, 1.0f, 0.0f) * velocity.y) * moveSpeed * static_cast<float>(delta) * mod;
 }
@@ -89,6 +91,12 @@ void Camera::key_callback(GLFWwindow* pWindow, int key, int scancode, int action
       case GLFW_KEY_RIGHT:
         deltaYaw = 1.0;
         break;
+      case GLFW_KEY_MINUS:
+        deltaFOV = -1.0;
+        break;
+      case GLFW_KEY_EQUAL:
+        deltaFOV = 1.0;
+        break;
       case GLFW_KEY_LEFT_SHIFT:
         shiftMod = true;
         break;
@@ -123,6 +131,10 @@ void Camera::key_callback(GLFWwindow* pWindow, int key, int scancode, int action
       case GLFW_KEY_LEFT:
       case GLFW_KEY_RIGHT:
         deltaYaw = 0.0;
+        break;
+      case GLFW_KEY_MINUS:
+      case GLFW_KEY_EQUAL:
+        deltaFOV = 0.0;
         break;
       case GLFW_KEY_LEFT_SHIFT:
         shiftMod = false;
