@@ -30,7 +30,6 @@
 #include "Vertex.hpp"
 #include "Particle.hpp"
 
-// constexpr allows for explicit typing (vs const)
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
 
@@ -39,7 +38,7 @@ constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 static char model_path[256] = "assets/sponza/Sponza.gltf";
 static char shader_path[256] = "assets/shaders/shader.spv";
 
-// not array, implicit typing and contents are immutable
+// not array; vector allows implicit typing and contents are immutable
 const std::vector validationLayers = {
   "VK_LAYER_KHRONOS_validation"
 };
@@ -48,7 +47,9 @@ const std::vector validationLayers = {
 constexpr bool enableValidationLayers = false;
 #else
 constexpr bool enableValidationLayers = true;
+#ifdef _WIN32
 #pragma comment(linker, "/SUBSYSTEM:CONSOLE")
+#endif
 #endif
 
 // need to keep byte alignment in mind when defining probe and ray data structures
@@ -71,8 +72,6 @@ class App
   // Class Variables
   GLFWwindow* pWindow = nullptr;
 
-  static int xpos, ypos;
-  
   EngineStats stats;
 
   cgltf_data* asset;
@@ -112,31 +111,26 @@ class App
   std::vector<vk::raii::ImageView> swapChainImageViews;
   
   vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
+  vk::raii::DescriptorSetLayout computeDescriptorSetLayout = nullptr;
+  std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> computePipeline = std::pair(nullptr, nullptr);
 
-  vk::raii::PipelineLayout pipelineLayout = nullptr;
-  vk::raii::Pipeline graphicsPipeline = nullptr;
-  vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1;
-  
+  std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> graphicsPipeline = std::pair(nullptr, nullptr);
+
   vk::raii::CommandPool commandPool = nullptr;
   std::vector<vk::raii::CommandBuffer> commandBuffers;
-  std::vector<vk::raii::Image> textureImages;
-  std::vector<vk::raii::DeviceMemory> textureImagesMemory;
+  std::vector<std::pair<vk::raii::Image, vk::raii::DeviceMemory>> textureImages;
   std::vector<vk::raii::ImageView> textureImageViews;
   vk::raii::Sampler textureSampler = nullptr;
 
-  vk::raii::Image depthImage = nullptr;
-  vk::raii::DeviceMemory depthImageMemory = nullptr;
+  std::pair<vk::raii::Image, vk::raii::DeviceMemory> depthImage = std::pair(nullptr, nullptr);
   vk::raii::ImageView depthImageView = nullptr;
 
-  vk::raii::Buffer vertexBuffer = nullptr;
-  vk::raii::DeviceMemory vertexBufferMemory = nullptr;
+  std::pair <vk::raii::Buffer, vk::raii::DeviceMemory> vertexBuffer = std::pair(nullptr, nullptr);
 
-  std::vector<vk::raii::Buffer> uniformBuffers;
-  std::vector<vk::raii::DeviceMemory> uniformBuffersMemory;
+  std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> uniformBuffers;
   std::vector<void*> uniformBuffersMapped;
 
-  std::vector<vk::raii::Buffer> shaderStorageBuffers;
-  std::vector<vk::raii::DeviceMemory> shaderStorageBuffersMemory;
+  std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> shaderStorageBuffers;
 
   vk::raii::DescriptorPool descriptorPool = nullptr;
   vk::raii::DescriptorPool imguiDescriptorPool = nullptr;

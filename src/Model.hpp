@@ -6,10 +6,10 @@
 
 // stores the unique data of each primitive in a gltf
 struct Primitive {
-  std::vector<uint32_t> indices = { 0 };
+  std::vector<uint32_t> indices;
 
-  vk::raii::Buffer indexBuffer = nullptr;
-  vk::raii::DeviceMemory indexBufferMemory = nullptr;
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> indexBuffer = std::pair(nullptr, nullptr);
+  //vk::raii::DeviceMemory indexBufferMemory = nullptr;
 
   size_t imageViewIndex = 0;
 

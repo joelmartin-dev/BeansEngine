@@ -438,6 +438,7 @@ void App::createDescriptorSetLayout()
 
 void App::createGraphicsPipeline()
 {
+  graphicsPipeline = std::pair(nullptr, nullptr);
   auto shaderModule = createShaderModule(readFile(shader_path));
   
   vk::PipelineShaderStageCreateInfo vertShaderModuleCreateInfo {
@@ -530,7 +531,7 @@ void App::createGraphicsPipeline()
     .pSetLayouts = &*descriptorSetLayout,
     .pushConstantRangeCount = 0
   };
-  pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+  graphicsPipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 
   vk::Format depthFormat = findDepthFormat();
   vk::PipelineRenderingCreateInfo pipelineRenderingInfo = {
@@ -551,11 +552,11 @@ void App::createGraphicsPipeline()
     .pDepthStencilState = &depthStencil,
     .pColorBlendState = &colorBlendInfo,
     .pDynamicState = &dynamicInfo,
-    .layout = pipelineLayout,
+    .layout = graphicsPipeline.first,
     .renderPass = nullptr,
   };
 
-  graphicsPipeline = vk::raii::Pipeline(device, nullptr, graphicsPipelineInfo);
+  graphicsPipeline.second = vk::raii::Pipeline(device, nullptr, graphicsPipelineInfo);
 }
 
 [[nodiscard]] vk::raii::ShaderModule App::createShaderModule(const std::vector<char>& code) const 
@@ -620,10 +621,10 @@ void App::createDepthResources()
     vk::ImageTiling::eOptimal,
     vk::ImageUsageFlagBits::eDepthStencilAttachment,
     vk::MemoryPropertyFlagBits::eDeviceLocal,
-    depthImage,
-    depthImageMemory
+    depthImage.first,
+    depthImage.second
   );
-  depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);
+  depthImageView = createImageView(depthImage.first, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);
 }
 
 void App::createImage(
@@ -725,16 +726,16 @@ void App::loadAsset(std::filesystem::path path)
 void App::loadTextures(std::filesystem::path path)
 {
   textureImages.clear();
-  textureImagesMemory.clear();
+  //textureImagesMemory.clear();
   textureImageViews.clear();
 
   for (size_t i = 0; i < asset->materials_count; i++)
   {
     std::filesystem::path uri = asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri;
     const std::string texturePath = (path.parent_path() / uri).string();
-    auto image = createTextureImage(texturePath);
-    textureImages.emplace_back(std::move(image.first));
-    textureImagesMemory.emplace_back(std::move(image.second));
+    textureImages.emplace_back(createTextureImage(texturePath));
+    //textureImages.emplace_back(std::move(image.first));
+    //textureImagesMemory.emplace_back(std::move(image.second));
   }
 }
 
@@ -799,7 +800,7 @@ void App::loadTextures(std::filesystem::path path)
   ktxTexture2_Destroy(kTexture);
   
   createTextureImageView(textureImage, textureFormat, mipLevels);
-  return std::make_pair(std::move(textureImage), std::move(textureImageMemory));
+  return std::pair(std::move(textureImage), std::move(textureImageMemory));
 }
 
 void App::createBuffer(
@@ -1075,47 +1076,6 @@ void App::loadGeometry()
         vertices[v_offset + i].pos = positions[i] * scale;
         vertices[v_offset + i].texCoord = uvs[i];
       }
-
-      //cgltf_size num_pos_elems = cgltf_num_components(posAccessor->type) * posAccessor->count;
-      //cgltf_float* unpacked_positions= static_cast<cgltf_float*>(malloc(num_pos_elems * sizeof(cgltf_float)));
-      //
-      //cgltf_size num_uv_elems = cgltf_num_components(uvAccessor->type) * uvAccessor->count;
-      //cgltf_float* unpacked_uvs = static_cast<cgltf_float*>(malloc(num_uv_elems * sizeof(cgltf_float)));
-
-      //if (unpacked_positions && unpacked_uvs)
-      //{
-      //  cgltf_size position_floats = cgltf_accessor_unpack_floats(posAccessor, unpacked_positions, num_pos_elems);
-      //  //std::clog << position_floats << " position floats, ";
-
-      //  cgltf_size uv_floats = cgltf_accessor_unpack_floats(uvAccessor, unpacked_uvs, num_uv_elems);
-      //  //std::clog << uv_floats << " uv floats" << std::endl;
-
-      //  vertices.resize(vertices.size() + posAccessor->count);
-      //  
-      //  for (cgltf_size i = 0; i < num_pos_elems; i += 3)
-      //  {
-      //    vertices[v_offset + i / 3].pos.x = unpacked_positions[i + 0];
-      //    vertices[v_offset + i / 3].pos.y = unpacked_positions[i + 1];
-      //    vertices[v_offset + i / 3].pos.z = unpacked_positions[i + 2];
-
-      //    if (asset->nodes[0].has_scale)
-      //    {
-      //      vertices[v_offset + i / 3].pos.x *= asset->nodes[0].scale[0];
-      //      vertices[v_offset + i / 3].pos.y *= asset->nodes[0].scale[1];
-      //      vertices[v_offset + i / 3].pos.z *= asset->nodes[0].scale[2];
-      //    }
-      //  }
-
-      //  for (cgltf_size i = 0; i < num_uv_elems; i += 2)
-      //  {
-      //    vertices[v_offset + i / 2].texCoord.x = unpacked_uvs[i + 0];
-      //    vertices[v_offset + i / 2].texCoord.y = unpacked_uvs[i + 1];
-      //  }
-      //    std::clog << vertices[v_offset + 3].texCoord.x << ", " << vertices[v_offset + 3].texCoord.y << std::endl;
-      //  
-      //  free(unpacked_positions);
-      //  free(unpacked_uvs);
-      //}
     }
   }
   cgltf_free(asset);
@@ -1161,11 +1121,11 @@ void App::createVertexBuffer()
     bufferSize,
     vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
     vk::MemoryPropertyFlagBits::eDeviceLocal,
-    vertexBuffer,
-    vertexBufferMemory
+    vertexBuffer.first,
+    vertexBuffer.second
   );
 
-  copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+  copyBuffer(stagingBuffer, vertexBuffer.first, bufferSize);
 }
 
 void App::createIndexBuffers()
@@ -1192,18 +1152,18 @@ void App::createIndexBuffers()
       bufferSize,
       vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
       vk::MemoryPropertyFlagBits::eDeviceLocal,
-      p.indexBuffer,
-      p.indexBufferMemory
+      p.indexBuffer.first,
+      p.indexBuffer.second
     );
 
-    copyBuffer(stagingBuffer, p.indexBuffer, bufferSize);
+    copyBuffer(stagingBuffer, p.indexBuffer.first, bufferSize);
   }
 }
 
 void App::createUniformBuffers()
 {
   uniformBuffers.clear();
-  uniformBuffersMemory.clear();
+  //uniformBuffersMemory.clear();
   uniformBuffersMapped.clear();
 
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
@@ -1212,9 +1172,8 @@ void App::createUniformBuffers()
     vk::raii::Buffer buffer({});
     vk::raii::DeviceMemory bufferMemory({});
     createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, buffer, bufferMemory);
-    uniformBuffers.emplace_back(std::move(buffer));
-    uniformBuffersMemory.emplace_back(std::move(bufferMemory));
-    uniformBuffersMapped.emplace_back(uniformBuffersMemory[i].mapMemory(0, bufferSize));
+    uniformBuffers.emplace_back(std::pair(std::move(buffer), std::move(bufferMemory)));
+    uniformBuffersMapped.emplace_back(uniformBuffers[i].second.mapMemory(0, bufferSize));
   }
 }
 
@@ -1276,7 +1235,7 @@ void App::createDescriptorSets()
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
       vk::DescriptorBufferInfo bufferInfo {
-        .buffer = static_cast<vk::Buffer>(uniformBuffers[i]),
+        .buffer = static_cast<vk::Buffer>(uniformBuffers[i].first),
         .offset = 0,
         .range = sizeof(MVP)
       };
@@ -1375,7 +1334,7 @@ void App::initImGui()
     initInfo.DescriptorPool = static_cast<VkDescriptorPool>(*imguiDescriptorPool);
     initInfo.MinImageCount = static_cast<uint32_t>(swapChainImages.size());
     initInfo.ImageCount = static_cast<uint32_t>(swapChainImages.size());
-    initInfo.MSAASamples = static_cast<VkSampleCountFlagBits>(msaaSamples);
+    initInfo.MSAASamples = VkSampleCountFlagBits::VK_SAMPLE_COUNT_1_BIT;
     initInfo.UseDynamicRendering = true;
 
     vk::PipelineRenderingCreateInfo imguiPipelineInfo {
@@ -1447,8 +1406,6 @@ void App::mainLoop()
       ImGui::SliderFloat("Cam Z", &camera.position.z, -30.0f, 30.0f);
       ImGui::SliderFloat("Move Speed", &camera.moveSpeed, 0.01f, 100.0f);
       ImGui::Spacing();
-      //ImGui::SliderFloat("Rot Pitch", (float*)(&camera.pitch), -glm::pi<float>(), glm::pi<float>());
-      //ImGui::SliderFloat("Rot Yaw", (float*)(&camera.yaw), -glm::pi<float>(), glm::pi<float>());
       ImGui::SliderScalar("Rot Pitch", ImGuiDataType_Double, &camera.pitch, &neg_pi, &pi);
       ImGui::SliderScalar("Rot Pitch", ImGuiDataType_Double, &camera.yaw, &neg_pi, &pi);
       ImGui::SliderFloat("Pitch Speed", &camera.pitchSpeed, 0.01f, 40.0f);
@@ -1510,8 +1467,6 @@ void App::cleanupSwapChain()
 void App::reloadShaders()
 {
     device.waitIdle();
-    pipelineLayout = nullptr;
-    graphicsPipeline = nullptr;
     createGraphicsPipeline();
 }
 
@@ -1631,7 +1586,7 @@ void App::recordCommandBuffer(uint32_t imageIndex)
     .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
     .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
     .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-    .image = depthImage,
+    .image = depthImage.first,
     .subresourceRange = {
       .aspectMask = vk::ImageAspectFlagBits::eDepth,
       .baseMipLevel = 0,
@@ -1681,20 +1636,20 @@ void App::recordCommandBuffer(uint32_t imageIndex)
   
   commandBuffers[currentFrame].bindPipeline(
     vk::PipelineBindPoint::eGraphics,
-    *graphicsPipeline
+    *graphicsPipeline.second
   );
 
   commandBuffers[currentFrame].setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
   commandBuffers[currentFrame].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
   
-  commandBuffers[currentFrame].bindVertexBuffers(0, *vertexBuffer, {0});
+  commandBuffers[currentFrame].bindVertexBuffers(0, *vertexBuffer.first, {0});
   
   for (auto& p : prims)
   {
-    commandBuffers[currentFrame].bindIndexBuffer(*p.indexBuffer, 0, vk::IndexType::eUint32);
+    commandBuffers[currentFrame].bindIndexBuffer(*p.indexBuffer.first, 0, vk::IndexType::eUint32);
     commandBuffers[currentFrame].bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics,
-      pipelineLayout,
+      graphicsPipeline.first,
       0,
       *p.descriptorSets[currentFrame],
       nullptr
@@ -1767,57 +1722,7 @@ void App::cleanup()
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();
 
-  for (auto& p : prims)
-  {
-    p.indexBuffer = nullptr;
-    p.indexBufferMemory = nullptr;
-
-    p.descriptorSets.clear();
-  }
-
-  queue = nullptr;
-
-  swapChain = nullptr;
-  surface = nullptr;
-  swapChainImages.clear();
-
-  swapChainImageViews.clear();
-
-  descriptorSetLayout = nullptr;
-
-  pipelineLayout = nullptr;
-  graphicsPipeline = nullptr;
-  
-  commandBuffers.clear();
-  commandPool = nullptr;
-  textureImageViews.clear();
-  textureImagesMemory.clear();
-  textureImages.clear();
-  textureSampler = nullptr;
-
-  depthImage = nullptr;
-  depthImageMemory = nullptr;
-  depthImageView = nullptr;
-
-  vertexBuffer = nullptr;
-  vertexBufferMemory = nullptr;
-
-  uniformBuffers.clear();
-  uniformBuffersMemory.clear();
-
-  descriptorPool = nullptr;
-  imguiDescriptorPool = nullptr;
-
-  presentCompleteSemaphores.clear();
-  renderFinishedSemaphores.clear();
-  graphicsInFlightFences.clear();
-  computeFinishedSemaphores.clear();
-  computeInFlightFences.clear();
-
-  device = nullptr;
-  physicalDevice = nullptr;
-  debugMessenger = nullptr;
-  instance = nullptr;
+  prims.clear();
 
   glfwDestroyWindow(pWindow);
   glfwTerminate();
