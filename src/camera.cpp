@@ -15,9 +15,9 @@ glm::mat4 Camera::getRotationMatrix()
 
 void Camera::update(double delta)
 {
-  forward.x = cos(yaw) * cos(pitch);
-  forward.y = sin(pitch);
-  forward.z = sin(yaw) * cos(pitch);
+  forward.x = static_cast<float>(cos(yaw) * cos(pitch));
+  forward.y = static_cast<float>(sin(pitch));
+  forward.z = static_cast<float>(sin(yaw) * cos(pitch));
   forward = glm::normalize(forward);
 
   right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));

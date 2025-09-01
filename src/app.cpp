@@ -1517,64 +1517,79 @@ void App::reloadShaders()
 
 void App::drawFrame()
 {
-  while (vk::Result::eTimeout == device.waitForFences(*graphicsInFlightFences[currentFrame], vk::True, UINT64_MAX))
-  { }
-  
-  auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[semaphoreIndex], nullptr);
+  //{
+  //  // COMPUTE
+  //  while (vk::Result::eTimeout == device.waitForFences(*computeInFlightFences[currentFrame], vk::True, UINT64_MAX))
+  //    ;
+  //  updateUniformBuffer(currentFrame);
+  //  device.resetFences(*computeInFlightFences[currentFrame]);
+  //  computeCommandBuffers[currentFrame].reset();
+  //  recordComputeCommandBuffer();
 
-  if (result == vk::Result::eErrorOutOfDateKHR || framebufferResized)
+  //  const vk::SubmitInfo submitInfo({}, {}, { *computeCommandBuffers[currentFrame] }, { *computeFinishedSemaphores[currentFrame] });
+  //  queue.submit(submitInfo, *computeInFlightFences[currentFrame]);
+  //}
   {
-    framebufferResized = false;
-    recreateSwapChain();
-    return;
-  } 
-  else if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
-  {
-    throw std::runtime_error("failed to acquire swap chain image!");
+    // GRAPHICS
+    while (vk::Result::eTimeout == device.waitForFences(*graphicsInFlightFences[currentFrame], vk::True, UINT64_MAX))
+      ;
+
+    auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[semaphoreIndex], nullptr);
+
+    if (result == vk::Result::eErrorOutOfDateKHR || framebufferResized)
+    {
+      framebufferResized = false;
+      recreateSwapChain();
+      return;
+    }
+    else if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
+    {
+      throw std::runtime_error("failed to acquire swap chain image!");
+    }
+
+    updateModelViewProjection(currentFrame);
+
+    device.resetFences(*graphicsInFlightFences[currentFrame]);
+    commandBuffers[currentFrame].reset();
+
+    recordCommandBuffer(imageIndex);
+
+    vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+
+    const vk::SubmitInfo submitInfo{
+      .waitSemaphoreCount = 1,
+      .pWaitSemaphores = &*presentCompleteSemaphores[semaphoreIndex],
+      .pWaitDstStageMask = &waitDestinationStageMask,
+      .commandBufferCount = 1,
+      .pCommandBuffers = &*commandBuffers[currentFrame],
+      .signalSemaphoreCount = 1,
+      .pSignalSemaphores = &*renderFinishedSemaphores[imageIndex]
+    };
+
+    queue.submit(submitInfo, *graphicsInFlightFences[currentFrame]);
+
+    const vk::PresentInfoKHR presentInfo{
+      .waitSemaphoreCount = 1,
+      .pWaitSemaphores = &*renderFinishedSemaphores[imageIndex],
+      .swapchainCount = 1,
+      .pSwapchains = &*swapChain,
+      .pImageIndices = &imageIndex,
+    };
+
+    result = queue.presentKHR(presentInfo);
+    if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || framebufferResized)
+    {
+      framebufferResized = false;
+      recreateSwapChain();
+    }
+    else if (result != vk::Result::eSuccess)
+    {
+      throw std::runtime_error("failed to present swap chain image!");
+    }
+
+    semaphoreIndex = (semaphoreIndex + 1) % presentCompleteSemaphores.size();
+    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
   }
-
-  updateModelViewProjection(currentFrame);
-
-  device.resetFences(*graphicsInFlightFences[currentFrame]);
-  commandBuffers[currentFrame].reset();
-
-  recordCommandBuffer(imageIndex);
-
-  vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
-  
-  const vk::SubmitInfo submitInfo {
-    .waitSemaphoreCount = 1,
-    .pWaitSemaphores = &*presentCompleteSemaphores[semaphoreIndex],
-    .pWaitDstStageMask = &waitDestinationStageMask,
-    .commandBufferCount = 1,
-    .pCommandBuffers = &*commandBuffers[currentFrame],
-    .signalSemaphoreCount = 1,
-    .pSignalSemaphores = &*renderFinishedSemaphores[imageIndex]
-  };
-
-  queue.submit(submitInfo, *graphicsInFlightFences[currentFrame]);
-
-  const vk::PresentInfoKHR presentInfo {
-    .waitSemaphoreCount = 1,
-    .pWaitSemaphores = &*renderFinishedSemaphores[imageIndex],
-    .swapchainCount = 1,
-    .pSwapchains = &*swapChain,
-    .pImageIndices = &imageIndex,
-  };
-
-  result = queue.presentKHR(presentInfo);
-  if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || framebufferResized)
-  {
-    framebufferResized = false;
-    recreateSwapChain();
-  }
-  else if (result != vk::Result::eSuccess)
-  {
-    throw std::runtime_error("failed to present swap chain image!");
-  }
-
-  semaphoreIndex = (semaphoreIndex + 1) % presentCompleteSemaphores.size();
-  currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 void App::updateModelViewProjection(uint32_t imageIndex)

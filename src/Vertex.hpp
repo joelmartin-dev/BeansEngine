@@ -1,0 +1,49 @@
+#ifndef VERTEX_HPP
+#define VERTEX_HPP
+
+#include <array>
+#include <vulkan/vulkan.hpp>
+#include <glm/gtx/hash.hpp>
+
+struct Vertex {
+  // Attributes
+  glm::vec3 pos = {};
+  glm::vec3 colour = {};
+  glm::vec2 texCoord = {};
+
+  // How the struct is passed
+  static vk::VertexInputBindingDescription getBindingDescription()
+  {
+    return { 0, sizeof(Vertex), vk::VertexInputRate::eVertex };
+  }
+
+  // How the struct's data is laid out
+  static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions()
+  {
+    return {
+      // location, binding, format, offset
+      // Binding is 0, as we decided in getBindingDescription
+      // Formats are aliases for in-shader data types, e.g. R32Sfloat is float, R64Sfloat is double
+      vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
+      vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, colour)),
+      vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord))
+    };
+  }
+
+  // equal_to function, needed for use of Vertex as Key in unordered containers e.g. unordered_map(Key, T, hash(Key), equal_to(Key))
+  bool operator==(const Vertex& other) const
+  {
+    return pos == other.pos && colour == other.colour && texCoord == other.texCoord;
+  }
+};
+
+// Hash function, needed for use of Vertex as Key in unordered containers e.g. unordered_map(Key, T, hash(Key), equal_to(Key))
+template<> struct std::hash<Vertex> {
+  size_t operator()(Vertex const& vertex) const noexcept
+  {
+    return ((hash<glm::vec3>()(vertex.pos) ^
+      (hash<glm::vec3>()(vertex.colour) << 1)) >> 1) ^
+      (hash<glm::vec2>()(vertex.texCoord) << 1);
+  }
+};
+#endif

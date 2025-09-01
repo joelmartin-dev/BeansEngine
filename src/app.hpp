@@ -2,38 +2,33 @@
 #define _APP_HPP_
 
 #include <vector> // resizable container
-#include <array> // for c++-like syntax of user-type arrays
 #include <filesystem> // for platform-agnostic paths
 
 // Windows has different calling conventions, vk_platform defines alternatives
 #include <vulkan/vk_platform.h>
 
-// Meta-loader for vulkan functions
 // volk loads function pointers at runtime directly from the driver
 // rather than linking all of that information in the executable
-#include <volk/volk.h>
+#include <volk/volk.h> // Meta-loader for vulkan functions
 
-// C++ bindings and RAII definitions for vulkan
-#include <vulkan/vulkan_raii.hpp>
+#include <vulkan/vulkan_raii.hpp> // C++ bindings and RAII definitions for vulkan
 
-//#include <vulkan/vulkan_profiles.hpp> // provided profiles not compatible with some target hardware
+#define GLM_FORCE_CXX20
+#include <glm/glm.hpp>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h> // for callback declarations, pWindow member
 
-// OpenGL Mathematics: for linear algebra functions
-#include <glm/glm.hpp>
-#include <glm/ext/matrix_transform.hpp>
-#define GLM_ENABLE_EXPERIMENTAL
-#include <glm/gtx/hash.hpp>
+#include "ktx.h" // for ktxTexture2 type
 
-// for ktxTexture2 type
-#include "ktx.h"
+#include "cgltf.h" // glTF parser
 
-#include "cgltf.h"
+#include "Camera.hpp" // for universal uniform buffer a.k.a. Camera
 
-// for camera member (stores universal uniform buffer)
-#include "camera.hpp"
+#include "Measurement.hpp"
+#include "Model.hpp"
+#include "Vertex.hpp"
+#include "Particle.hpp"
 
 // constexpr allows for explicit typing (vs const)
 constexpr uint32_t WIDTH = 800;
@@ -56,92 +51,12 @@ constexpr bool enableValidationLayers = true;
 #pragma comment(linker, "/SUBSYSTEM:CONSOLE")
 #endif
 
-// stores measurements data
-struct EngineStats {
-  long long int frametime = 0L;
-  uint32_t tris = 0U;
-  uint32_t drawcalls = 0U;
-  long long int sceneUpdateTime = 0L;
-  long long int meshDrawTime = 0L;
-};
-
-struct Vertex {
-  // Attributes
-  glm::vec3 pos = {};
-  glm::vec3 colour = {};
-  glm::vec2 texCoord = {};
-
-  // How the struct is passed
-  static vk::VertexInputBindingDescription getBindingDescription()
-  {
-    return {0, sizeof(Vertex), vk::VertexInputRate::eVertex};
-  }
-
-  // How the struct's data is laid out
-  static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions()
-  {
-    return {
-      // location, binding, format, offset
-      // Binding is 0, as we decided in getBindingDescription
-      // Formats are aliases for in-shader data types, e.g. R32Sfloat is float, R64Sfloat is double
-      vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
-      vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, colour)),
-      vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord))
-    };
-  }
-
-  // equal_to function, needed for use of Vertex as Key in unordered containers e.g. unordered_map(Key, T, hash(Key), equal_to(Key))
-  bool operator==(const Vertex& other) const
-  {
-    return pos == other.pos && colour == other.colour && texCoord == other.texCoord;
-  }
-};
-
-// Hash function, needed for use of Vertex as Key in unordered containers e.g. unordered_map(Key, T, hash(Key), equal_to(Key))
-template<> struct std::hash<Vertex> {
-  size_t operator()(Vertex const& vertex) const noexcept
-  {
-    return ((hash<glm::vec3>()(vertex.pos) ^
-            (hash<glm::vec3>()(vertex.colour) << 1 )) >> 1) ^
-            (hash<glm::vec2>()(vertex.texCoord) << 1);
-  }
-};
-
 // need to keep byte alignment in mind when defining probe and ray data structures
 // Model, View, Projection uniform buffer object struct
 struct MVP {
   alignas(16) glm::mat4 model;
   alignas(16) glm::mat4 view;
   alignas(16) glm::mat4 proj;
-};
-
-// stores the unique data of each primitive in a gltf
-struct PrimData {
-  std::vector<uint32_t> indices = { 0 };
-  
-  vk::raii::Buffer indexBuffer = nullptr;
-  vk::raii::DeviceMemory indexBufferMemory = nullptr;
-  
-  size_t imageViewIndex = 0;
-
-  std::vector<vk::raii::DescriptorSet> descriptorSets;
-};
-
-struct MeshData {
-  glm::vec3 translation = glm::vec3(0.0f);
-  glm::vec3 rotation = glm::vec3(0.0f);
-  glm::vec3 scale = glm::vec3(1.0f);
-
-  glm::mat4 getModelMatrix() const 
-  {
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, translation);
-    model = glm::rotate(model, rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
-    model = glm::rotate(model, rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
-    model = glm::rotate(model, rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
-    model = glm::scale(model, scale);
-    return model;
-  }
 };
 
 static Camera camera = {};
@@ -164,8 +79,8 @@ class App
   
   std::vector<Vertex> vertices;
 
-  std::vector<MeshData> meshes;
-  std::vector<PrimData> prims;
+  std::vector<Mesh> meshes;
+  std::vector<Primitive> prims;
 
   vk::raii::Context context;
   vk::raii::Instance instance = nullptr;
@@ -363,6 +278,4 @@ class App
     framebufferResized = true;
   }
 };
-
-
 #endif

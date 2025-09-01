@@ -93,7 +93,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <AdditionalIncludeDirectories>$(SolutionDir)deps;$(SolutionDir)include;$(VULKAN_SDK)\include\</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;GLM_FORCE_CXX20;KHRONOS_STATIC;IMGUI_IMPL_VULKAN_USE_VOLK;VULKAN_HPP_NO_STRUCT_CONSTRUCTORS;_DEBUG;WINDOWS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;GLM_ENABLE_EXPERIMENTAL;KHRONOS_STATIC;IMGUI_IMPL_VULKAN_USE_VOLK;VULKAN_HPP_NO_STRUCT_CONSTRUCTORS;_DEBUG;WINDOWS</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -140,8 +140,8 @@
     <ClCompile Include="deps\imgui_impl_vulkan.cpp" />
     <ClCompile Include="deps\imgui_tables.cpp" />
     <ClCompile Include="deps\imgui_widgets.cpp" />
-    <ClCompile Include="src\app.cpp" />
-    <ClCompile Include="src\camera.cpp" />
+    <ClCompile Include="src\App.cpp" />
+    <ClCompile Include="src\Camera.cpp" />
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -159,8 +159,12 @@
     <ClInclude Include="include\KHR\khr_df.h" />
     <ClInclude Include="include\ktx.h" />
     <ClInclude Include="include\ktxvulkan.h" />
-    <ClInclude Include="src\app.hpp" />
-    <ClInclude Include="src\camera.hpp" />
+    <ClInclude Include="src\App.hpp" />
+    <ClInclude Include="src\Camera.hpp" />
+    <ClInclude Include="src\Measurement.hpp" />
+    <ClInclude Include="src\Model.hpp" />
+    <ClInclude Include="src\Particle.hpp" />
+    <ClInclude Include="src\Vertex.hpp" />
   </ItemGroup>
   <ItemGroup>
     <Library Include="lib\Windows\glfw3.lib" />
