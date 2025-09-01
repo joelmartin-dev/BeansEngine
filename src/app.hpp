@@ -41,8 +41,8 @@ constexpr uint32_t HEIGHT = 600;
 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
-static char model_path[] = "assets/sponza/Sponza.gltf";
-static char shader_path[] = "assets/shaders/shader.spv";
+static char model_path[256] = "assets/sponza/Sponza.gltf";
+static char shader_path[256] = "assets/shaders/shader.spv";
 
 // not array, implicit typing and contents are immutable
 const std::vector validationLayers = {
@@ -184,8 +184,10 @@ class App
   
   uint32_t graphicsIndex = ~0;
   uint32_t computeIndex = ~0;
+  vk::raii::Queue graphicsQueue = nullptr;
+  vk::raii::Queue computeQueue = nullptr;
   vk::raii::Queue queue = nullptr;
-  
+
   vk::raii::SurfaceKHR surface = nullptr;
   vk::Format swapChainSurfaceFormat;
   vk::Extent2D swapChainExtent;
@@ -218,12 +220,17 @@ class App
   std::vector<vk::raii::DeviceMemory> uniformBuffersMemory;
   std::vector<void*> uniformBuffersMapped;
 
+  std::vector<vk::raii::Buffer> shaderStorageBuffers;
+  std::vector<vk::raii::DeviceMemory> shaderStorageBuffersMemory;
+
   vk::raii::DescriptorPool descriptorPool = nullptr;
   vk::raii::DescriptorPool imguiDescriptorPool = nullptr;
 
   std::vector<vk::raii::Semaphore> presentCompleteSemaphores;
   std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
-  std::vector<vk::raii::Fence> inFlightFences;
+  std::vector<vk::raii::Fence> graphicsInFlightFences;
+  std::vector<vk::raii::Fence> computeInFlightFences;
+  std::vector<vk::raii::Semaphore> computeFinishedSemaphores;
   uint32_t currentFrame = 0;
   uint32_t semaphoreIndex = 0;
 

@@ -229,7 +229,9 @@ void App::pickPhysicalDevice()
       // Check if any of the queue families support graphics operations
       auto queueFamilies = _physicalDevice.getQueueFamilyProperties();
       bool supportsGraphics = std::ranges::any_of(queueFamilies, [](auto const& qfp) { return !!(qfp.queueFlags & vk::QueueFlagBits::eGraphics); } );
-      
+      bool supportsCompute = std::ranges::any_of(queueFamilies, [](auto const& qfp) { return !!(qfp.queueFlags & vk::QueueFlagBits::eCompute); });
+
+
       // Check if all required device extensions are available
       auto availableDeviceExtensions = _physicalDevice.enumerateDeviceExtensionProperties();
       bool supportsAllRequiredExtensions = std::ranges::all_of(requiredDeviceExtensions, [&availableDeviceExtensions](auto const& requiredDeviceExtension)
@@ -244,7 +246,7 @@ void App::pickPhysicalDevice()
       bool supportsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
                                       features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;            
 
-      return supportsVulkan1_3 && supportsSamplerAnisotropy && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
+      return supportsVulkan1_3 && supportsSamplerAnisotropy && supportsGraphics && supportsCompute && supportsAllRequiredExtensions && supportsRequiredFeatures;
     }
   );
 
@@ -321,7 +323,7 @@ void App::createLogicalDevice()
   device = vk::raii::Device(physicalDevice, deviceCreateInfo);
   queue = vk::raii::Queue(device, queueFamilyIndex, 0);
   graphicsIndex = queueFamilyIndex;
-  (void) computeIndex;
+  computeIndex = queueFamilyIndex;
 
   volkLoadDevice(static_cast<VkDevice>(*device));
 }
@@ -1326,7 +1328,7 @@ void App::createSyncObjects()
 {
   presentCompleteSemaphores.clear();
   renderFinishedSemaphores.clear();
-  inFlightFences.clear();
+  graphicsInFlightFences.clear();
 
   for (size_t i = 0; i < swapChainImages.size(); i++)
   { 
@@ -1334,9 +1336,14 @@ void App::createSyncObjects()
     renderFinishedSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
   }
 
+  computeInFlightFences.clear();
+  computeFinishedSemaphores.clear();
+
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
   {    
-    inFlightFences.emplace_back(device, vk::FenceCreateInfo {.flags = vk::FenceCreateFlagBits::eSignaled});
+    graphicsInFlightFences.emplace_back(device, vk::FenceCreateInfo {.flags = vk::FenceCreateFlagBits::eSignaled});
+    computeFinishedSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
+    computeInFlightFences.emplace_back(device, vk::FenceCreateInfo{ .flags = vk::FenceCreateFlagBits::eSignaled });
   }
 }
 
@@ -1510,7 +1517,7 @@ void App::reloadShaders()
 
 void App::drawFrame()
 {
-  while (vk::Result::eTimeout == device.waitForFences(*inFlightFences[currentFrame], vk::True, UINT64_MAX))
+  while (vk::Result::eTimeout == device.waitForFences(*graphicsInFlightFences[currentFrame], vk::True, UINT64_MAX))
   { }
   
   auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[semaphoreIndex], nullptr);
@@ -1528,7 +1535,7 @@ void App::drawFrame()
 
   updateModelViewProjection(currentFrame);
 
-  device.resetFences(*inFlightFences[currentFrame]);
+  device.resetFences(*graphicsInFlightFences[currentFrame]);
   commandBuffers[currentFrame].reset();
 
   recordCommandBuffer(imageIndex);
@@ -1545,7 +1552,7 @@ void App::drawFrame()
     .pSignalSemaphores = &*renderFinishedSemaphores[imageIndex]
   };
 
-  queue.submit(submitInfo, *inFlightFences[currentFrame]);
+  queue.submit(submitInfo, *graphicsInFlightFences[currentFrame]);
 
   const vk::PresentInfoKHR presentInfo {
     .waitSemaphoreCount = 1,
@@ -1788,7 +1795,9 @@ void App::cleanup()
 
   presentCompleteSemaphores.clear();
   renderFinishedSemaphores.clear();
-  inFlightFences.clear();
+  graphicsInFlightFences.clear();
+  computeFinishedSemaphores.clear();
+  computeInFlightFences.clear();
 
   device = nullptr;
   physicalDevice = nullptr;
