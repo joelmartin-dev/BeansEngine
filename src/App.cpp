@@ -726,7 +726,6 @@ void App::loadAsset(std::filesystem::path path)
 void App::loadTextures(std::filesystem::path path)
 {
   textureImages.clear();
-  //textureImagesMemory.clear();
   textureImageViews.clear();
 
   for (size_t i = 0; i < asset->materials_count; i++)
@@ -734,8 +733,6 @@ void App::loadTextures(std::filesystem::path path)
     std::filesystem::path uri = asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri;
     const std::string texturePath = (path.parent_path() / uri).string();
     textureImages.emplace_back(createTextureImage(texturePath));
-    //textureImages.emplace_back(std::move(image.first));
-    //textureImagesMemory.emplace_back(std::move(image.second));
   }
 }
 
