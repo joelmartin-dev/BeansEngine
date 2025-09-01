@@ -2,7 +2,6 @@
 #define CAMERA_HPP
 
 #include <glm/glm.hpp>
-#include <glm/ext/quaternion_common.hpp>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
