@@ -1398,6 +1398,8 @@ void App::mainLoop()
   double xpos, ypos;
   std::chrono::system_clock::time_point start = std::chrono::system_clock::now();
   std::chrono::system_clock::time_point end = std::chrono::system_clock::time_point::max();
+  long long delta = 1;
+
 
   while (glfwWindowShouldClose(pWindow) != GLFW_TRUE)
   {
@@ -1416,7 +1418,7 @@ void App::mainLoop()
 
     glfwGetCursorPos(pWindow, &xpos, &ypos);
     
-    camera.update((float)stats.frametime / deltaMultiplier);
+    camera.update(static_cast<double>(delta) / static_cast<double>(deltaMultiplier));
     if (xpos == camera.oldXpos)
       camera.deltaYaw = 0.0f;
     if (ypos == camera.oldYpos)
@@ -1425,21 +1427,27 @@ void App::mainLoop()
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    auto pi = glm::pi<double>();
+    auto neg_pi = -pi;
 
     {
       ImGui::Begin("Delta Frametime", &showWindow, ImGuiWindowFlags_AlwaysAutoResize);
       ImGui::Text("%llius", stats.frametime);
       ImGui::Text("%i tris", stats.tris);
       ImGui::Spacing();
-      ImGui::SliderFloat("Cam X", &camera.position.x, -3.0f, 3.0f);
-      ImGui::SliderFloat("Cam Y", &camera.position.y, -3.0f, 3.0f);
-      ImGui::SliderFloat("Cam Z", &camera.position.z, -3.0f, 3.0f);
-      ImGui::SliderFloat("Move Speed", &camera.moveSpeed, 0.01f, 5.0f);
+      ImGui::SliderFloat("Cam X", &camera.position.x, -30.0f, 30.0f);
+      ImGui::SliderFloat("Cam Y", &camera.position.y, -30.0f, 30.0f);
+      ImGui::SliderFloat("Cam Z", &camera.position.z, -30.0f, 30.0f);
+      ImGui::SliderFloat("Move Speed", &camera.moveSpeed, 0.01f, 100.0f);
       ImGui::Spacing();
-      ImGui::SliderFloat("Rot Pitch", &camera.pitch, -glm::pi<float>(), glm::pi<float>());
-      ImGui::SliderFloat("Rot Yaw", &camera.yaw, -glm::pi<float>(), glm::pi<float>());
-      ImGui::SliderFloat("Pitch Speed", &camera.pitchSpeed, 0.01f, 5.0f);
-      ImGui::SliderFloat("Yaw Speed", &camera.yawSpeed, 0.01f, 5.0f);
+      //ImGui::SliderFloat("Rot Pitch", (float*)(&camera.pitch), -glm::pi<float>(), glm::pi<float>());
+      //ImGui::SliderFloat("Rot Yaw", (float*)(&camera.yaw), -glm::pi<float>(), glm::pi<float>());
+      ImGui::SliderScalar("Rot Pitch", ImGuiDataType_Double, &camera.pitch, &neg_pi, &pi);
+      ImGui::SliderScalar("Rot Pitch", ImGuiDataType_Double, &camera.yaw, &neg_pi, &pi);
+      ImGui::SliderFloat("Pitch Speed", &camera.pitchSpeed, 0.01f, 40.0f);
+      ImGui::SliderFloat("Yaw Speed", &camera.yawSpeed, 0.01f, 40.0f);
+      ImGui::Spacing();
+      ImGui::SliderFloat("FOV", &camera.fov, 20.0f, 170.0f);
       ImGui::Spacing();
       ImGui::SliderFloat("Shift Speed", &camera.shiftSpeed, 0.01f, 4.0f);
       ImGui::InputFloat("Delta Mult", &deltaMultiplier);
@@ -1450,6 +1458,7 @@ void App::mainLoop()
     }
 
     ImGui::Render();
+    auto deltaStart = std::chrono::system_clock::now();
     
     // Lock to 60fps
     while (std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() < 16667)
@@ -1461,6 +1470,7 @@ void App::mainLoop()
     drawFrame();
     end = std::chrono::system_clock::now();
     stats.frametime = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+    delta = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
   }
   device.waitIdle();
 }
@@ -1565,7 +1575,7 @@ void App::updateModelViewProjection(uint32_t imageIndex)
   MVP mvp{};
   mvp.view = camera.getViewMatrix();
   mvp.proj = glm::perspective(
-    glm::radians(45.0f),
+    glm::radians(camera.fov),
     static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height),
     0.1f,
     1000.0f

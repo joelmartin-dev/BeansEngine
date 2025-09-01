@@ -13,7 +13,7 @@ glm::mat4 Camera::getRotationMatrix()
   return glm::identity<glm::mat4>();
 }
 
-void Camera::update(float delta)
+void Camera::update(double delta)
 {
   forward.x = cos(yaw) * cos(pitch);
   forward.y = sin(pitch);
@@ -22,14 +22,14 @@ void Camera::update(float delta)
 
   right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
 
-  pitch += static_cast<float>(deltaPitch) * pitchSpeed * delta;
-  pitch = glm::mod(pitch + glm::pi<float>(), glm::pi<float>() * 2.0f) - glm::pi<float>();
-  yaw += static_cast<float>(deltaYaw) * yawSpeed * delta;
-  yaw = glm::mod(yaw + glm::pi<float>(), glm::pi<float>() * 2.0f) - glm::pi<float>();
+  pitch += deltaPitch * static_cast<double>(pitchSpeed) * delta;
+  pitch = glm::mod(pitch + glm::pi<double>(), glm::pi<double>() * 2.0f) - glm::pi<double>();
+  yaw += deltaYaw * static_cast<double>(yawSpeed) * delta;
+  yaw = glm::mod(yaw + glm::pi<double>(), glm::pi<double>() * 2.0f) - glm::pi<double>();
 
   float mod = shiftMod ? shiftSpeed : 1.0f;
 
-  position += (forward * velocity.z + right * velocity.x + glm::vec3(0.0f, 1.0f, 0.0f) * velocity.y) * moveSpeed * delta * mod;
+  position += (forward * velocity.z + right * velocity.x + glm::vec3(0.0f, 1.0f, 0.0f) * velocity.y) * moveSpeed * static_cast<float>(delta) * mod;
 }
 
 void Camera::cursor_pos_callback(double xpos, double ypos)
@@ -78,16 +78,16 @@ void Camera::key_callback(GLFWwindow* pWindow, int key, int scancode, int action
         velocity.y = 1.0f;
         break;
       case GLFW_KEY_UP:
-        deltaPitch = 1.0f;
+        deltaPitch = 1.0;
         break;
       case GLFW_KEY_LEFT:
-        deltaYaw = -1.0f;
+        deltaYaw = -1.0;
         break;
       case GLFW_KEY_DOWN:
-        deltaPitch = -1.0f;
+        deltaPitch = -1.0;
         break;
       case GLFW_KEY_RIGHT:
-        deltaYaw = 1.0f;
+        deltaYaw = 1.0;
         break;
       case GLFW_KEY_LEFT_SHIFT:
         shiftMod = true;
@@ -118,11 +118,11 @@ void Camera::key_callback(GLFWwindow* pWindow, int key, int scancode, int action
         break;
       case GLFW_KEY_UP:
       case GLFW_KEY_DOWN:
-        deltaPitch = 0.0f;
+        deltaPitch = 0.0;
         break;
       case GLFW_KEY_LEFT:
       case GLFW_KEY_RIGHT:
-        deltaYaw = 0.0f;
+        deltaYaw = 0.0;
         break;
       case GLFW_KEY_LEFT_SHIFT:
         shiftMod = false;
