@@ -5,15 +5,18 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 // stores the unique data of each primitive in a gltf
-struct Primitive {
+struct Material {
   std::vector<uint32_t> indices;
 
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> indexBuffer = std::pair(nullptr, nullptr);
-  //vk::raii::DeviceMemory indexBufferMemory = nullptr;
 
   size_t imageViewIndex = 0;
 
   std::vector<vk::raii::DescriptorSet> descriptorSets;
+};
+
+struct Primitive {
+
 };
 
 struct Mesh {

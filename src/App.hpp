@@ -3,6 +3,7 @@
 
 #include <vector> // resizable container
 #include <filesystem> // for platform-agnostic paths
+#include <mutex> // for mutex
 
 // Windows has different calling conventions, vk_platform defines alternatives
 #include <vulkan/vk_platform.h>
@@ -78,7 +79,7 @@ class App
   std::vector<Vertex> vertices;
 
   std::vector<Mesh> meshes;
-  std::vector<Primitive> prims;
+  std::vector<Material> mats;
 
   std::mutex m;
 
@@ -112,6 +113,7 @@ class App
   std::vector<vk::raii::ImageView> swapChainImageViews;
   
   vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
+
   vk::raii::DescriptorSetLayout computeDescriptorSetLayout = nullptr;
   std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> computePipeline = std::pair(nullptr, nullptr);
 
@@ -211,12 +213,12 @@ class App
     uint32_t width, uint32_t height, uint32_t mipLevels,
     ktxTexture2* kTexture
   );
-  void createTextureImageView(
-    const vk::raii::Image& image, 
-    vk::Format format, 
-    uint32_t mipLevels,
-    size_t idx
-  );
+  //void createTextureImageView(
+  //  const vk::raii::Image& image, 
+  //  vk::Format format, 
+  //  uint32_t mipLevels,
+  //  size_t idx
+  //);
   void createTextureSampler();
   void loadGeometry();
   void copyBuffer(

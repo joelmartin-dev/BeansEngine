@@ -104,7 +104,10 @@ void App::initVulkan()
   createCommandPool();
   createDepthResources();
   loadAsset(std::filesystem::path(model_path).make_preferred());
+  auto start = std::chrono::system_clock::now();
   loadTextures(std::filesystem::path(model_path).make_preferred());
+  auto end = std::chrono::system_clock::now();
+  std::clog << (std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()) << " milliseconds" << std::endl;
   createTextureSampler();
   loadGeometry();
   createVertexBuffer();
@@ -734,21 +737,21 @@ void App::loadTextures(std::filesystem::path path)
     textureImageViews.emplace_back(nullptr);
   }
 
-  // for (size_t i = 0; i < asset->materials_count; i++)
-  // {
-  //   std::filesystem::path uri = asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri;
-  //   const std::string texturePath = (path.parent_path() / uri).string();
-  //   textureImages[i] = (createTextureImage(texturePath, i));
-  // }
+  mats.clear();
+  mats.resize(asset->materials_count);
+
   std::vector<std::future<void>> futures;
   futures.reserve(asset->materials_count);
 
   for (size_t i = 0; i < asset->materials_count; ++i) {
-      futures.emplace_back(std::async(std::launch::async, [this, &path, i]() {
+      futures.emplace_back(std::async(std::launch::async, [this, &path, i]()
+        {
           std::filesystem::path uri = asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri;
           const std::string texturePath = (path.parent_path() / uri).string();
           textureImages[i] = createTextureImage(texturePath, i);
-      }));
+          mats[i].imageViewIndex = i;
+        }
+      ));
   }
 
   // Wait for futures
@@ -794,8 +797,6 @@ void App::loadTextures(std::filesystem::path path)
   vk::raii::Buffer stagingBuffer({});
   vk::raii::DeviceMemory stagingBufferMemory({});
 
-  while (m.try_lock() == false)
-    ;
 
   createBuffer(
     imageSize,
@@ -814,6 +815,9 @@ void App::loadTextures(std::filesystem::path path)
   
   createImage(texWidth, texHeight, mipLevels, textureFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled, vk::MemoryPropertyFlagBits::eDeviceLocal, textureImage, textureImageMemory);
   
+  while (m.try_lock() == false)
+    ;
+
   transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, mipLevels);
   copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight, mipLevels, kTexture);
   transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, mipLevels);
@@ -1020,20 +1024,28 @@ std::vector<T> getAccessorData(const cgltf_accessor* accessor)
 
 void App::loadGeometry()
 {
+  meshes.clear();
+  meshes.resize(asset->meshes_count);
+  
   for (cgltf_size meshIt = 0; meshIt < asset->meshes_count; meshIt++)
   {
-    meshes.emplace_back();
-
     auto m = &asset->meshes[meshIt];
-
+    
     for (cgltf_size primIt = 0; primIt < m->primitives_count; primIt++)
     {
-      prims.emplace_back();
-
       auto p = &m->primitives[primIt];
+      size_t matIdx;
+
+      for (cgltf_size i = 0; i < asset->materials_count; i++)
+      {
+        if (strcmp(p->material->pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri, asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri) == 0)
+        {
+          matIdx = i;
+          break;
+        }
+      }
 
       uint32_t v_offset = static_cast<uint32_t>(vertices.size());
-      //uint32_t i_offset = static_cast<uint32_t>(indices.size());
 
       auto indexAccessor = p->indices;
 
@@ -1043,24 +1055,15 @@ void App::loadGeometry()
       if (unpacked_indices)
       {
         cgltf_size written_uints = cgltf_accessor_unpack_indices(indexAccessor, unpacked_indices, static_cast<cgltf_size>(sizeof(uint32_t)), num_idx_elems);
-        //std::clog << "Unpacked " << written_uints << " indices, ";
-        prims.back().indices.resize(indexAccessor->count);
+        
+        size_t i_offset = mats[matIdx].indices.size();
+        mats[matIdx].indices.resize(mats[matIdx].indices.size() + indexAccessor->count);
 
         for (cgltf_size i = 0; i < written_uints; i++)
         {
-          prims.back().indices[i] = unpacked_indices[i] + v_offset;
+          mats[matIdx].indices[i + i_offset] = unpacked_indices[i] + v_offset;
         }
         free(unpacked_indices);
-      }
-
-
-      for (cgltf_size i = 0; i < asset->materials_count; i++)
-      {
-        if (strcmp(p->material->pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri, asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri) == 0)
-        {
-          prims.back().imageViewIndex = i;
-          break;
-        }
       }
 
       cgltf_accessor* posAccessor = NULL; cgltf_accessor *uvAccessor = NULL;
@@ -1152,9 +1155,9 @@ void App::createVertexBuffer()
 
 void App::createIndexBuffers()
 {
-  for (auto& p : prims)
+  for (auto& mat : mats)
   {
-    vk::DeviceSize bufferSize = sizeof(p.indices[0]) * p.indices.size();
+    vk::DeviceSize bufferSize = sizeof(mat.indices[0]) * mat.indices.size();
     vk::raii::Buffer stagingBuffer({});
     vk::raii::DeviceMemory stagingBufferMemory({});
 
@@ -1167,18 +1170,18 @@ void App::createIndexBuffers()
     );
 
     void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-    memcpy(dataStaging, p.indices.data(), (size_t) bufferSize);
+    memcpy(dataStaging, mat.indices.data(), (size_t) bufferSize);
     stagingBufferMemory.unmapMemory();
 
     createBuffer(
       bufferSize,
       vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
       vk::MemoryPropertyFlagBits::eDeviceLocal,
-      p.indexBuffer.first,
-      p.indexBuffer.second
+      mat.indexBuffer.first,
+      mat.indexBuffer.second
     );
 
-    copyBuffer(stagingBuffer, p.indexBuffer.first, bufferSize);
+    copyBuffer(stagingBuffer, mat.indexBuffer.first, bufferSize);
   }
 }
 
@@ -1203,13 +1206,13 @@ void App::createUniformBuffers()
 void App::createDescriptorPools()
 {
   std::array poolSizes = {
-    vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(prims.size())),
-    vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(prims.size()))
+    vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(mats.size())),
+    vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(mats.size()))
   };
 
   vk::DescriptorPoolCreateInfo poolInfo {
     .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-    .maxSets = MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(prims.size()),
+    .maxSets = MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(mats.size()),
     .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
     .pPoolSizes = poolSizes.data()
   };
@@ -1243,7 +1246,7 @@ void App::createDescriptorPools()
 
 void App::createDescriptorSets()
 {
-  for (auto& p : prims)
+  for (auto& mat : mats)
   {
     std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);
     vk::DescriptorSetAllocateInfo allocInfo {
@@ -1251,8 +1254,8 @@ void App::createDescriptorSets()
       .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
       .pSetLayouts = layouts.data(),
     };
-    p.descriptorSets.clear();
-    p.descriptorSets = device.allocateDescriptorSets(allocInfo);
+    mat.descriptorSets.clear();
+    mat.descriptorSets = device.allocateDescriptorSets(allocInfo);
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
@@ -1264,13 +1267,13 @@ void App::createDescriptorSets()
 
       vk::DescriptorImageInfo imageInfo {
         .sampler = static_cast<vk::Sampler>(textureSampler),
-        .imageView = static_cast<vk::ImageView>(textureImageViews[p.imageViewIndex]),
+        .imageView = static_cast<vk::ImageView>(textureImageViews[mat.imageViewIndex]),
         .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
       };
 
       std::array descriptorWrites = {
         vk::WriteDescriptorSet{
-          .dstSet = static_cast<vk::DescriptorSet>(p.descriptorSets[i]),
+          .dstSet = static_cast<vk::DescriptorSet>(mat.descriptorSets[i]),
           .dstBinding = 0,
           .dstArrayElement = 0,
           .descriptorCount = 1,
@@ -1278,7 +1281,7 @@ void App::createDescriptorSets()
           .pBufferInfo = &bufferInfo
         },
         vk::WriteDescriptorSet{
-          .dstSet = static_cast<vk::DescriptorSet>(p.descriptorSets[i]),
+          .dstSet = static_cast<vk::DescriptorSet>(mat.descriptorSets[i]),
           .dstBinding = 1,
           .dstArrayElement = 0,
           .descriptorCount = 1,
@@ -1377,9 +1380,9 @@ void App::mainLoop()
 {
   static bool showWindow = true;
   float deltaMultiplier = 1000000.0f;
-  for (auto& p : prims)
+  for (auto& mat : mats)
   {
-    stats.tris += static_cast<uint32_t>(p.indices.size());
+    stats.tris += static_cast<uint32_t>(mat.indices.size());
   }
   stats.tris /= 3;
   camera.update(1.0f);
@@ -1675,18 +1678,18 @@ void App::recordCommandBuffer(uint32_t imageIndex)
   
   commandBuffers[currentFrame].bindVertexBuffers(0, *vertexBuffer.first, {0});
   
-  for (auto& p : prims)
+  for (auto& mat : mats)
   {
-    commandBuffers[currentFrame].bindIndexBuffer(*p.indexBuffer.first, 0, vk::IndexType::eUint32);
+    commandBuffers[currentFrame].bindIndexBuffer(*mat.indexBuffer.first, 0, vk::IndexType::eUint32);
     commandBuffers[currentFrame].bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics,
       graphicsPipeline.first,
       0,
-      *p.descriptorSets[currentFrame],
+      *mat.descriptorSets[currentFrame],
       nullptr
     );
     commandBuffers[currentFrame].drawIndexed(
-      static_cast<uint32_t>(p.indices.size()),
+      static_cast<uint32_t>(mat.indices.size()),
       1, 0, 0, 0
     );
   }
@@ -1753,7 +1756,7 @@ void App::cleanup()
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();
 
-  prims.clear();
+  mats.clear();
 
   glfwDestroyWindow(pWindow);
   glfwTerminate();
