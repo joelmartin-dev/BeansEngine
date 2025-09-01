@@ -1470,6 +1470,12 @@ void App::cleanupSwapChain()
 void App::reloadShaders()
 {
     device.waitIdle();
+    auto f = fopen(shader_path, "r");
+    if (f == NULL)
+    {
+      return;
+    }
+    fclose(f);
     createGraphicsPipeline();
 }
 
