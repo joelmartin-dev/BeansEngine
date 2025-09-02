@@ -596,7 +596,9 @@ void App::createGraphicsPipeline()
   vk::PipelineRenderingCreateInfo pipelineRenderingInfo = {
     .colorAttachmentCount = 1,
     .pColorAttachmentFormats = &swapChainSurfaceFormat,
+#ifndef COMPUTE
     .depthAttachmentFormat = depthFormat
+#endif
   };
 
   vk::GraphicsPipelineCreateInfo graphicsPipelineInfo {
@@ -1365,7 +1367,7 @@ void App::createDescriptorPools()
 
   std::array computePoolSizes = {
     vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
-    vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * 2)
+    vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT * 2)
   };
 
   vk::DescriptorPoolCreateInfo computePoolInfo{

@@ -37,7 +37,7 @@ OPTIM_LEVEL := -O0
 
 DEBUG := -g
 
-DEFINES := GLM_ENABLE_EXPERIMENTAL VULKAN_HPP_NO_STRUCT_CONSTRUCTORS IMGUI_IMPL_VULKAN_USE_VOLK
+DEFINES := COMPUTE KHRONOS_STATIC GLM_ENABLE_EXPERIMENTAL VULKAN_HPP_NO_STRUCT_CONSTRUCTORS IMGUI_IMPL_VULKAN_USE_VOLK
 D_FLAGS := $(addprefix -D,$(DEFINES))
 
 # C Preprocessor flags
@@ -77,7 +77,7 @@ SPIRVS = $(SHADERS:%.slang=$(ASSETS_DIR)/$(SPIRVS_DIR)/%.spv)
 
 $(ASSETS_DIR)/$(SPIRVS_DIR)/%.spv: $(ASSETS_DIR)/$(SHADERS_DIR)/%.slang
 	mkdir -p $(dir $@)
-	slangc $< -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name -entry vertMain -entry fragMain -o $@
+	slangc $< -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name -entry vertMain -entry fragMain -entry compMain -o $@
 
 .PHONY: printf shaders clean clean_modules run
 
