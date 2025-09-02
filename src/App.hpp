@@ -205,7 +205,7 @@ class App
     vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
     uint32_t mipLevels
   );
-  std::unique_ptr<vk::raii::CommandBuffer> beginSingleTimeCommands();
+  std::unique_ptr<vk::raii::CommandBuffer> beginSingleTimeCommands() const;
   void endSingleTimeCommands(const vk::raii::CommandBuffer& commandBuffer) const;
   void copyBufferToImage(
     const vk::raii::Buffer& buffer,

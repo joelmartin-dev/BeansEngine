@@ -34,7 +34,9 @@ static std::vector<char> readFile(const std::string& fileName)
 #include <limits>
 #include <stdexcept>
 #include <vector>
+#include <ranges>
 #include <algorithm>
+#include <execution>
 #include <future>
 #include <chrono>
 #include <memory>
@@ -815,17 +817,16 @@ void App::loadTextures(std::filesystem::path path)
   
   createImage(texWidth, texHeight, mipLevels, textureFormat, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled, vk::MemoryPropertyFlagBits::eDeviceLocal, textureImage, textureImageMemory);
   
-  while (m.try_lock() == false)
+  while (!m.try_lock())
     ;
-
   transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, mipLevels);
   copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight, mipLevels, kTexture);
   transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, mipLevels);
-  
+  m.unlock();
+
   ktxTexture2_Destroy(kTexture);
   
   textureImageViews[idx] = (createImageView(textureImage, textureFormat, vk::ImageAspectFlagBits::eColor, mipLevels));
-  m.unlock();
   return std::pair(std::move(textureImage), std::move(textureImageMemory));
 }
 
@@ -895,7 +896,7 @@ void App::transitionImageLayout(
   endSingleTimeCommands(*commandBuffer);
 }
 
-std::unique_ptr<vk::raii::CommandBuffer> App::beginSingleTimeCommands()
+std::unique_ptr<vk::raii::CommandBuffer> App::beginSingleTimeCommands() const
 {
   vk::CommandBufferAllocateInfo allocInfo {
     .commandPool = commandPool,
@@ -932,7 +933,7 @@ void App::copyBufferToImage(
 )
 {
   std::unique_ptr<vk::raii::CommandBuffer> commandBuffer = beginSingleTimeCommands();
-  
+
   std::vector<vk::BufferImageCopy> regions;
 
   for (uint32_t level = 0; level < mipLevels; level++)
@@ -963,8 +964,8 @@ void App::copyBufferToImage(
 
     regions.push_back(region);
   }
-  commandBuffer->copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, regions);
 
+  commandBuffer->copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, regions);
   endSingleTimeCommands(*commandBuffer);
 }
 
@@ -1026,24 +1027,30 @@ void App::loadGeometry()
 {
   meshes.clear();
   meshes.resize(asset->meshes_count);
+
+  std::vector<Primitive> prims;
   
   for (cgltf_size meshIt = 0; meshIt < asset->meshes_count; meshIt++)
   {
     auto m = &asset->meshes[meshIt];
     
+    prims.resize(m->primitives_count);
+
     for (cgltf_size primIt = 0; primIt < m->primitives_count; primIt++)
     {
       auto p = &m->primitives[primIt];
-      size_t matIdx;
 
-      for (cgltf_size i = 0; i < asset->materials_count; i++)
-      {
-        if (strcmp(p->material->pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri, asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri) == 0)
-        {
-          matIdx = i;
-          break;
-        }
+      auto matIdxs = std::views::iota(cgltf_size{ 0 }, asset->materials_count);
+      auto matIt = std::ranges::find_if(matIdxs, [&](cgltf_size i) {
+        return strcmp(p->material->pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri,
+          asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri) == 0;
+        });
+
+      if (matIt == matIdxs.end()) {
+        throw std::runtime_error("failed to find material!");
       }
+
+      mats[*matIt].doubleSided = static_cast<bool>(p->material->double_sided);
 
       uint32_t v_offset = static_cast<uint32_t>(vertices.size());
 
@@ -1055,31 +1062,31 @@ void App::loadGeometry()
       if (unpacked_indices)
       {
         cgltf_size written_uints = cgltf_accessor_unpack_indices(indexAccessor, unpacked_indices, static_cast<cgltf_size>(sizeof(uint32_t)), num_idx_elems);
-        
-        size_t i_offset = mats[matIdx].indices.size();
-        mats[matIdx].indices.resize(mats[matIdx].indices.size() + indexAccessor->count);
+
+        size_t i_offset = mats[*matIt].indices.size();
+        mats[*matIt].indices.resize(mats[*matIt].indices.size() + indexAccessor->count);
 
         for (cgltf_size i = 0; i < written_uints; i++)
         {
-          mats[matIdx].indices[i + i_offset] = unpacked_indices[i] + v_offset;
+          mats[*matIt].indices[i + i_offset] = unpacked_indices[i] + v_offset;
         }
         free(unpacked_indices);
       }
 
-      cgltf_accessor* posAccessor = NULL; cgltf_accessor *uvAccessor = NULL;
+      cgltf_accessor* posAccessor = NULL; cgltf_accessor* uvAccessor = NULL;
       for (cgltf_size attrIt = 0; attrIt < p->attributes_count; attrIt++)
       {
         auto attr = &p->attributes[attrIt];
         switch (attr->type)
         {
-          case cgltf_attribute_type_position:
-            posAccessor = attr->data;
-            break;
-          case cgltf_attribute_type_texcoord:
-            uvAccessor = attr->data;
-            break;
-          default:
-            break;
+        case cgltf_attribute_type_position:
+          posAccessor = attr->data;
+          break;
+        case cgltf_attribute_type_texcoord:
+          uvAccessor = attr->data;
+          break;
+        default:
+          break;
         }
       }
 
