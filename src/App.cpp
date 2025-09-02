@@ -1425,6 +1425,8 @@ void App::mainLoop()
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    double upper = 30.0;
+    double lower = -30.0;
     auto pi = glm::pi<double>();
     auto neg_pi = -pi;
     auto pi_2 = glm::pi<double>() / 2.0;
@@ -1435,9 +1437,9 @@ void App::mainLoop()
       ImGui::Text("%llius", stats.frametime);
       ImGui::Text("%i tris", stats.tris);
       ImGui::Spacing();
-      ImGui::SliderFloat("X", &camera.position.x, -30.0f, 30.0f);
-      ImGui::SliderFloat("Y", &camera.position.y, -30.0f, 30.0f);
-      ImGui::SliderFloat("Z", &camera.position.z, -30.0f, 30.0f);
+      ImGui::SliderScalar("X", ImGuiDataType_Double, &camera.position.x, &lower, &upper);
+      ImGui::SliderScalar("Y", ImGuiDataType_Double, &camera.position.y, &lower, &upper);
+      ImGui::SliderScalar("Z", ImGuiDataType_Double, &camera.position.z, &lower, &upper);
       ImGui::SliderFloat("Move Speed", &camera.moveSpeed, 0.01f, 100.0f);
       ImGui::Spacing();
       ImGui::SliderScalar("Pitch", ImGuiDataType_Double, &camera.pitch, &neg_pi_2, &pi_2);

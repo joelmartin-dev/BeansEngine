@@ -5,7 +5,7 @@
 
 glm::mat4 Camera::getViewMatrix()
 {
-  return glm::lookAt(position, position + forward, glm::vec3(0.0f, 1.0f, 0.0f));
+  return glm::lookAt(position, position + forward, glm::dvec3(0.0, 1.0, 0.0));
 }
 
 glm::mat4 Camera::getRotationMatrix()
@@ -20,7 +20,7 @@ void Camera::update(double delta)
   forward.z = static_cast<float>(sin(yaw) * cos(pitch));
   forward = glm::normalize(forward);
 
-  right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
+  right = glm::normalize(glm::cross(forward, glm::dvec3(0.0, 1.0, 0.0)));
 
   pitch += deltaPitch * static_cast<double>(pitchSpeed) * delta;
   pitch = glm::clamp(pitch, -glm::pi<double>() / 2.0 + 0.01, glm::pi<double>() / 2.0 - 0.01);
@@ -31,7 +31,7 @@ void Camera::update(double delta)
 
   fov += deltaFOV * static_cast<double>(fovSpeed) * delta;
 
-  position += (forward * velocity.z + right * velocity.x + glm::vec3(0.0f, 1.0f, 0.0f) * velocity.y) * moveSpeed * static_cast<float>(delta) * mod;
+  position += (forward * velocity.z + right * velocity.x + glm::dvec3(0.0, 1.0, 0.0) * velocity.y) * static_cast<double>(moveSpeed) * delta * static_cast<double>(mod);
 }
 
 void Camera::cursor_pos_callback(double xpos, double ypos)
