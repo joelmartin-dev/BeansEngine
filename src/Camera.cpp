@@ -29,7 +29,7 @@ void Camera::update(double delta)
 
   float mod = shiftMod ? shiftSpeed : 1.0f;
 
-  fov += deltaFOV * static_cast<double>(fovSpeed) * delta;
+  fov += static_cast<float>(deltaFOV) * fovSpeed * static_cast<float>(delta);
 
   position += (forward * velocity.z + right * velocity.x + glm::dvec3(0.0, 1.0, 0.0) * velocity.y) * static_cast<double>(moveSpeed) * delta * static_cast<double>(mod);
 }

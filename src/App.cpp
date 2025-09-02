@@ -30,16 +30,17 @@ static std::vector<char> readFile(const std::string& fileName)
   return buffer;
 }
 
-#include <cstdint>
-#include <limits>
-#include <stdexcept>
-#include <vector>
-#include <ranges>
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <execution>
 #include <future>
-#include <chrono>
+#include <limits>
 #include <memory>
+#include <random>
+#include <ranges>
+#include <stdexcept>
+#include <vector>
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
@@ -101,10 +102,12 @@ void App::initVulkan()
   createLogicalDevice();
   createSwapChain();
   createSwapChainImageViews();
-  createDescriptorSetLayout();
+  createDescriptorSetLayouts();
   createGraphicsPipeline();
+  createComputePipeline();
   createCommandPool();
   createDepthResources();
+#ifndef COMPUTE
   loadAsset(std::filesystem::path(model_path).make_preferred());
   auto start = std::chrono::system_clock::now();
   loadTextures(std::filesystem::path(model_path).make_preferred());
@@ -114,10 +117,14 @@ void App::initVulkan()
   loadGeometry();
   createVertexBuffer();
   createIndexBuffers();
+#endif
   createUniformBuffers();
+  createShaderStorageBuffers();
   createDescriptorPools();
   createDescriptorSets();
+  createComputeDescriptorSets();
   createCommandBuffers();
+  createComputeCommandBuffers();
   createSyncObjects();
 }
 
@@ -247,9 +254,14 @@ void App::pickPhysicalDevice()
         }
       );
 
-      auto features = _physicalDevice.template getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
-      bool supportsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
-                                      features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;            
+      auto features = _physicalDevice.template getFeatures2<vk::PhysicalDeviceFeatures2,
+                                                            vk::PhysicalDeviceVulkan13Features,
+                                                            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+                                                            vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>();
+      bool supportsRequiredFeatures = features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&
+                                      features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+                                      features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
+                                      features.template get<vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>().timelineSemaphore;
 
       return supportsVulkan1_3 && supportsSamplerAnisotropy && supportsGraphics && supportsCompute && supportsAllRequiredExtensions && supportsRequiredFeatures;
     }
@@ -304,10 +316,15 @@ void App::createLogicalDevice()
 {
   auto queueFamilyIndex = findQueueFamilies(physicalDevice, surface);
 
-  vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
-    { .features = {.samplerAnisotropy = vk::True}},
-    {.synchronization2 = true, .dynamicRendering = true},
-    {.extendedDynamicState = true}
+  vk::StructureChain<vk::PhysicalDeviceFeatures2,
+                     vk::PhysicalDeviceVulkan13Features,
+                     vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+                     vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>
+  featureChain = {
+      { .features = {.samplerAnisotropy = true}},
+      {.synchronization2 = true, .dynamicRendering = true},
+      {.extendedDynamicState = true},
+      {.timelineSemaphore = true}
   };
   
   float queuePriority = 0.0f;
@@ -426,7 +443,7 @@ void App::createSwapChainImageViews()
   }
 }
 
-void App::createDescriptorSetLayout()
+void App::createDescriptorSetLayouts()
 {
   std::array bindings = {
     vk::DescriptorSetLayoutBinding(0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex, nullptr),
@@ -439,36 +456,67 @@ void App::createDescriptorSetLayout()
   };
 
   descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
+
+  std::array computeBindings = {
+    vk::DescriptorSetLayoutBinding(0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eCompute, nullptr),
+    vk::DescriptorSetLayoutBinding(1, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute, nullptr),
+    vk::DescriptorSetLayoutBinding(2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute, nullptr),
+  };
+
+  vk::DescriptorSetLayoutCreateInfo computeLayoutInfo{
+    .bindingCount = static_cast<uint32_t>(computeBindings.size()),
+    .pBindings = computeBindings.data()
+  };
+
+  computeDescriptorSetLayout = vk::raii::DescriptorSetLayout(device, computeLayoutInfo);
 }
 
 void App::createGraphicsPipeline()
 {
   graphicsPipeline = std::pair(nullptr, nullptr);
+#ifndef COMPUTE
   auto shaderModule = createShaderModule(readFile(shader_path));
-  
-  vk::PipelineShaderStageCreateInfo vertShaderModuleCreateInfo {
+#else
+  auto shaderModule = createShaderModule(readFile(compute_shader_path));
+#endif
+
+  vk::PipelineShaderStageCreateInfo vertShaderStageCreateInfo {
     .stage = vk::ShaderStageFlagBits::eVertex,
     .module = shaderModule,
     .pName = "vertMain"
   };
-  vk::PipelineShaderStageCreateInfo fragShaderModuleCreateInfo {
+  vk::PipelineShaderStageCreateInfo fragShaderStageCreateInfo {
     .stage = vk::ShaderStageFlagBits::eFragment,
     .module = shaderModule,
     .pName = "fragMain"
   };
-  vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderModuleCreateInfo, fragShaderModuleCreateInfo};
+  vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageCreateInfo, fragShaderStageCreateInfo};
   
+#ifndef COMPUTE
   auto bindingDescription = Vertex::getBindingDescription();
   auto attributesDescriptions = Vertex::getAttributeDescriptions();
+#else
+  auto bindingDescription = Particle::getBindingDescription();
+  auto attributesDescriptions = Particle::getAttributeDescriptions();
+#endif
+
   vk::PipelineVertexInputStateCreateInfo vertexInputInfo {
     .vertexBindingDescriptionCount = 1,
     .pVertexBindingDescriptions = &bindingDescription,
     .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributesDescriptions.size()),
     .pVertexAttributeDescriptions = attributesDescriptions.data()
   };
+
+#ifndef COMPUTE
   vk::PipelineInputAssemblyStateCreateInfo inputAssemblyInfo {
     .topology = vk::PrimitiveTopology::eTriangleList
   };
+#else
+  vk::PipelineInputAssemblyStateCreateInfo inputAssemblyInfo{
+    .topology = vk::PrimitiveTopology::ePointList,
+    .primitiveRestartEnable = vk::False
+  };
+#endif
 
   std::vector<vk::DynamicState> dynamicStates = {
     vk::DynamicState::eViewport,
@@ -503,6 +551,7 @@ void App::createGraphicsPipeline()
     .sampleShadingEnable = vk::False,
   };
 
+#ifndef COMPUTE
   vk::PipelineDepthStencilStateCreateInfo depthStencil
   {
     .depthTestEnable = vk::True,
@@ -511,17 +560,17 @@ void App::createGraphicsPipeline()
     .depthBoundsTestEnable = vk::False,
     .stencilTestEnable = vk::False
   };
+#endif
 
   vk::PipelineColorBlendAttachmentState colorBlendAttachment {
-    .blendEnable = vk::False,
+    .blendEnable = vk::True,
     .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
     .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
     .colorBlendOp = vk::BlendOp::eAdd,
-    .srcAlphaBlendFactor = vk::BlendFactor::eSrcAlpha,
-    .dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+    .srcAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+    .dstAlphaBlendFactor = vk::BlendFactor::eZero,
     .alphaBlendOp = vk::BlendOp::eAdd,
     .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
-    
   };
 
   vk::PipelineColorBlendStateCreateInfo colorBlendInfo {
@@ -531,11 +580,16 @@ void App::createGraphicsPipeline()
     .pAttachments = &colorBlendAttachment
   };
 
+#ifndef COMPUTE
   vk::PipelineLayoutCreateInfo pipelineLayoutInfo {
     .setLayoutCount = 1,
     .pSetLayouts = &*descriptorSetLayout,
     .pushConstantRangeCount = 0
   };
+#else
+  vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
+#endif
+
   graphicsPipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 
   vk::Format depthFormat = findDepthFormat();
@@ -554,11 +608,14 @@ void App::createGraphicsPipeline()
     .pViewportState = &viewportInfo,
     .pRasterizationState = &rasterizerInfo,
     .pMultisampleState = &multisamplingInfo,
+#ifndef COMPUTE
     .pDepthStencilState = &depthStencil,
+#endif
     .pColorBlendState = &colorBlendInfo,
     .pDynamicState = &dynamicInfo,
-    .layout = graphicsPipeline.first,
+    .layout = *graphicsPipeline.first,
     .renderPass = nullptr,
+    .subpass = 0
   };
 
   graphicsPipeline.second = vk::raii::Pipeline(device, nullptr, graphicsPipelineInfo);
@@ -604,6 +661,28 @@ vk::Format App::findSupportedFormat(
     throw std::runtime_error("failed to find supported format!");
   }
   return *formatIter;
+}
+
+void App::createComputePipeline()
+{
+  computePipeline = std::pair(nullptr, nullptr);
+  vk::raii::ShaderModule shaderModule = createShaderModule(readFile(compute_shader_path));
+
+  vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
+    .stage = vk::ShaderStageFlagBits::eCompute,
+    .module = shaderModule,
+    .pName = "compMain"
+  };
+  vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
+    .setLayoutCount = 1, 
+    .pSetLayouts = &*computeDescriptorSetLayout
+  };
+  computePipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+  vk::ComputePipelineCreateInfo pipelineInfo {
+    .stage = computeShaderStageInfo,
+    .layout = *computePipeline.first
+  };
+  computePipeline.second = vk::raii::Pipeline(device, nullptr, pipelineInfo);
 }
 
 void App::createCommandPool()
@@ -752,6 +831,7 @@ void App::loadTextures(std::filesystem::path path)
           const std::string texturePath = (path.parent_path() / uri).string();
           textureImages[i] = createTextureImage(texturePath, i);
           mats[i].imageViewIndex = i;
+          mats[i].doubleSided = static_cast<bool>(asset->materials[i].double_sided);
         }
       ));
   }
@@ -759,6 +839,14 @@ void App::loadTextures(std::filesystem::path path)
   // Wait for futures
   for (auto& future : futures) {
       future.wait();
+  }
+  
+  for (auto& mat : mats)
+  {
+    if (mat.doubleSided)
+    {
+      mats_DS.push_back(&mat);
+    }
   }
 }
 
@@ -969,11 +1057,6 @@ void App::copyBufferToImage(
   endSingleTimeCommands(*commandBuffer);
 }
 
-// void App::createTextureImageView(const vk::raii::Image& image, vk::Format format, uint32_t mipLevels)
-// {
-//   textureImageViews.emplace_back(createImageView(image, format, vk::ImageAspectFlagBits::eColor, mipLevels));
-// }
-
 void App::createTextureSampler()
 {
   vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();
@@ -1071,6 +1154,11 @@ void App::loadGeometry()
           mats[*matIt].indices[i + i_offset] = unpacked_indices[i] + v_offset;
         }
         free(unpacked_indices);
+
+        if (mats[*matIt].doubleSided)
+        {
+          mats[*matIt].indices.insert(mats[*matIt].indices.end(), mats[*matIt].indices.rbegin(), mats[*matIt].indices.rbegin() + written_uints);
+        }
       }
 
       cgltf_accessor* posAccessor = NULL; cgltf_accessor* uvAccessor = NULL;
@@ -1194,37 +1282,100 @@ void App::createIndexBuffers()
 
 void App::createUniformBuffers()
 {
+  mvpBuffers.clear();
+  mvpBuffersMapped.clear();
   uniformBuffers.clear();
-  //uniformBuffersMemory.clear();
   uniformBuffersMapped.clear();
 
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
   {
-    vk::DeviceSize bufferSize = sizeof(MVP);
-    vk::raii::Buffer buffer({});
-    vk::raii::DeviceMemory bufferMemory({});
-    createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, buffer, bufferMemory);
-    uniformBuffers.emplace_back(std::pair(std::move(buffer), std::move(bufferMemory)));
-    uniformBuffersMapped.emplace_back(uniformBuffers[i].second.mapMemory(0, bufferSize));
+    vk::DeviceSize mvpBufferSize = sizeof(MVP);
+    vk::raii::Buffer mvpBuffer({});
+    vk::raii::DeviceMemory mvpBufferMemory({});
+    createBuffer(mvpBufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, mvpBuffer, mvpBufferMemory);
+    mvpBuffers.emplace_back(std::pair(std::move(mvpBuffer), std::move(mvpBufferMemory)));
+    mvpBuffersMapped.emplace_back(mvpBuffers[i].second.mapMemory(0, mvpBufferSize));
+
+    vk::DeviceSize uniformBufferSize = sizeof(UBO);
+    vk::raii::Buffer uniformBuffer({});
+    vk::raii::DeviceMemory uniformBufferMemory({});
+    createBuffer(uniformBufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, uniformBuffer, uniformBufferMemory);
+    uniformBuffers.emplace_back(std::pair(std::move(uniformBuffer), std::move(uniformBufferMemory)));
+    uniformBuffersMapped.emplace_back(uniformBuffers[i].second.mapMemory(0, uniformBufferSize));
+  }
+}
+
+void App::createShaderStorageBuffers()
+{
+  std::default_random_engine rndEngine(static_cast<unsigned>(time(nullptr)));
+  std::uniform_real_distribution rndDist(0.0f, 1.0f);
+
+  std::vector<Particle> particles(PARTICLE_COUNT);
+  for (auto& particle : particles) {
+    float r = 0.25f * sqrtf(rndDist(rndEngine));
+    float theta = rndDist(rndEngine) * 2.0f * 3.14159265358979323846f;
+    float x = r * cosf(theta) * HEIGHT / WIDTH;
+    float y = r * sinf(theta);
+    particle.pos = glm::vec2(x, y);
+    particle.velocity = normalize(glm::vec2(x, y)) * 0.00025f;
+    particle.colour = glm::vec4(rndDist(rndEngine), rndDist(rndEngine), rndDist(rndEngine), 1.0f);
+  }
+
+  vk::DeviceSize bufferSize = sizeof(Particle) * PARTICLE_COUNT;
+
+  // Create a staging buffer used to upload data to the gpu
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
+  createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingBufferMemory);
+
+  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(dataStaging, particles.data(), (size_t)bufferSize);
+  stagingBufferMemory.unmapMemory();
+
+  shaderStorageBuffers.clear();
+
+  // Copy initial particle data to all storage buffers
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    vk::raii::Buffer shaderStorageBufferTemp({});
+    vk::raii::DeviceMemory shaderStorageBufferTempMemory({});
+    createBuffer(bufferSize, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, shaderStorageBufferTemp, shaderStorageBufferTempMemory);
+    copyBuffer(stagingBuffer, shaderStorageBufferTemp, bufferSize);
+    shaderStorageBuffers.emplace_back(std::move(shaderStorageBufferTemp), std::move(shaderStorageBufferTempMemory));
   }
 }
 
 
 void App::createDescriptorPools()
 {
-  std::array poolSizes = {
+#ifndef COMPUTE
+  std::array graphicsPoolSizes = {
     vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(mats.size())),
     vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(mats.size()))
   };
 
-  vk::DescriptorPoolCreateInfo poolInfo {
+  vk::DescriptorPoolCreateInfo graphicsPoolInfo {
     .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
     .maxSets = MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(mats.size()),
-    .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
-    .pPoolSizes = poolSizes.data()
+    .poolSizeCount = static_cast<uint32_t>(graphicsPoolSizes.size()),
+    .pPoolSizes = graphicsPoolSizes.data()
   };
 
-  descriptorPool = vk::raii::DescriptorPool(device, poolInfo);
+  graphicsDescriptorPool = vk::raii::DescriptorPool(device, graphicsPoolInfo);
+#endif
+
+  std::array computePoolSizes = {
+    vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
+    vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT * 2)
+  };
+
+  vk::DescriptorPoolCreateInfo computePoolInfo{
+    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+    .maxSets = MAX_FRAMES_IN_FLIGHT,
+    .poolSizeCount = static_cast<uint32_t>(computePoolSizes.size()),
+    .pPoolSizes = computePoolSizes.data()
+  };
+
+  computeDescriptorPool = vk::raii::DescriptorPool(device, computePoolInfo);
 
   // Create descriptor pool for ImGui
   std::array imguiPoolSizes = {
@@ -1257,7 +1408,7 @@ void App::createDescriptorSets()
   {
     std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);
     vk::DescriptorSetAllocateInfo allocInfo {
-      .descriptorPool = static_cast<vk::DescriptorPool>(descriptorPool),
+      .descriptorPool = static_cast<vk::DescriptorPool>(graphicsDescriptorPool),
       .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
       .pSetLayouts = layouts.data(),
     };
@@ -1267,7 +1418,7 @@ void App::createDescriptorSets()
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
       vk::DescriptorBufferInfo bufferInfo {
-        .buffer = static_cast<vk::Buffer>(uniformBuffers[i].first),
+        .buffer = static_cast<vk::Buffer>(mvpBuffers[i].first),
         .offset = 0,
         .range = sizeof(MVP)
       };
@@ -1302,6 +1453,64 @@ void App::createDescriptorSets()
   }
 }
 
+void App::createComputeDescriptorSets()
+{
+  std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, computeDescriptorSetLayout);
+  vk::DescriptorSetAllocateInfo allocInfo{};
+  allocInfo.descriptorPool = *computeDescriptorPool;
+  allocInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+  allocInfo.pSetLayouts = layouts.data();
+  computeDescriptorSets.clear();
+  computeDescriptorSets = device.allocateDescriptorSets(allocInfo);
+
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+    vk::DescriptorBufferInfo bufferInfo{
+      .buffer = uniformBuffers[i].first,
+      .offset = 0,
+      .range = sizeof(UBO)
+    };
+
+    vk::DescriptorBufferInfo storageBufferInfoLastFrame{
+      .buffer = shaderStorageBuffers[(i - 1) % MAX_FRAMES_IN_FLIGHT].first,
+      .offset = 0,
+      .range = sizeof(Particle) * PARTICLE_COUNT
+    };
+    vk::DescriptorBufferInfo storageBufferInfoCurrentFrame{
+      .buffer = shaderStorageBuffers[i].first,
+      .offset = 0,
+      .range = sizeof(Particle) * PARTICLE_COUNT
+    };
+    std::array descriptorWrites{
+      vk::WriteDescriptorSet{
+        .dstSet = *computeDescriptorSets[i],
+        .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .pImageInfo = nullptr,
+        .pBufferInfo = &bufferInfo,
+        .pTexelBufferView = nullptr
+      },
+      vk::WriteDescriptorSet{
+        .dstSet = *computeDescriptorSets[i],
+        .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eStorageBuffer,
+        .pImageInfo = nullptr,
+        .pBufferInfo = &storageBufferInfoLastFrame,
+        .pTexelBufferView = nullptr
+      },
+      vk::WriteDescriptorSet{
+        .dstSet = *computeDescriptorSets[i],
+        .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eStorageBuffer,
+        .pImageInfo = nullptr,
+        .pBufferInfo = &storageBufferInfoCurrentFrame,
+        .pTexelBufferView = nullptr
+      }
+    };
+    device.updateDescriptorSets(descriptorWrites, {});
+  }
+}
+
+
 void App::createCommandBuffers()
 {
   commandBuffers.clear();
@@ -1315,11 +1524,19 @@ void App::createCommandBuffers()
   commandBuffers = vk::raii::CommandBuffers(device, allocInfo);
 }
 
+void App::createComputeCommandBuffers() {
+  computeCommandBuffers.clear();
+  vk::CommandBufferAllocateInfo allocInfo{};
+  allocInfo.commandPool = *commandPool;
+  allocInfo.level = vk::CommandBufferLevel::ePrimary;
+  allocInfo.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
+  computeCommandBuffers = vk::raii::CommandBuffers(device, allocInfo);
+}
+
 void App::createSyncObjects()
 {
   presentCompleteSemaphores.clear();
   renderFinishedSemaphores.clear();
-  graphicsInFlightFences.clear();
 
   for (size_t i = 0; i < swapChainImages.size(); i++)
   { 
@@ -1327,14 +1544,23 @@ void App::createSyncObjects()
     renderFinishedSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
   }
 
-  computeInFlightFences.clear();
-  computeFinishedSemaphores.clear();
+  inFlightFences.clear();
+
+  vk::SemaphoreTypeCreateInfo semaphoreType{
+    .semaphoreType = vk::SemaphoreType::eTimeline,
+    .initialValue = 0
+  };
+  computeSemaphore = vk::raii::Semaphore(device, { .pNext = &semaphoreType });
+  timelineValue = 0;
 
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-  {    
-    graphicsInFlightFences.emplace_back(device, vk::FenceCreateInfo {.flags = vk::FenceCreateFlagBits::eSignaled});
-    computeFinishedSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
-    computeInFlightFences.emplace_back(device, vk::FenceCreateInfo{ .flags = vk::FenceCreateFlagBits::eSignaled });
+  {
+#ifndef COMPUTE
+    vk::FenceCreateInfo fenceInfo = { .flags = vk::FenceCreateFlagBits::eSignaled };
+#else
+    vk::FenceCreateInfo fenceInfo = {};
+#endif
+    inFlightFences.emplace_back(device, fenceInfo);
   }
 }
 
@@ -1396,8 +1622,6 @@ void App::mainLoop()
   double xpos, ypos;
   std::chrono::system_clock::time_point start = std::chrono::system_clock::now();
   std::chrono::system_clock::time_point end = std::chrono::system_clock::time_point::max();
-  long long delta = 1;
-
 
   while (glfwWindowShouldClose(pWindow) != GLFW_TRUE)
   {
@@ -1455,6 +1679,7 @@ void App::mainLoop()
       ImGui::Spacing();
       ImGui::InputText("Model Path", model_path, IM_ARRAYSIZE(model_path));
       ImGui::InputText("Shader Path", shader_path, IM_ARRAYSIZE(shader_path));
+      ImGui::InputText("Compute Shader Path", compute_shader_path, IM_ARRAYSIZE(compute_shader_path));
       ImGui::End();
     }
 
@@ -1511,27 +1736,121 @@ void App::reloadShaders()
     }
     fclose(f);
     createGraphicsPipeline();
+    createComputePipeline();
 }
 
 void App::drawFrame()
 {
-  //{
-  //  // COMPUTE
-  //  while (vk::Result::eTimeout == device.waitForFences(*computeInFlightFences[currentFrame], vk::True, UINT64_MAX))
-  //    ;
-  //  updateUniformBuffer(currentFrame);
-  //  device.resetFences(*computeInFlightFences[currentFrame]);
-  //  computeCommandBuffers[currentFrame].reset();
-  //  recordComputeCommandBuffer();
+#ifdef COMPUTE
+  while (vk::Result::eTimeout == device.waitForFences(*inFlightFences[currentFrame], vk::True, UINT64_MAX))
+    ;
+  auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, nullptr, *inFlightFences[currentFrame]);
+  
+  if (result == vk::Result::eErrorOutOfDateKHR || framebufferResized)
+  {
+    framebufferResized = false;
+    recreateSwapChain();
+    return;
+  }
+  else if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
+  {
+    throw std::runtime_error("failed to acquire swap chain image!");
+  }
 
-  //  const vk::SubmitInfo submitInfo({}, {}, { *computeCommandBuffers[currentFrame] }, { *computeFinishedSemaphores[currentFrame] });
-  //  queue.submit(submitInfo, *computeInFlightFences[currentFrame]);
-  //}
+  updateComputeUniformBuffer(currentFrame);
+  device.resetFences(*inFlightFences[currentFrame]);
+
+  // Update timeline value for this frame
+  uint64_t computeWaitValue = timelineValue;
+  uint64_t computeSignalValue = ++timelineValue;
+  uint64_t graphicsWaitValue = computeSignalValue;
+  uint64_t graphicsSignalValue = ++timelineValue;
+
+  {
+    // COMPUTE
+    recordComputeCommandBuffer();
+
+    vk::TimelineSemaphoreSubmitInfo computeTimelineInfo{
+      .waitSemaphoreValueCount = 1,
+      .pWaitSemaphoreValues = &computeWaitValue,
+      .signalSemaphoreValueCount = 1,
+      .pSignalSemaphoreValues = &computeSignalValue
+    };
+
+    vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eComputeShader };
+
+    vk::SubmitInfo computeSubmitInfo{
+      .pNext = &computeTimelineInfo,
+      .waitSemaphoreCount = 1,
+      .pWaitSemaphores = &*computeSemaphore,
+      .pWaitDstStageMask = waitStages,
+      .commandBufferCount = 1,
+      .pCommandBuffers = &*computeCommandBuffers[currentFrame],
+      .signalSemaphoreCount = 1,
+      .pSignalSemaphores = &*computeSemaphore
+    };
+
+    queue.submit(computeSubmitInfo, nullptr);
+  }
   {
     // GRAPHICS
-    while (vk::Result::eTimeout == device.waitForFences(*graphicsInFlightFences[currentFrame], vk::True, UINT64_MAX))
+    recordCommandBuffer(imageIndex);
+
+    // Submit graphics work (waits for compute to finish)
+    vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eVertexInput;
+    vk::TimelineSemaphoreSubmitInfo graphicsTimelineInfo{
+        .waitSemaphoreValueCount = 1,
+        .pWaitSemaphoreValues = &graphicsWaitValue,
+        .signalSemaphoreValueCount = 1,
+        .pSignalSemaphoreValues = &graphicsSignalValue
+    };
+
+    vk::SubmitInfo graphicsSubmitInfo{
+        .pNext = &graphicsTimelineInfo,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &*computeSemaphore,
+        .pWaitDstStageMask = &waitStage,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &*commandBuffers[currentFrame],
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = &*computeSemaphore
+    };
+
+    queue.submit(graphicsSubmitInfo, nullptr);
+
+    // Present the image (wait for graphics to finish)
+    vk::SemaphoreWaitInfo waitInfo{
+        .semaphoreCount = 1,
+        .pSemaphores = &*computeSemaphore,
+        .pValues = &graphicsSignalValue
+    };
+
+    // Wait for graphics to complete before presenting
+    while (vk::Result::eTimeout == device.waitSemaphores(waitInfo, UINT64_MAX))
       ;
 
+    vk::PresentInfoKHR presentInfo{
+        .waitSemaphoreCount = 0, // No binary semaphores needed
+        .pWaitSemaphores = nullptr,
+        .swapchainCount = 1,
+        .pSwapchains = &*swapChain,
+        .pImageIndices = &imageIndex
+    };
+
+    result = queue.presentKHR(presentInfo);
+    if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || framebufferResized) {
+      framebufferResized = false;
+      recreateSwapChain();
+    }
+    else if (result != vk::Result::eSuccess) {
+      throw std::runtime_error("failed to present swap chain image!");
+    }
+  }
+#else
+  {
+    // GRAPHICS
+    while (vk::Result::eTimeout == device.waitForFences(*inFlightFences[currentFrame], vk::True, UINT64_MAX))
+      ;
     auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[semaphoreIndex], nullptr);
 
     if (result == vk::Result::eErrorOutOfDateKHR || framebufferResized)
@@ -1547,8 +1866,7 @@ void App::drawFrame()
 
     updateModelViewProjection(currentFrame);
 
-    device.resetFences(*graphicsInFlightFences[currentFrame]);
-    commandBuffers[currentFrame].reset();
+    device.resetFences(*inFlightFences[currentFrame]);
 
     recordCommandBuffer(imageIndex);
 
@@ -1564,7 +1882,7 @@ void App::drawFrame()
       .pSignalSemaphores = &*renderFinishedSemaphores[imageIndex]
     };
 
-    queue.submit(submitInfo, *graphicsInFlightFences[currentFrame]);
+    queue.submit(submitInfo, *inFlightFences[currentFrame]);
 
     const vk::PresentInfoKHR presentInfo{
       .waitSemaphoreCount = 1,
@@ -1586,8 +1904,17 @@ void App::drawFrame()
     }
 
     semaphoreIndex = (semaphoreIndex + 1) % presentCompleteSemaphores.size();
-    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
   }
+#endif
+  currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+void App::updateComputeUniformBuffer(uint32_t imageIndex)
+{
+  UBO ubo{};
+  ubo.deltaTime = static_cast<float>(delta) / 100.0f;
+
+  memcpy(uniformBuffersMapped[imageIndex], &ubo, sizeof(ubo));
 }
 
 void App::updateModelViewProjection(uint32_t imageIndex)
@@ -1603,11 +1930,22 @@ void App::updateModelViewProjection(uint32_t imageIndex)
   mvp.proj[1][1] *= -1;
   mvp.model = glm::rotate(camera.getRotationMatrix(), 0.0f, glm::vec3(0.0f, 0.0f, 1.0f));
 
-  memcpy(uniformBuffersMapped[imageIndex], &mvp, sizeof(mvp));
+  memcpy(mvpBuffersMapped[imageIndex], &mvp, sizeof(mvp));
+}
+
+void App::recordComputeCommandBuffer()
+{
+  computeCommandBuffers[currentFrame].reset();
+  computeCommandBuffers[currentFrame].begin({});
+  computeCommandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline.second);
+  computeCommandBuffers[currentFrame].bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipeline.first, 0, { computeDescriptorSets[currentFrame] }, {});
+  computeCommandBuffers[currentFrame].dispatch(PARTICLE_COUNT / 256, 1, 1);
+  computeCommandBuffers[currentFrame].end();
 }
 
 void App::recordCommandBuffer(uint32_t imageIndex)
 {
+  commandBuffers[currentFrame].reset();
   commandBuffers[currentFrame].begin({});
 
   transitionImageLayout(
@@ -1620,6 +1958,7 @@ void App::recordCommandBuffer(uint32_t imageIndex)
     vk::PipelineStageFlagBits2::eColorAttachmentOutput
   );
 
+#ifndef COMPUTE
   vk::ImageMemoryBarrier2 depthBarrier {
     .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
     .srcAccessMask = {},
@@ -1645,16 +1984,7 @@ void App::recordCommandBuffer(uint32_t imageIndex)
     .pImageMemoryBarriers = &depthBarrier
   };
   commandBuffers[currentFrame].pipelineBarrier2(depthDependencyInfo);
-
-  vk::ClearValue clearColour = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
   vk::ClearDepthStencilValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
-  vk::RenderingAttachmentInfo colourAttachmentInfo {
-    .imageView = swapChainImageViews[imageIndex],
-    .imageLayout = vk::ImageLayout::eAttachmentOptimal,
-    .loadOp = vk::AttachmentLoadOp::eClear,
-    .storeOp = vk::AttachmentStoreOp::eStore,
-    .clearValue = clearColour,
-  };
 
   vk::RenderingAttachmentInfo depthAttachmentInfo {
     .imageView = depthImageView,
@@ -1663,7 +1993,17 @@ void App::recordCommandBuffer(uint32_t imageIndex)
     .storeOp = vk::AttachmentStoreOp::eDontCare,
     .clearValue = clearDepth,
   };
-  
+#endif
+
+  vk::ClearValue clearColour = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+  vk::RenderingAttachmentInfo colourAttachmentInfo {
+    .imageView = swapChainImageViews[imageIndex],
+    .imageLayout = vk::ImageLayout::eAttachmentOptimal,
+    .loadOp = vk::AttachmentLoadOp::eClear,
+    .storeOp = vk::AttachmentStoreOp::eStore,
+    .clearValue = clearColour,
+  };
+
   vk::RenderingInfo renderingInfo {
     .renderArea = {
       .offset = {0, 0},
@@ -1672,7 +2012,9 @@ void App::recordCommandBuffer(uint32_t imageIndex)
     .layerCount = 1,
     .colorAttachmentCount = 1,
     .pColorAttachments = &colourAttachmentInfo,
+#ifndef COMPUTE
     .pDepthAttachment = &depthAttachmentInfo
+#endif
   };
   
   commandBuffers[currentFrame].beginRendering(renderingInfo);
@@ -1685,10 +2027,15 @@ void App::recordCommandBuffer(uint32_t imageIndex)
   commandBuffers[currentFrame].setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
   commandBuffers[currentFrame].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
   
+#ifdef COMPUTE
+  commandBuffers[currentFrame].bindVertexBuffers(0, { shaderStorageBuffers[currentFrame].first }, { 0 });
+  commandBuffers[currentFrame].draw(PARTICLE_COUNT, 1, 0, 0);
+#else
   commandBuffers[currentFrame].bindVertexBuffers(0, *vertexBuffer.first, {0});
   
   for (auto& mat : mats)
   {
+    if (mat.doubleSided) continue; // all the double sided materials have alpha
     commandBuffers[currentFrame].bindIndexBuffer(*mat.indexBuffer.first, 0, vk::IndexType::eUint32);
     commandBuffers[currentFrame].bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics,
@@ -1702,7 +2049,23 @@ void App::recordCommandBuffer(uint32_t imageIndex)
       1, 0, 0, 0
     );
   }
-
+  // Draw transparent materials last
+  for (auto& mat : mats_DS)
+  {
+    commandBuffers[currentFrame].bindIndexBuffer(*mat->indexBuffer.first, 0, vk::IndexType::eUint32);
+    commandBuffers[currentFrame].bindDescriptorSets(
+      vk::PipelineBindPoint::eGraphics,
+      graphicsPipeline.first,
+      0,
+      *mat->descriptorSets[currentFrame],
+      nullptr
+    );
+    commandBuffers[currentFrame].drawIndexed(
+      static_cast<uint32_t>(mat->indices.size()),
+      1, 0, 0, 0
+    );
+  }
+#endif
   
   ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), static_cast<VkCommandBuffer>(*commandBuffers[currentFrame]));
 
@@ -1766,6 +2129,8 @@ void App::cleanup()
   ImGui::DestroyContext();
 
   mats.clear();
+
+  computeDescriptorSets.clear();
 
   glfwDestroyWindow(pWindow);
   glfwTerminate();

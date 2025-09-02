@@ -18,7 +18,7 @@ struct Particle {
   }
 
   // How the struct's data is laid out
-  static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions()
+  static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions()
   {
     return {
       // location, binding, format, offset

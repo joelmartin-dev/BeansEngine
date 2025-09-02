@@ -34,9 +34,11 @@ constexpr uint32_t WIDTH = 1440;
 constexpr uint32_t HEIGHT = 900;
 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+constexpr uint32_t PARTICLE_COUNT = 512; // must be power of 2
 
 static char model_path[256] = "assets/sponza/Sponza.gltf";
 static char shader_path[256] = "assets/shaders/shader.spv";
+static char compute_shader_path[256] = "assets/shaders/compute.spv";
 
 // not array; vector allows implicit typing and contents are immutable
 const std::vector validationLayers = {
@@ -60,6 +62,10 @@ struct MVP {
   alignas(16) glm::mat4 proj;
 };
 
+struct UBO {
+  float deltaTime = 1.0f;
+};
+
 static Camera camera = {};
 static bool framebufferResized = false;
 static bool hotReload = false;
@@ -80,6 +86,7 @@ class App
 
   std::vector<Mesh> meshes;
   std::vector<Material> mats;
+  std::vector<Material*> mats_DS;
 
   std::mutex m;
 
@@ -113,14 +120,16 @@ class App
   std::vector<vk::raii::ImageView> swapChainImageViews;
   
   vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
+  std::vector<vk::raii::DescriptorSet> computeDescriptorSets;
 
   vk::raii::DescriptorSetLayout computeDescriptorSetLayout = nullptr;
   std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> computePipeline = std::pair(nullptr, nullptr);
-
   std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> graphicsPipeline = std::pair(nullptr, nullptr);
 
   vk::raii::CommandPool commandPool = nullptr;
   std::vector<vk::raii::CommandBuffer> commandBuffers;
+  std::vector<vk::raii::CommandBuffer> computeCommandBuffers;
+
   std::vector<std::pair<vk::raii::Image, vk::raii::DeviceMemory>> textureImages;
   std::vector<vk::raii::ImageView> textureImageViews;
   vk::raii::Sampler textureSampler = nullptr;
@@ -128,23 +137,29 @@ class App
   std::pair<vk::raii::Image, vk::raii::DeviceMemory> depthImage = std::pair(nullptr, nullptr);
   vk::raii::ImageView depthImageView = nullptr;
 
-  std::pair <vk::raii::Buffer, vk::raii::DeviceMemory> vertexBuffer = std::pair(nullptr, nullptr);
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> vertexBuffer = std::pair(nullptr, nullptr);
+
+  std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> mvpBuffers;
+  std::vector<void*> mvpBuffersMapped;
 
   std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> uniformBuffers;
   std::vector<void*> uniformBuffersMapped;
 
   std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> shaderStorageBuffers;
 
-  vk::raii::DescriptorPool descriptorPool = nullptr;
+  vk::raii::DescriptorPool graphicsDescriptorPool = nullptr;
+  vk::raii::DescriptorPool computeDescriptorPool = nullptr;
   vk::raii::DescriptorPool imguiDescriptorPool = nullptr;
 
   std::vector<vk::raii::Semaphore> presentCompleteSemaphores;
   std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
-  std::vector<vk::raii::Fence> graphicsInFlightFences;
-  std::vector<vk::raii::Fence> computeInFlightFences;
-  std::vector<vk::raii::Semaphore> computeFinishedSemaphores;
+  std::vector<vk::raii::Fence> inFlightFences;
+  vk::raii::Semaphore computeSemaphore = nullptr;
   uint32_t currentFrame = 0;
   uint32_t semaphoreIndex = 0;
+
+  uint64_t timelineValue = 0;
+  int64_t delta = 1;
 
   struct SwapChainSupportDetails {
     vk::SurfaceCapabilitiesKHR capabilities;
@@ -163,7 +178,7 @@ class App
   void createLogicalDevice();
   void createSwapChain();
   void createSwapChainImageViews();
-  void createDescriptorSetLayout();
+  void createDescriptorSetLayouts();
   void createGraphicsPipeline();
   [[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char>& code) const;
   [[nodiscard]] vk::Format findDepthFormat() const;
@@ -172,6 +187,7 @@ class App
     vk::ImageTiling, 
     vk::FormatFeatureFlags features
   ) const;
+  void createComputePipeline();
   void createCommandPool();
   void createDepthResources();
   void createImage(
@@ -213,12 +229,6 @@ class App
     uint32_t width, uint32_t height, uint32_t mipLevels,
     ktxTexture2* kTexture
   );
-  //void createTextureImageView(
-  //  const vk::raii::Image& image, 
-  //  vk::Format format, 
-  //  uint32_t mipLevels,
-  //  size_t idx
-  //);
   void createTextureSampler();
   void loadGeometry();
   void copyBuffer(
@@ -227,10 +237,13 @@ class App
   );
   void createVertexBuffer();
   void createIndexBuffers();
+  void createShaderStorageBuffers();
   void createUniformBuffers();
   void createDescriptorPools();
   void createDescriptorSets();
+  void createComputeDescriptorSets();
   void createCommandBuffers();
+  void createComputeCommandBuffers();
   void createSyncObjects();
 
   void initImGui();
@@ -240,6 +253,7 @@ class App
   void cleanupSwapChain();
   void reloadShaders();
   void drawFrame();
+  void updateComputeUniformBuffer(uint32_t imageIndex);
   void updateModelViewProjection(uint32_t imageIndex);
   void transitionImageLayout(
     uint32_t imageIndex,
@@ -250,6 +264,7 @@ class App
     vk::PipelineStageFlags2 srcStageMask,
     vk::PipelineStageFlags2 dstStageMask
   );
+  void recordComputeCommandBuffer();
   void recordCommandBuffer(uint32_t imageIndex);
   
   void cleanup();
