@@ -2135,6 +2135,7 @@ void App::cleanup()
   computeDescriptorSets.clear();
 
   swapChain.clear();
+  surface = nullptr;
 
   glfwDestroyWindow(pWindow);
   glfwTerminate();
