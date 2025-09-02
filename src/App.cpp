@@ -1381,22 +1381,22 @@ void App::createDescriptorPools()
 
   // Create descriptor pool for ImGui
   std::array imguiPoolSizes = {
-    vk::DescriptorPoolSize(vk::DescriptorType::eSampler, 10),
-    vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, 10),
-    vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage, 10),
-    vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, 10),
-    vk::DescriptorPoolSize(vk::DescriptorType::eUniformTexelBuffer, 10),
-    vk::DescriptorPoolSize(vk::DescriptorType::eStorageTexelBuffer, 10),
-    vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, 10),
-    vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, 10),
-    vk::DescriptorPoolSize(vk::DescriptorType::eUniformBufferDynamic, 10),
-    vk::DescriptorPoolSize(vk::DescriptorType::eStorageBufferDynamic, 10),
-    vk::DescriptorPoolSize(vk::DescriptorType::eInputAttachment, 10)
+    vk::DescriptorPoolSize(vk::DescriptorType::eSampler, 2),
+    vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, 2),
+    vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage, 2),
+    vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, 2),
+    vk::DescriptorPoolSize(vk::DescriptorType::eUniformTexelBuffer, 2),
+    vk::DescriptorPoolSize(vk::DescriptorType::eStorageTexelBuffer, 2),
+    vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, 2),
+    vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, 2),
+    vk::DescriptorPoolSize(vk::DescriptorType::eUniformBufferDynamic, 2),
+    vk::DescriptorPoolSize(vk::DescriptorType::eStorageBufferDynamic, 2),
+    vk::DescriptorPoolSize(vk::DescriptorType::eInputAttachment, 2)
   };
 
   vk::DescriptorPoolCreateInfo imguiPoolInfo {
     .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-    .maxSets = 1000 * static_cast<uint32_t>(imguiPoolSizes.size()),
+    .maxSets = MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(imguiPoolSizes.size()),
     .poolSizeCount = static_cast<uint32_t>(imguiPoolSizes.size()),
     .pPoolSizes = imguiPoolSizes.data()
   };
@@ -1744,9 +1744,9 @@ void App::reloadShaders()
 void App::drawFrame()
 {
 #ifdef COMPUTE
+  auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, nullptr, *inFlightFences[currentFrame]);
   while (vk::Result::eTimeout == device.waitForFences(*inFlightFences[currentFrame], vk::True, UINT64_MAX))
     ;
-  auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, nullptr, *inFlightFences[currentFrame]);
   
   if (result == vk::Result::eErrorOutOfDateKHR || framebufferResized)
   {
@@ -2133,6 +2133,8 @@ void App::cleanup()
   mats.clear();
 
   computeDescriptorSets.clear();
+
+  swapChain.clear();
 
   glfwDestroyWindow(pWindow);
   glfwTerminate();
