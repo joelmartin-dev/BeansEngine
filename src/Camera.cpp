@@ -8,9 +8,23 @@ glm::mat4 Camera::getViewMatrix()
   return glm::lookAt(position, position + forward, glm::dvec3(0.0, 1.0, 0.0));
 }
 
-glm::mat4 Camera::getRotationMatrix()
+glm::mat4 Camera::getRotationMatrix() const
 {
   return glm::identity<glm::mat4>();
+}
+
+glm::mat4 Camera::getMVPMatrix()
+{
+  auto view = getViewMatrix();
+  auto proj = glm::perspective(
+    glm::radians(fov),
+    viewportWidth / viewportHeight,
+    0.01f,
+    100.0f
+  );
+  proj[1][1] *= -1;
+  auto model = glm::rotate(getRotationMatrix(), 0.0f, glm::vec3(0.0f, 0.0f, 1.0f));
+  return proj * view * model;
 }
 
 void Camera::update(double delta)
@@ -32,9 +46,12 @@ void Camera::update(double delta)
   fov += static_cast<float>(deltaFOV) * fovSpeed * static_cast<float>(delta);
 
   position += (forward * velocity.z + right * velocity.x + glm::dvec3(0.0, 1.0, 0.0) * velocity.y) * static_cast<double>(moveSpeed) * delta * static_cast<double>(mod);
+
+  // cursor_handler needs manual invoking to stop continuous movement
+  if (mouseMode) cursor_handler(oldXpos, oldYpos);
 }
 
-void Camera::cursor_pos_callback(double xpos, double ypos)
+void Camera::cursor_handler(double xpos, double ypos)
 {
   double deltaXpos = oldXpos - xpos;
   double deltaYpos = oldYpos - ypos;
@@ -46,19 +63,10 @@ void Camera::cursor_pos_callback(double xpos, double ypos)
   deltaYaw = -deltaXpos;
 }
 
-void Camera::key_callback(GLFWwindow* pWindow, int key, int scancode, int action, int mods)
+void Camera::key_handler(GLFWwindow* pWindow, int key, int scancode, int action, int mods)
 {
-  // unused
-  (void)scancode; (void) mods;
-  
-  if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
-  {
-    glfwSetWindowShouldClose(pWindow, GLFW_TRUE);
-  }
-
   if (action == GLFW_REPEAT || action == GLFW_PRESS)
   {
-    //std::clog << "PRESSING" << std::endl;
     switch (key)
     {
       case GLFW_KEY_W:
@@ -102,6 +110,7 @@ void Camera::key_callback(GLFWwindow* pWindow, int key, int scancode, int action
         break;
       case GLFW_KEY_F:
         glfwSetInputMode(pWindow, GLFW_CURSOR, glfwGetInputMode(pWindow, GLFW_CURSOR) == GLFW_CURSOR_NORMAL ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+        mouseMode = glfwGetInputMode(pWindow, GLFW_CURSOR) == GLFW_CURSOR_NORMAL;
         break;
       default:
         break;
@@ -110,6 +119,7 @@ void Camera::key_callback(GLFWwindow* pWindow, int key, int scancode, int action
 
   if (action == GLFW_RELEASE)
   {
+    printf("Released %i\r", key);
     switch (key)
     {
       case GLFW_KEY_W:

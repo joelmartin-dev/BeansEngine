@@ -3,7 +3,7 @@
 #include <cstdint>
 
 // stores measurements data
-struct EngineStats {
+struct Metrics {
   long long int frametime = 0L;
   uint32_t tris = 0U;
   uint32_t drawcalls = 0U;

@@ -1,0 +1,1 @@
+C:\VulkanSDK\1.4.313.0\Bin\slangc.exe %CD%\assets\shaders\%1.slang -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name -entry vertMain -entry fragMain -o %CD%\assets\shaders\shader.spv

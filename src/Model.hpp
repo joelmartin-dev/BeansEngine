@@ -39,4 +39,24 @@ struct Mesh {
     return model;
   }
 };
+
+struct Quad {
+  const std::vector<Vertex> vertices = {
+    {{-1.0f, -1.0f, -0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+    {{-1.0f, 1.0f, -0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+    {{1.0f, 1.0f, -0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+    {{1.0f, -1.0f, -0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+  };
+  const std::vector<uint16_t> indices = {
+    0, 1, 2, 2, 3, 0
+  };
+
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> indexBuffer = std::pair(nullptr, nullptr);
+
+  vk::raii::DescriptorPool descriptorPool = nullptr;
+  vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
+  std::vector<vk::raii::DescriptorSet> descriptorSets;
+
+  std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> graphicsPipeline = std::pair(nullptr, nullptr);
+};
 #endif

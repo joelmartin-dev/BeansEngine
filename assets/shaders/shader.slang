@@ -5,9 +5,7 @@ struct VSInput {
 };
 
 struct UniformBuffer {
-    float4x4 model;
-    float4x4 view;
-    float4x4 proj;
+    float4x4 mvp;
 };
 ConstantBuffer<UniformBuffer> ubo;
 
@@ -21,7 +19,7 @@ struct VSOutput
 [shader("vertex")]
 VSOutput vertMain(VSInput input) {
     VSOutput output;
-    output.pos = mul(ubo.proj, mul(ubo.view, mul(ubo.model, float4(input.inPosition, 1.0))));
+    output.pos = mul(ubo.mvp, float4(input.inPosition, 1.0));
     output.fragColor = input.inColor;
     output.fragTexCoord = input.inTexCoord;
     return output;

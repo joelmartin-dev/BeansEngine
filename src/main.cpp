@@ -3,19 +3,22 @@
 #include <stdexcept>
 
 #ifdef _WIN32
+#pragma comment(linker, "/SUBSYSTEM:CONSOLE")
 #include <Windows.h>
 #endif
 
 #include "App.hpp"
-
+//#include "Playground.hpp"
+//#include "Shadertoy.hpp"
 
 int main()
 {
-  App app;
+  App app = {};
+  //Shadertoy app;
 
   try
   {
-    app.run();
+    app.Run();
   }
   catch (const std::exception& e)
   {

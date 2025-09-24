@@ -98,7 +98,7 @@
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
-      <AdditionalLibraryDirectories>$(SolutionDir)\lib\Windows;</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(SolutionDir)lib\Windows</AdditionalLibraryDirectories>
       <IgnoreSpecificDefaultLibraries>
       </IgnoreSpecificDefaultLibraries>
     </Link>
@@ -160,7 +160,9 @@
     <ClInclude Include="include\ktx.h" />
     <ClInclude Include="include\ktxvulkan.h" />
     <ClInclude Include="src\App.hpp" />
+    <ClInclude Include="src\BufferStructs.hpp" />
     <ClInclude Include="src\Camera.hpp" />
+    <ClInclude Include="src\Light.hpp" />
     <ClInclude Include="src\Measurement.hpp" />
     <ClInclude Include="src\Model.hpp" />
     <ClInclude Include="src\Particle.hpp" />
@@ -170,6 +172,8 @@
     <Library Include="lib\Windows\glfw3.lib" />
     <Library Include="lib\Windows\ktx.lib" />
     <Library Include="lib\Windows\ktx_read.lib" />
+    <Library Include="lib\Windows\slang-rt.lib" />
+    <Library Include="lib\Windows\slang.lib" />
     <Library Include="lib\Windows\volk.lib" />
   </ItemGroup>
   <ItemGroup>
