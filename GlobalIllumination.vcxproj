@@ -93,7 +93,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <AdditionalIncludeDirectories>$(SolutionDir)deps;$(SolutionDir)include;$(VULKAN_SDK)\include\</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>_COMPUTE;_CRT_SECURE_NO_WARNINGS;KHRONOS_STATIC;GLM_ENABLE_EXPERIMENTAL;IMGUI_IMPL_VULKAN_USE_VOLK;VULKAN_HPP_NO_STRUCT_CONSTRUCTORS;_DEBUG;WINDOWS</PreprocessorDefinitions>
+      <PreprocessorDefinitions>RESTIR;_CRT_SECURE_NO_WARNINGS;KHRONOS_STATIC;GLM_ENABLE_EXPERIMENTAL;IMGUI_IMPL_VULKAN_USE_VOLK;VULKAN_HPP_NO_STRUCT_CONSTRUCTORS;_DEBUG;WINDOWS</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -162,7 +162,7 @@
     <ClInclude Include="src\App.hpp" />
     <ClInclude Include="src\BufferStructs.hpp" />
     <ClInclude Include="src\Camera.hpp" />
-    <ClInclude Include="src\Light.hpp" />
+    <ClInclude Include="src\RadianceStructs.hpp" />
     <ClInclude Include="src\Measurement.hpp" />
     <ClInclude Include="src\Model.hpp" />
     <ClInclude Include="src\Particle.hpp" />

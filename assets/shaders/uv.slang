@@ -21,23 +21,8 @@ VSOutput vertMain(VSInput input)
     return output;
 }
 
-struct UniformBuffer {
-    float time;
-    float deltaTime;
-};
-ConstantBuffer<UniformBuffer> ubo;
-
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_Target
 {
-    return float4(vertIn.fragTexCoord, 0.0, 0.0);//(sin(ubo.time) + 1.0) / 10.0);
+    return float4(vertIn.fragTexCoord, 0.0, 1.0);
 }
-
-/*
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void compMain(uint3 threadId: SV_DispatchThreadID)
-{
-
-}
-*/

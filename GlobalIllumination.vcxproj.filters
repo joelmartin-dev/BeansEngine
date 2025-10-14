@@ -107,7 +107,7 @@
     <ClInclude Include="src\App.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\Light.hpp">
+    <ClInclude Include="src\RadianceStructs.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\BufferStructs.hpp">

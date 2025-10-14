@@ -8,13 +8,10 @@
 #endif
 
 #include "App.hpp"
-//#include "Playground.hpp"
-//#include "Shadertoy.hpp"
 
 int main()
 {
   App app = {};
-  //Shadertoy app;
 
   try
   {

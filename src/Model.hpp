@@ -14,8 +14,6 @@ struct Material {
 
   bool doubleSided = false;
 
-  size_t imageViewIndex = 0;
-
   std::vector<vk::raii::DescriptorSet> descriptorSets;
 };
 
@@ -52,6 +50,20 @@ struct Quad {
   };
 
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> indexBuffer = std::pair(nullptr, nullptr);
+
+  vk::raii::DescriptorPool descriptorPool = nullptr;
+  vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
+  std::vector<vk::raii::DescriptorSet> descriptorSets;
+
+  std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> graphicsPipeline = std::pair(nullptr, nullptr);
+};
+
+struct Tri {
+  const std::vector<Vertex> vertices = {
+    {{-1.0f, -1.0f, -0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+    {{-1.0f, 3.0f, -0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 2.0f}},
+    {{3.0f, -1.0f, -0.0f}, {0.0f, 1.0f, 0.0f}, {2.0f, 0.0f}},
+  };
 
   vk::raii::DescriptorPool descriptorPool = nullptr;
   vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;

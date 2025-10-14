@@ -44,63 +44,78 @@ const std::vector validationLayers = { // not array; vector allows implicit typi
 #include "Model.hpp" // Alias structures for glTF data
 #include "Vertex.hpp" // Hashable Vertex primitive, with position, colour and uvs
 #include "Particle.hpp" // Hashable Particle primitive, with position and colour
-#include "Light.hpp" // Hashable Light primitive, with position and emissive colour
+#include "RadianceStructs.hpp" // Vertex2D + Scene, with position and emissive colour
 #include "BufferStructs.hpp" // Structs for passing data to shaders
 
 //============================== Application Defaults ==============================//
 // Let's the CPU start working on the next frame before the GPU asks (higher values == latency, CPU too far ahead)
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
-// No. of particles to spawn
-constexpr uint32_t PARTICLE_COUNT = 24;
-
 // Screen resolution defaults
 constexpr uint32_t WIDTH = 1440;
 constexpr uint32_t HEIGHT = 900;
+
+constexpr uint32_t LIGHT_COUNT = 8;
 
 // Default asset paths
 static char model_path[256] = "assets/sponza/Sponza.gltf";
 static char slang_path[256] = "assets/shaders/shader.slang";
 static char spirv_path[256] = "assets/shaders/shader.spv";
-static char compute_slang_path[256] = "assets/shaders/compute.slang";
+#ifdef RESTIR
+static char compute_slang_path[256] = "assets/shaders/pt.slang";
+#else
+static char compute_slang_path[256] = "assets/shaders/radiance_cascades.slang";
+#endif
 static char compute_spirv_path[256] = "assets/shaders/compute.spv";
 static char postprocess_slang_path[256] = "assets/shaders/uv.slang";
-static char postprocess_spirv_path[256] = "assets/shaders/uv.spv";
+static char postprocess_spirv_path[256] = "assets/shaders/pp.spv";
 
-/*============================================================= Terminology =============================================================//
+/*===================================================== Terminology ==================================================//
        Surface: an abstraction of an image, something a framebuffer can present to
          Queue: data highways with different capabilities i.e. graphics, compute, transfer
   Queue Family: groups of queues with the same capabilities
-   Framebuffer:
-     Swapchain: a list of framebuffers the size of which can be determined by how many frames ahead of the GPU you will allow the CPU to work on
-          View: A data structure containing all the information necessary for accessing data buffers
-    Descriptor:
-      Pipeline: Define data processing flow on the GPU e.g. from glTF vertices to shaded meshes (one Pipeline per unique shader)
+     Swapchain: a list of framebuffers the size of which can be determined by how many frames ahead of the GPU you
+                will allow the CPU to work on
+          View: Describes how to access some data. Vulkan often does not allow non-descript memory access e.g.
+                shaders will use an ImageView to modify an Image, not access the Image directly
+   Framebuffer: All the ImageViews that represent attachments/render targets e.g. Colour, Z-buffer, G-buffer
+    Descriptor: Similar to Views, they provide access to some data. They are organised in sets with defined layouts
+                and passed to shaders as needed. Accessors for GPU objects.
+      Pipeline: Define data processing flow on the GPU e.g. from glTF vertices to shaded meshes (one Pipeline per
+                unique shader)
+       Uniform 
+        Buffer: A data structure that is passed to shaders whose values are uniform/consistent across all
+                invocations of the shader program.
 */
 
-/*====================================================== HOW TO BUILD A VULKAN APP ======================================================//
+/*=============================================== HOW TO BUILD A VULKAN APP ==========================================//
      A fairly lengthy process for the most boilerplate graphical application. 
-     The CPU is smart, the GPU is dumb but a very willing and hard-working participant. If the CPU can create explicit instructions for tasks
-     within the GPU's capabilities, the GPU will execute them as quickly as possible.
+     CPU is smart, GPU is dumb but a very willing and hard-working participant. If the CPU can create explicit
+     instructions for tasks within the GPU's capabilities, the GPU will execute them as quickly as possible.
 
   1. Create a Vulkan Instance (loading required function pointers, etc.)
   2. (* Optional) Set up a debug message callback
   3. Create/Get an addressable surface
   4. Pick your preferred hardware
-  5. Create a logical abstraction of chosen hardware that can interface with Vulkan, choosing which queues and queue families to use 
-       A single queue capable of graphics and transfer is enough for simple rendering
+  5. Create a logical abstraction of chosen hardware that can interface with Vulkan, choosing which queues and queue
+       families to use. A single queue capable of graphics and transfer is enough for simple rendering
   6. Set up a swapchain
   7. Create respective views for the swapchain members 
   8. Set up a command pool, which will be used to acquire command buffers to submit to your queues
-  9. Allocate the command buffers from the command pool (~ one per pipeline per frame in flight, depends how you combine pipelines)
+  9. Allocate the command buffers from the command pool (~ one per pipeline per frame in flight, depends how you
+       combine pipelines)
  10. Initialise the synchronisation objects you will use for recording the command buffers later
  11. (* Optional) Create the depth buffer (only needed if you intend to do drawcall-order-independent depth sorting)
- 12. Define how information will be passed to shaders through DescriptorLayouts (which structs will be passed to which shader stage in a Pipeline)
- 13. Construct your initial Pipelines (we don't need to know the exact data that will be passed in yet, just how it will be passed)
- 14. Create the Uniform and Shader Storage Buffers (the arbitrary data structures referenced in the DescriptorLayouts)
+ 12. Define how information will be passed to shaders through DescriptorLayouts (which structs will be passed to
+       which shader stage in a Pipeline)
+ 13. Construct your initial Pipelines (we don't need to know the exact data that will be passed in yet, just how it
+       will be passed)
+ 14. Create the arbitrary data structures referenced in the DescriptorLayouts e.g. uniform buffers
  15. (* Optional) Load your assets
- 16. Create the Vertex and Index buffers (unique vertices accessed at draw time by indices, static meshes can share the same vertex buffer with offset indices)
- 17. Create descriptor pools (like command pools or families for descriptor sets, predefining commonalities and placing limitations on descriptor sets)
+ 16. Create the Vertex and Index buffers (unique vertices accessed at draw time by indices, static meshes can share
+       the same vertex buffer with offset indices)
+ 17. Create descriptor pools (like command pools or families for descriptor sets, predefining commonalities and
+       placing limitations on descriptor sets)
  18. Allocate for (on device) and construct explicit descriptor sets (At least one per pipeline per frame in flight)
     
      Now everything is in place to render!
@@ -112,21 +127,21 @@ static char postprocess_spirv_path[256] = "assets/shaders/uv.spv";
 // Struct instead of Class as there is no inheritance, variable protection or even multiple instances
 // All we need is run(), which calls everything else
 struct App { 
-  //======== initWindow ========//
+  //======== InitWindow ========//
   GLFWwindow* pWindow = nullptr;
   
-  //======== initVulkan ========//
+  //======== InitVulkan ========//
   // createInstance
   vk::raii::Context context;
   vk::raii::Instance instance = nullptr;
   
-  // setupDebugMessenger
+  // SetupDebugMessenger
   vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
   
-  // createSurface
+  // CreateSurface
   vk::raii::SurfaceKHR surface = nullptr;
   
-  // pickPhysicalDevice
+  // PickPhysicalDevice
   std::vector<const char*> requiredDeviceExtensions = {
     vk::KHRSwapchainExtensionName,
     vk::KHRDynamicRenderingExtensionName,
@@ -136,12 +151,12 @@ struct App {
   };
   vk::raii::PhysicalDevice physicalDevice = nullptr;
   
-  // createLogicalDevice
+  // CreateLogicalDevice
   vk::raii::Device device = nullptr;
   uint32_t queueFamilyIndex = ~0U;
   vk::raii::Queue queue = nullptr;
   
-  // createSwapChain
+  // CreateSwapChain
   struct SwapChainSupportDetails {
     vk::SurfaceCapabilitiesKHR capabilities;
     std::vector<vk::SurfaceFormatKHR> formats;
@@ -152,50 +167,82 @@ struct App {
   vk::raii::SwapchainKHR swapChain = nullptr;
   std::vector<vk::Image> swapChainImages;
   
-  // createSwapChainImageViews
+  // CreateSwapChainImageViews
   std::vector<vk::raii::ImageView> swapChainImageViews;
   
-  // createCommandPool
+  // CreateDepthResources
+  std::pair<vk::raii::Image, vk::raii::DeviceMemory> depthImage = std::pair(nullptr, nullptr);
+  vk::raii::ImageView depthImageView = nullptr;
+  
+  // CreateCommandPool
   vk::raii::CommandPool commandPool = nullptr;
   
-  // createCommandBuffers
+  // CreateCommandBuffers
   std::vector<vk::raii::CommandBuffer> commandBuffers;
   
-  // createComputeCommandBuffers
+  // CreateComputeCommandBuffers
   std::vector<vk::raii::CommandBuffer> computeCommandBuffers;
   
-  // createSyncObjects
+  // CreateSyncObjects
   std::vector<vk::raii::Fence> inFlightFences;
   uint32_t currentFrame = 0;
   vk::raii::Semaphore timelineSemaphore = nullptr;
   uint64_t timelineValue = 0;
-  std::vector<vk::raii::Semaphore> presentSemaphores;
   uint32_t semaphoreIndex = 0;
   
-  // createDepthResources
-  std::pair<vk::raii::Image, vk::raii::DeviceMemory> depthImage = std::pair(nullptr, nullptr);
-  vk::raii::ImageView depthImageView = nullptr;
-  
-  // createDescriptorSetLayouts
+  // CreateDescriptorSetLayouts
   vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
   vk::raii::DescriptorSetLayout computeDescriptorSetLayout = nullptr;
   
-  // initSlang
+  // InitSlang
   Slang::ComPtr<slang::IGlobalSession> globalSession = nullptr;
   
-  // createPipelines
+  // CreatePipelines
   std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> computePipeline = std::pair(nullptr, nullptr);
-  std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> computeGraphicsPipeline = std::pair(nullptr, nullptr);
   std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> graphicsPipeline = std::pair(nullptr, nullptr);
   
-  // createUniformBuffers
+  const std::vector<vk::DynamicState> dynamicStates = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
+  const vk::PipelineDynamicStateCreateInfo dynamicInfo {
+    .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()), .pDynamicStates = dynamicStates.data()
+  };
+  const vk::PipelineViewportStateCreateInfo viewportInfo { .viewportCount = 1, .scissorCount = 1 };
+  const vk::PipelineRasterizationStateCreateInfo rasterizerInfo {
+    .depthClampEnable = vk::False,
+    .rasterizerDiscardEnable = vk::False,
+    .polygonMode = vk::PolygonMode::eFill,
+    .cullMode = vk::CullModeFlagBits::eBack, .frontFace = vk::FrontFace::eCounterClockwise,
+    .depthBiasEnable = vk::False, .depthBiasConstantFactor = 0.0f,
+    .depthBiasClamp = 0.0f, .depthBiasSlopeFactor = 1.0f,
+    .lineWidth = 1.0f
+  };
+  const vk::PipelineMultisampleStateCreateInfo multisamplingInfo {
+    .rasterizationSamples = vk::SampleCountFlagBits::e1, .sampleShadingEnable = vk::False
+  };
+  const vk::PipelineColorBlendAttachmentState colorBlendAttachment {
+    .blendEnable = vk::True,
+    .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
+    .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+    .colorBlendOp = vk::BlendOp::eAdd,
+    .srcAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+    .dstAlphaBlendFactor = vk::BlendFactor::eZero,
+    .alphaBlendOp = vk::BlendOp::eAdd,
+    .colorWriteMask = vk::ColorComponentFlagBits::eR |
+                      vk::ColorComponentFlagBits::eG |
+                      vk::ColorComponentFlagBits::eB |
+                      vk::ColorComponentFlagBits::eA
+  };
+  const vk::PipelineColorBlendStateCreateInfo colorBlendInfo {
+    .logicOpEnable = vk::False, .logicOp = vk::LogicOp::eCopy,
+    .attachmentCount = 1, .pAttachments = &colorBlendAttachment
+  };
+  
+  // CreateUniformBuffers
   std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> mvpBuffers;
   std::vector<void*> mvpBuffersMapped;
   std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> uniformBuffers;
   std::vector<void*> uniformBuffersMapped;
-  std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> shaderStorageBuffers;
   
-  // loadGLTF
+  // LoadGLTF
   cgltf_data* asset = nullptr;
   std::vector<Vertex> vertices;
   std::vector<Mesh> meshes;
@@ -205,24 +252,28 @@ struct App {
   std::mutex m;
   std::vector<vk::raii::ImageView> textureImageViews;
   vk::raii::Sampler textureSampler = nullptr;
-  
-  // createVertexBuffer
+
+  // CreateVertexBuffer
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> vertexBuffer = std::pair(nullptr, nullptr);
   
-  // createIndexBuffers (stored inside Material and Quad)
-
-  // createDescriptorPools
-  vk::raii::DescriptorPool graphicsDescriptorPool = nullptr;
-  vk::raii::DescriptorPool computeDescriptorPool = nullptr;
-  vk::raii::DescriptorPool imguiDescriptorPool = nullptr;
+  // CreateIndexBuffers (stored inside Material and Quad)
   
-  // createDescriptorSets (stored inside Material and Quad)
+  // CreateComputeTexture
+  std::pair<vk::raii::Image, vk::raii::DeviceMemory> pathTracingTexture = std::pair(nullptr, nullptr);
+  vk::raii::ImageView pathTracingTextureView = nullptr;
 
-  // createComputeDescriptorSets
+  // CreateDescriptorPools
+  vk::raii::DescriptorPool graphicsDescriptorPool = nullptr;
+  vk::raii::DescriptorPool imguiDescriptorPool = nullptr;
+  vk::raii::DescriptorPool computeDescriptorPool = nullptr;
+  
+  // CreateDescriptorSets (stored inside Material and Quad)
   std::vector<vk::raii::DescriptorSet> computeDescriptorSets;
 
-  //========= mainLoop =========//
-  // drawFrame
+  // CreateComputeDescriptorSets
+
+  //========= MainLoop =========//
+  // DrawFrame
   Metrics stats = {};
   Camera camera = {};
   bool framebufferResized = false;
@@ -230,12 +281,12 @@ struct App {
   std::chrono::system_clock::time_point start = std::chrono::system_clock::now();
 
   // Extra objects
-  Quad fullscreenQuad = {};
-  std::vector<Light> lights;
+  Tri fullscreenTri, radianceTri;
+  Scene scene;
 
   void Run();
 
-  // run
+  // Run
   void InitWindow();
   void InitVulkan();
   void InitImGui();
@@ -243,7 +294,7 @@ struct App {
   void Cleanup();
 
   
-  // initVulkan
+  // InitVulkan
   void CreateInstance();
   void SetupDebugMessenger();
   void CreateSurface();
@@ -251,30 +302,29 @@ struct App {
   void CreateLogicalDevice();
   void CreateSwapChain();
   void CreateSwapChainImageViews();
+  void CreateDepthResources();
   void CreateCommandPool();
   void CreateCommandBuffers();
   void CreateComputeCommandBuffers();
   void CreateSyncObjects();
-  void CreateDepthResources();
   void CreateDescriptorSetLayouts();
   void InitSlang();
   void CreatePipelines();
   void CreateUniformBuffers();
-  void CreateShaderStorageBuffers();
   void LoadGLTF(const std::filesystem::path& path);
   void CreateVertexBuffer();
   void CreateIndexBuffers();
+  void CreatePathTracingTexture();
   void CreateDescriptorPools();
   void CreateDescriptorSets();
-  void CreateComputeDescriptorSets();
 
-  // initImGui
+  // InitImGui
 
-  // mainLoop
+  // MainLoop
   void DrawFrame();
   void RecreateSwapChain();
 
-  // cleanup
+  // Cleanup
   void CleanupSwapChain();
 
   // Pipelines
@@ -284,10 +334,10 @@ struct App {
   void CreateComputeGraphicsPipeline();
   void CreateComputePipeline();
 
-  // loadGLTF (Asset loading)
+  // LoadGLTF (Asset loading)
   void LoadAsset(const char* path);
   void LoadTextures(const std::filesystem::path& parent_path);
-  [[nodiscard]] std::pair<vk::raii::Image, vk::raii::DeviceMemory> CreateTextureImage(const char* texturePath, size_t idx);
+  void CreateTextureImage(const char* texturePath, size_t idx);
   void TransitionImageLayout(
     const vk::raii::Image& image,
     vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
@@ -298,10 +348,10 @@ struct App {
 
 
   // Shader Management
-  void CompileShader(const char* src, const char* dst, bool reload);
+  void CompileShader(const char* src, const char* dst);
   void ReloadShaders();
 
-  // drawFrame
+  // DrawFrame
   void UpdateUniformBuffer(uint32_t imageIndex);
   void UpdateModelViewProjection(uint32_t imageIndex);
   void RecordComputeCommandBuffer();
@@ -328,21 +378,19 @@ struct App {
   void CreateImage(
     uint32_t width, uint32_t height, uint32_t mipLevels, 
     vk::Format format,
-    vk::ImageTiling tiling,
-    vk::ImageUsageFlags usage,
+    vk::ImageTiling tiling, vk::ImageUsageFlags usage,
     vk::MemoryPropertyFlags properties,
-    vk::raii::Image& image,
-    vk::raii::DeviceMemory& imageMemory
+    vk::raii::Image& image, vk::raii::DeviceMemory& imageMemory
   );
 
   [[nodiscard]] vk::raii::ImageView CreateImageView(
-    const vk::raii::Image& image,
+    const vk::Image& image,
     vk::Format format,
     vk::ImageAspectFlags aspectFlags,
     uint32_t mipLevels
   ) const;
   
-  std::unique_ptr<vk::raii::CommandBuffer> BeginSingleTimeCommands() const;
+  vk::raii::CommandBuffer BeginSingleTimeCommands() const;
   void EndSingleTimeCommands(const vk::raii::CommandBuffer& commandBuffer) const;
 
   void CreateBuffer(
