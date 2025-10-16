@@ -69,8 +69,6 @@ static char compute_slang_path[256] = "assets/shaders/pt.slang";
 static char compute_slang_path[256] = "assets/shaders/radiance_cascades.slang";
 #endif
 static char compute_spirv_path[256] = "assets/shaders/compute.spv";
-static char postprocess_slang_path[256] = "assets/shaders/uv.slang";
-static char postprocess_spirv_path[256] = "assets/shaders/pp.spv";
 
 /*===================================================== Terminology ==================================================//
        Surface: an abstraction of an image, something a framebuffer can present to
@@ -257,9 +255,32 @@ struct App {
 
   // CreateVertexBuffer
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> vertexBuffer = std::pair(nullptr, nullptr);
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> triangleBuffer = std::pair(nullptr, nullptr);
   
   // CreateIndexBuffers (stored inside Material and Quad)
-  
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> indexBuffer = std::pair(nullptr, nullptr);
+
+  // CreateUVBuffers
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> uvBuffer = std::pair(nullptr, nullptr);
+
+  // CreateAccelerationStructures
+  std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> blasBuffers;
+  std::vector<vk::raii::AccelerationStructureKHR> blasHandles;
+
+  std::vector<vk::AccelerationStructureInstanceKHR> instances;
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> instanceBuffer = std::pair(nullptr, nullptr);
+
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> tlasBuffer = std::pair(nullptr, nullptr);
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> tlasScratchBuffer = std::pair(nullptr, nullptr);
+  vk::raii::AccelerationStructureKHR tlas = nullptr;
+
+  std::vector<SubMesh> submeshes;
+  std::vector<cgltf_material> materials;
+
+  // CreateInstanceLUT
+  std::vector<InstanceLUT> instanceLUTs;
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> instanceLUTBuffer = std::pair(nullptr, nullptr);
+
   // CreateComputeTexture
   std::pair<vk::raii::Image, vk::raii::DeviceMemory> pathTracingTexture = std::pair(nullptr, nullptr);
   vk::raii::ImageView pathTracingTextureView = nullptr;
@@ -283,7 +304,7 @@ struct App {
   std::chrono::system_clock::time_point start = std::chrono::system_clock::now();
 
   // Extra objects
-  Tri fullscreenTri, radianceTri;
+  RenderTarget radianceCascadesOutput;
   Scene scene;
 
   void Run();
@@ -314,8 +335,11 @@ struct App {
   void CreatePipelines();
   void CreateUniformBuffers();
   void LoadGLTF(const std::filesystem::path& path);
-  void CreateVertexBuffer();
+  void CreateVertexBuffers();
   void CreateIndexBuffers();
+  void CreateUVBuffer();
+  void CreateAccelerationStructures();
+  void CreateInstanceLUTBuffer();
   void CreatePathTracingTexture();
   void CreateDescriptorPools();
   void CreateDescriptorSets();
@@ -332,7 +356,6 @@ struct App {
   // Pipelines
   [[nodiscard]] vk::raii::ShaderModule CreateShaderModule(const std::vector<char>& code) const;
   void CreateGraphicsPipeline();
-  void CreatePostProcessPipeline();
   void CreateComputeGraphicsPipeline();
   void CreateComputePipeline();
 
@@ -348,6 +371,8 @@ struct App {
   void CreateTextureSampler();
   void LoadGeometry();
 
+  // CreateVertexBuffers
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>  CreateVertexBuffer(const std::vector<Vertex>& verts);
 
   // Shader Management
   void CompileShader(const char* src, const char* dst);

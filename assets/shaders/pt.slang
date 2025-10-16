@@ -196,12 +196,12 @@ float4 mainImage(in float2 fragCoord) {
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET
 {
-   return float4(sampler.Sample(vertIn.fragTexCoord).rgb, 0.0);
+   return float4(sampler.Sample(vertIn.fragTexCoord).rgb, 1.0);
 }
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void compMain(uint3 threadId : SV_DispatchThreadID)
 {
-    //texture.Store(threadId.xy, mainImage(float2(threadId.xy)));
+    texture.Store(threadId.xy, mainImage(float2(threadId.xy)));
 }

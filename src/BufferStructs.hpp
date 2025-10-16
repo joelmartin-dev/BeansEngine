@@ -17,8 +17,18 @@ struct UniformBuffer {
   float accumTime = 0.0f;
 };
 
-struct Point {
-  glm::aligned_vec2 pos = glm::aligned_vec2();
-  glm::aligned_vec4 colour = glm::aligned_vec4();
+struct SubMesh {
+  uint32_t indexOffset;
+  uint32_t indexCount;
+  int materialID;
+  uint32_t firstVertex;
+  uint32_t maxVertex;
+  bool alphaCut;
+  bool reflective;
+};
+
+struct InstanceLUT {
+  uint32_t materialID;
+  uint32_t indexBufferOffset;
 };
 #endif

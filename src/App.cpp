@@ -218,8 +218,6 @@ void App::InitWindow()
           else {
             static_cast<App*>(glfwGetWindowUserPointer(_pWindow))->
               CompileShader(slang_path, spirv_path);
-            static_cast<App*>(glfwGetWindowUserPointer(_pWindow))->
-              CompileShader(postprocess_slang_path, postprocess_spirv_path);
           }
           static_cast<App*>(glfwGetWindowUserPointer(_pWindow))->ReloadShaders();
         }
@@ -269,8 +267,11 @@ void App::InitVulkan()
   CreateUniformBuffers();
 
   LoadGLTF(std::filesystem::path(model_path).make_preferred());
-  CreateVertexBuffer();
+  CreateVertexBuffers();
   CreateIndexBuffers();
+  CreateUVBuffer();
+  CreateAccelerationStructures();
+  CreateInstanceLUTBuffer();
 
   CreatePathTracingTexture();
   
@@ -404,8 +405,6 @@ void App::MainLoop()
       ImGui::InputText("SPIR-V Path", spirv_path, IM_ARRAYSIZE(spirv_path));
       ImGui::InputText("Compute Slang Path", compute_slang_path, IM_ARRAYSIZE(compute_slang_path));
       ImGui::InputText("Compute SPIR-V Path", compute_spirv_path, IM_ARRAYSIZE(compute_spirv_path));
-      ImGui::InputText("PostProcess Slang Path", postprocess_slang_path, IM_ARRAYSIZE(postprocess_slang_path));
-      ImGui::InputText("PostProcess SPIR-V Path", postprocess_spirv_path, IM_ARRAYSIZE(postprocess_spirv_path));
       ImGui::End();
     }
 
@@ -446,13 +445,6 @@ void App::Cleanup()
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();
 #endif
-
-  {
-    fullscreenTri.graphicsPipeline = std::pair(nullptr, nullptr);
-    fullscreenTri.descriptorSets.clear();
-    fullscreenTri.descriptorPool = nullptr;
-    fullscreenTri.descriptorSetLayout = nullptr;
-  }
   // while they are user-defined structs, the vector takes care of them
   // so long as it is explicitly cleared
   mats.clear();
@@ -957,13 +949,6 @@ void App::CreateSyncObjects()
 // just the expected layout of the data once it exists
 void App::CreateDescriptorSetLayouts()
 {
-  // POST-PROCESS
-  {
-    // We don't have any descriptors for the post-process pass but we reference this layout in the pipeline so we have
-    // to initialise something
-    fullscreenTri.descriptorSetLayout = vk::raii::DescriptorSetLayout(device, vk::DescriptorSetLayoutCreateInfo{});
-  }
-
   // STANDARD 3D MODELS
   {
     // Descriptor bindings are like slots in descriptor sets
@@ -1033,7 +1018,7 @@ void App::CreateDescriptorSetLayouts()
     };
 
     // Initialise
-    radianceTri.descriptorSetLayout = vk::raii::DescriptorSetLayout(device, radianceLayoutInfo);
+    radianceCascadesOutput.descriptorSetLayout = vk::raii::DescriptorSetLayout(device, radianceLayoutInfo);
   }
 }
 
@@ -1048,14 +1033,12 @@ void App::InitSlang()
   // We manually call CompileShader for all shaders on start, ensuring SPIR-V exists by the time pipelines are created
   CompileShader(slang_path, spirv_path);
   CompileShader(compute_slang_path, compute_spirv_path);
-  CompileShader(postprocess_slang_path, postprocess_spirv_path);
 }
 
 // Purely for readability, call all the CreateXPipeline functions
 void App::CreatePipelines()
 {
   CreateGraphicsPipeline();
-  CreatePostProcessPipeline();
   CreateComputeGraphicsPipeline();
   CreateComputePipeline();
 }
@@ -1167,40 +1150,19 @@ void App::CreatePathTracingTexture()
   );
 }
 
-// We just need the vertices stored on the GPU. We will instruct the GPU on how to interpret the data later.
-void App::CreateVertexBuffer()
+// Create the vertex buffers for the scene AND the fullscreen triangle (for postprocessing effects)
+void App::CreateVertexBuffers()
 {
-  // Our user-defined Vertex struct is of uniform size for all instantiations
-  vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-  vk::raii::Buffer stagingBuffer({});
-  vk::raii::DeviceMemory stagingBufferMemory({});
+  vertexBuffer = CreateVertexBuffer(vertices);
 
-  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
-  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
-  CreateBuffer(
-    bufferSize,
-    vk::BufferUsageFlagBits::eTransferSrc,
-    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-    stagingBuffer, stagingBufferMemory
-  );
-
-  // Map and copy our loaded vertices data to the GPU host-visible memory
-  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-  memcpy(dataStaging, vertices.data(), (size_t)bufferSize);
-  // We don't need to access this buffer anymore, unmap
-  stagingBufferMemory.unmapMemory();
-
-  // Create a Vertex Buffer in DEVICE_LOCAL memory not necessarily visible to host
-  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
-  CreateBuffer(
-    bufferSize,
-    vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    vk::MemoryPropertyFlagBits::eDeviceLocal,
-    vertexBuffer.first, vertexBuffer.second
-  );
-
-  // Copy the host-visible buffer to the non-host-visible buffer
-  CopyBuffer(stagingBuffer, vertexBuffer.first, bufferSize);
+  // These coordinates will always create a triangle that completely covers the screen.
+  // Double the width and double the height of the viewport
+  const std::vector<Vertex> triangle = {
+    {{-1.0f, -1.0f, -0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+    {{-1.0f, 3.0f, -0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 2.0f}},
+    {{3.0f, -1.0f, -0.0f}, {0.0f, 1.0f, 0.0f}, {2.0f, 0.0f}},
+  };
+  triangleBuffer = CreateVertexBuffer(triangle);
 }
 
 // We just need the indices stored on the GPU. We will instruct the GPU on how to interpret the data later.
@@ -1242,6 +1204,19 @@ void App::CreateIndexBuffers()
     // Copy the host-visible buffer to the non-host-visible buffer
     CopyBuffer(stagingBuffer, mat.indexBuffer.first, bufferSize);
   }
+}
+
+void App::CreateUVBuffer()
+{
+
+}
+void App::CreateAccelerationStructures()
+{
+
+}
+void App::CreateInstanceLUTBuffer()
+{
+
 }
 
 // Create DescriptorPools that can allocate DescriptorSets. It's like a check making sure not too many descriptors of
@@ -1294,7 +1269,7 @@ void App::CreateDescriptorPools()
     };
 
     // Initialise pool
-    radianceTri.descriptorPool = vk::raii::DescriptorPool(device, computePoolInfo);
+    radianceCascadesOutput.descriptorPool = vk::raii::DescriptorPool(device, computePoolInfo);
   }
 #ifdef _DEBUG
   // IMGUI DEBUG PANELS
@@ -1337,17 +1312,17 @@ void App::CreateDescriptorSets()
   // PATH TRACING (Vertex and Fragment Stages)
   {
     // MAX_FRAMES_IN_FLIGHT copies of DescriptorSetLayout
-    std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *radianceTri.descriptorSetLayout);
+    std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *radianceCascadesOutput.descriptorSetLayout);
 
     // Collate the relevant info (DescriptorPool and DescriptorSetLayouts)
     vk::DescriptorSetAllocateInfo allocInfo {
-      .descriptorPool = static_cast<vk::DescriptorPool>(radianceTri.descriptorPool),
+      .descriptorPool = static_cast<vk::DescriptorPool>(radianceCascadesOutput.descriptorPool),
       .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
       .pSetLayouts = layouts.data(),
     };
     
-    radianceTri.descriptorSets.clear();
-    radianceTri.descriptorSets = device.allocateDescriptorSets(allocInfo);
+    radianceCascadesOutput.descriptorSets.clear();
+    radianceCascadesOutput.descriptorSets = device.allocateDescriptorSets(allocInfo);
 
     // Fill in the descriptor sets
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -1373,19 +1348,19 @@ void App::CreateDescriptorSets()
       std::array descriptorWrites = {
         // Time info as Uniform Buffer
         vk::WriteDescriptorSet{
-          .dstSet = static_cast<vk::DescriptorSet>(radianceTri.descriptorSets[i]),
+          .dstSet = static_cast<vk::DescriptorSet>(radianceCascadesOutput.descriptorSets[i]),
           .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
           .descriptorType = vk::DescriptorType::eUniformBuffer, .pBufferInfo = &bufferInfo
         },
         // Image as StorageImage
         vk::WriteDescriptorSet{
-          .dstSet = static_cast<vk::DescriptorSet>(radianceTri.descriptorSets[i]),
+          .dstSet = static_cast<vk::DescriptorSet>(radianceCascadesOutput.descriptorSets[i]),
           .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1,
           .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfo
         },
         // Image as CombinedImageSampler
         vk::WriteDescriptorSet{
-          .dstSet = static_cast<vk::DescriptorSet>(radianceTri.descriptorSets[i]),
+          .dstSet = static_cast<vk::DescriptorSet>(radianceCascadesOutput.descriptorSets[i]),
           .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1,
           .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &samplerInfo
         },
@@ -1694,88 +1669,11 @@ void App::CreateGraphicsPipeline()
   graphicsPipeline.second = vk::raii::Pipeline(device, nullptr, pipelineInfo);
 }
 
-void App::CreatePostProcessPipeline()
-{
-  // Reset the class member
-  fullscreenTri.graphicsPipeline = std::pair(nullptr, nullptr);
-
-  // The GPU-ready compiled shader code
-  auto shaderModule = CreateShaderModule(ReadFile(postprocess_spirv_path));
-
-  // All the stages come from the same SPIR-V file, so same shaderModule
-  // Need to identify the entrypoint names: "vertMain", "fragMain"
-  vk::PipelineShaderStageCreateInfo vertShaderStageCreateInfo {
-    .stage = vk::ShaderStageFlagBits::eVertex,
-    .module = shaderModule,
-    .pName = "vertMain"
-  };
-  vk::PipelineShaderStageCreateInfo fragShaderStageCreateInfo {
-    .stage = vk::ShaderStageFlagBits::eFragment,
-    .module = shaderModule,
-    .pName = "fragMain"
-  };
-  std::array shaderStages = { vertShaderStageCreateInfo, fragShaderStageCreateInfo };
-
-  // Get the user-defined format of vertices. Ours is each entry is a vertex, not an instance
-  auto bindingDescription = Vertex::getBindingDescription();
-  // Vertices are comprised of float3 pos, float3 colour, float2 texCoord
-  auto attributesDescriptions = Vertex::getAttributeDescriptions();
-
-  // Combine all that vertex info
-  vk::PipelineVertexInputStateCreateInfo vertexInputInfo {
-    .vertexBindingDescriptionCount = 1,
-    .pVertexBindingDescriptions = &bindingDescription,
-    .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributesDescriptions.size()),
-    .pVertexAttributeDescriptions = attributesDescriptions.data()
-  };
-
-  // Parse indices as triangles by groups of 3 elements
-  vk::PipelineInputAssemblyStateCreateInfo inputAssemblyInfo { .topology = vk::PrimitiveTopology::eTriangleList };
-
-  const vk::PipelineDepthStencilStateCreateInfo depthStencil {
-    // We're not using the depthStencil in this pipeline
-    .depthTestEnable = vk::False, .depthWriteEnable = vk::False,
-    .depthCompareOp = vk::CompareOp::eLess,
-    .depthBoundsTestEnable = vk::False,
-    .stencilTestEnable = vk::False
-  };
-
-  // Which DescriptorSetLayouts will be used by this pipeline
-  vk::PipelineLayoutCreateInfo pipelineLayoutInfo {
-    .setLayoutCount = 1, .pSetLayouts = &*fullscreenTri.descriptorSetLayout,
-  };
-  fullscreenTri.graphicsPipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
-
-  // Which attachments are involved
-  vk::PipelineRenderingCreateInfo renderingInfo = {
-    .colorAttachmentCount = 1, .pColorAttachmentFormats = &swapChainSurfaceFormat,
-    .depthAttachmentFormat = FindDepthFormat()
-  };
-
-  // Collate all the info
-  vk::GraphicsPipelineCreateInfo pipelineInfo {
-    .pNext = &renderingInfo,
-    .stageCount = static_cast<uint32_t>(shaderStages.size()),
-    .pStages = shaderStages.data(),
-    .pVertexInputState = &vertexInputInfo,
-    .pInputAssemblyState = &inputAssemblyInfo,
-    .pViewportState = &viewportInfo,
-    .pRasterizationState = &rasterizerInfo,
-    .pMultisampleState = &multisamplingInfo,
-    .pDepthStencilState = &depthStencil,
-    .pColorBlendState = &colorBlendInfo,
-    .pDynamicState = &dynamicInfo,
-    .layout = fullscreenTri.graphicsPipeline.first
-  };
-
-  fullscreenTri.graphicsPipeline.second = vk::raii::Pipeline(device, nullptr, pipelineInfo);
-}
-
 
 void App::CreateComputeGraphicsPipeline()
 {
   // Reset the class member
-  radianceTri.graphicsPipeline = std::pair(nullptr, nullptr);
+  radianceCascadesOutput.graphicsPipeline = std::pair(nullptr, nullptr);
 
   // The GPU-ready compiled shader code
   auto shaderModule = CreateShaderModule(ReadFile(compute_spirv_path));
@@ -1820,9 +1718,9 @@ void App::CreateComputeGraphicsPipeline()
 
   // Which DescriptorSetLayouts will be used by this pipeline
   vk::PipelineLayoutCreateInfo pipelineLayoutInfo {
-    .setLayoutCount = 1, .pSetLayouts = &*radianceTri.descriptorSetLayout
+    .setLayoutCount = 1, .pSetLayouts = &*radianceCascadesOutput.descriptorSetLayout
   };
-  radianceTri.graphicsPipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+  radianceCascadesOutput.graphicsPipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 
   // Which attachments are involved
   vk::PipelineRenderingCreateInfo pipelineRenderingInfo = {
@@ -1843,10 +1741,10 @@ void App::CreateComputeGraphicsPipeline()
     .pDepthStencilState = &depthStencil,
     .pColorBlendState = &colorBlendInfo,
     .pDynamicState = &dynamicInfo,
-    .layout = *radianceTri.graphicsPipeline.first
+    .layout = *radianceCascadesOutput.graphicsPipeline.first
   };
 
-  radianceTri.graphicsPipeline.second = vk::raii::Pipeline(device, nullptr, graphicsPipelineInfo);
+  radianceCascadesOutput.graphicsPipeline.second = vk::raii::Pipeline(device, nullptr, graphicsPipelineInfo);
 }
 
 void App::CreateComputePipeline()
@@ -1867,7 +1765,7 @@ void App::CreateComputePipeline()
 
   // Which DescriptorSetLayouts will be used by this pipeline
   vk::PipelineLayoutCreateInfo pipelineLayoutInfo {
-    .setLayoutCount = 1, .pSetLayouts = &*radianceTri.descriptorSetLayout
+    .setLayoutCount = 1, .pSetLayouts = &*radianceCascadesOutput.descriptorSetLayout
   };
   computePipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 
@@ -1996,14 +1894,12 @@ void App::CreateTextureImage(const char* texturePath, size_t idx)
   while (!m.try_lock());
   // Get the image ready for copying to
   TransitionImageLayout(
-    textureImages[idx].first, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, mipLevels
-  );
+    textureImages[idx].first, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, mipLevels);
   // Copy the host-visible buffer to somewhere else in GPU memory
   CopyBufferToImage(stagingBuffer, textureImages[idx].first, texWidth, texHeight, mipLevels, kTexture);
   // Get the image ready for sampling in the shader
   TransitionImageLayout(
-    textureImages[idx].first, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, mipLevels
-  );
+    textureImages[idx].first, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, mipLevels);
   // CRITICAL SECTION OVER
   m.unlock();
   
@@ -2139,13 +2035,9 @@ std::vector<T> GetAccessorData(const cgltf_accessor* accessor) // implementation
 void App::LoadGeometry()
 {
   vertices.clear();
-
-  // Insert a triangle that can cover the screen (we will reuse these for every similar triangle)
-  vertices.insert(vertices.end(), fullscreenTri.vertices.begin(), fullscreenTri.vertices.end());
   
   meshes.clear();
   meshes.resize(asset->meshes_count); // We know how many meshes there are
-
 
   for (cgltf_size meshIt = 0; meshIt < asset->meshes_count; meshIt++) {
     auto m = &asset->meshes[meshIt];
@@ -2261,6 +2153,46 @@ void App::LoadGeometry()
   cgltf_free(asset);
 }
 
+// We just need the vertices stored on the GPU. We will instruct the GPU on how to interpret the data later.
+std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateVertexBuffer(const std::vector<Vertex>& verts)
+{
+  // Our user-defined Vertex struct is of uniform size for all instantiations
+  vk::DeviceSize bufferSize = sizeof(Vertex) * verts.size();
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
+
+  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
+  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eTransferSrc,
+    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+    stagingBuffer, stagingBufferMemory
+  );
+
+  // Map and copy our loaded vertices data to the GPU host-visible memory
+  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(dataStaging, verts.data(), (size_t)bufferSize);
+  // We don't need to access this buffer anymore, unmap
+  stagingBufferMemory.unmapMemory();
+
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> copyBuffer = std::pair(nullptr, nullptr);
+
+  // Create a Vertex Buffer in DEVICE_LOCAL memory not necessarily visible to host
+  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    copyBuffer.first, copyBuffer.second
+  );
+
+  // Copy the host-visible buffer to the non-host-visible buffer
+  CopyBuffer(stagingBuffer, copyBuffer.first, bufferSize);
+
+  return copyBuffer;
+}
+
 // Use the Slang Compilation API to compile slang shaders to SPIR-V during and by the application
 void App::CompileShader(const char* src, const char* dst)
 {
@@ -2367,7 +2299,7 @@ void App::ReloadShaders()
   device.waitIdle();
 
   // Check that the SPIR-V files exist before continuing
-  auto spirv_paths = {&spirv_path, &compute_spirv_path, &postprocess_spirv_path};
+  auto spirv_paths = {&spirv_path, &compute_spirv_path};
   for (const auto& path : spirv_paths) {
     auto f = fopen(*path, "r");
     // if the SPIR-V does not exist, abort reloading
@@ -2414,8 +2346,9 @@ void App::RecordComputeCommandBuffer()
   computeCommandBuffers[currentFrame].begin({});
   computeCommandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline.second);
   computeCommandBuffers[currentFrame].bindDescriptorSets(
-    vk::PipelineBindPoint::eCompute, computePipeline.first, 0, 
-    { radianceTri.descriptorSets[currentFrame] }, // DescriptorSets (plural, so spoof multiple with initializer list)
+    vk::PipelineBindPoint::eCompute, computePipeline.first, 0,
+    // DescriptorSets (plural, so spoof multiple with initializer list)
+    { radianceCascadesOutput.descriptorSets[currentFrame] },
     {}
   );
   // For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
@@ -2538,27 +2471,18 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
   // COMPUTE RESULTS
   // render these after model as we want them in front without needing the depth buffer
   {
-    commandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, *radianceTri.graphicsPipeline.second);
-    commandBuffers[currentFrame].bindVertexBuffers(0, *vertexBuffer.first, { 0 });
+    commandBuffers[currentFrame].bindPipeline(
+      vk::PipelineBindPoint::eGraphics, *radianceCascadesOutput.graphicsPipeline.second);
+    commandBuffers[currentFrame].bindVertexBuffers(0, *triangleBuffer.first, { 0 });
     commandBuffers[currentFrame].bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics,
-      radianceTri.graphicsPipeline.first,
+      radianceCascadesOutput.graphicsPipeline.first,
       0,
-      *radianceTri.descriptorSets[currentFrame],
+      *radianceCascadesOutput.descriptorSets[currentFrame],
       nullptr
     );
     commandBuffers[currentFrame].draw(3, 1, 0, 0);
   }
-
-  /*
-  // FULLSCREEN EFFECTS
-  {
-    commandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, fullscreenTri.graphicsPipeline.second);
-    // rebind vertex buffer, otherwise it copies the first six particles of one of the compute threads
-    commandBuffers[currentFrame].bindVertexBuffers(0, *vertexBuffer.first, { 0 });
-    commandBuffers[currentFrame].draw(3, 1, 0, 0);
-  }
-  */
 
 #ifdef _DEBUG
   // Record all the ImGui commands at the end so they appear on top

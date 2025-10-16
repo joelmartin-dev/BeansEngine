@@ -58,8 +58,8 @@ float4 cascadeN(int cascade, float2 texCoord) {
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET
 {
-    return float4(0.);
-    //return cascadeN(0, vertIn.fragTexCoord);
+    //return float4(0.);
+    return cascadeN(0, vertIn.fragTexCoord);
 }
 
 [shader("compute")]
