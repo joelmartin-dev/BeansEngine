@@ -633,8 +633,11 @@ void App::PickPhysicalDevice()
       // Each of these structs' members have been set by the device, and we can query the members' availability through
       // them. I don't know why we use a .template getFeatures2, but it works and is visually comprehensible
       auto features = _physicalDevice.template getFeatures2<vk::PhysicalDeviceFeatures2,
+                                                            vk::PhysicalDeviceVulkan12Features,
                                                             vk::PhysicalDeviceVulkan13Features,
                                                             vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+                                                            vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
+                                                            vk::PhysicalDeviceRayQueryFeaturesKHR,
                                                             vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>();
       // Query those specific features against the available implementation (the device's Vulkan driver)
       bool supportsRequiredFeatures = 
@@ -644,6 +647,15 @@ void App::PickPhysicalDevice()
         features.template get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
         // allows for implicit render passes
         features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+        features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
+        features.template get<vk::PhysicalDeviceVulkan12Features>().descriptorBindingSampledImageUpdateAfterBind &&
+        features.template get<vk::PhysicalDeviceVulkan12Features>().descriptorBindingPartiallyBound &&
+        features.template get<vk::PhysicalDeviceVulkan12Features>().descriptorBindingVariableDescriptorCount &&
+        features.template get<vk::PhysicalDeviceVulkan12Features>().runtimeDescriptorArray &&
+        features.template get<vk::PhysicalDeviceVulkan12Features>().shaderSampledImageArrayNonUniformIndexing &&
+        features.template get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress &&
+        features.template get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().accelerationStructure &&
+        features.template get<vk::PhysicalDeviceRayQueryFeaturesKHR>().rayQuery;
         // makes timeline semaphores available for synchronisation
         features.template get<vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>().timelineSemaphore;
 
@@ -703,13 +715,27 @@ void App::CreateLogicalDevice()
   // A StructureChain populates its structs with the next in the chain It's a shorthand for writing .pNext = &nextStruct
   // in each struct. These features match the ones queried for in PickPhysicalDevice. We have checked for support, now
   // we enable.
-  vk::StructureChain<vk::PhysicalDeviceFeatures2,
-                     vk::PhysicalDeviceVulkan13Features,
-                     vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>
+  vk::StructureChain<vk::PhysicalDeviceFeatures2, 
+                     vk::PhysicalDeviceVulkan12Features,
+                     vk::PhysicalDeviceVulkan13Features, 
+                     vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+                     vk::PhysicalDeviceAccelerationStructureFeaturesKHR, 
+                     vk::PhysicalDeviceRayQueryFeaturesKHR>
   featureChain = {
-      { .features = {.samplerAnisotropy = true}},
-      {.synchronization2 = true, .dynamicRendering = true},
-      {.timelineSemaphore = true}
+    {.features = {.samplerAnisotropy = true } },                       // vk::PhysicalDeviceFeatures2
+    { 
+      .shaderSampledImageArrayNonUniformIndexing = true, 
+      .descriptorBindingSampledImageUpdateAfterBind = true,
+      .descriptorBindingPartiallyBound = true, 
+      .descriptorBindingVariableDescriptorCount = true,
+      .runtimeDescriptorArray = true, 
+      .timelineSemaphore = true,
+      .bufferDeviceAddress = true,
+    },    // vk::PhysicalDeviceVulkan12Features
+    {.synchronization2 = true, .dynamicRendering = true },             // vk::PhysicalDeviceVulkan13Features
+    {.extendedDynamicState = true },                                   // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
+    {.accelerationStructure = true },                                  // vk::PhysicalDeviceAccelerationStructureFeaturesKHR
+    {.rayQuery = true },                                                // vk::PhysicalDeviceRayQueryFeaturesKHR
   };
   
   //=============================================== Devices and Queues ===============================================//
@@ -1168,6 +1194,46 @@ void App::CreateVertexBuffers()
 // We just need the indices stored on the GPU. We will instruct the GPU on how to interpret the data later.
 void App::CreateIndexBuffers()
 {
+  // SCENE INDEX BUFFER
+  {
+    // The exact same as CreateVertexBuffers, but the second buffer has IndexBuffer usage
+    // indices are all the same type
+    vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+    vk::raii::Buffer stagingBuffer({});
+    vk::raii::DeviceMemory stagingBufferMemory({});
+
+    // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
+    // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
+    CreateBuffer(
+      bufferSize,
+      vk::BufferUsageFlagBits::eTransferSrc,
+      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+      stagingBuffer, stagingBufferMemory
+    );
+
+    // Map and copy our loaded vertices data to the GPU host-visible memory
+    void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+    memcpy(dataStaging, indices.data(), (size_t)bufferSize);
+    // We don't need to access this buffer anymore, unmap
+    stagingBufferMemory.unmapMemory();
+
+    // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
+    // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
+    CreateBuffer(
+      bufferSize,
+      vk::BufferUsageFlagBits::eIndexBuffer | 
+      vk::BufferUsageFlagBits::eTransferDst | 
+      vk::BufferUsageFlagBits::eShaderDeviceAddress |
+      vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
+      vk::BufferUsageFlagBits::eStorageBuffer,
+      vk::MemoryPropertyFlagBits::eDeviceLocal,
+      indexBuffer.first, indexBuffer.second
+    );
+
+    // Copy the host-visible buffer to the non-host-visible buffer
+    CopyBuffer(stagingBuffer, indexBuffer.first, bufferSize);
+  }
+
   // Each material group will have their own index buffer
   // We calculated each index with an offset 
   for (auto& mat : mats) {
@@ -1208,15 +1274,297 @@ void App::CreateIndexBuffers()
 
 void App::CreateUVBuffer()
 {
+  // Extract the texCoords
+  std::vector<glm::vec2> uvs;
+  uvs.reserve(vertices.size());
+  for (auto& v : vertices) uvs.push_back(v.texCoord);
+  
+  vk::DeviceSize bufferSize = sizeof(uvs[0]) * uvs.size();
 
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
+
+  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
+  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eTransferSrc,
+    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+    stagingBuffer, stagingBufferMemory
+  );
+
+  // Map and copy our loaded vertices data to the GPU host-visible memory
+  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(dataStaging, uvs.data(), (size_t)bufferSize);
+  // We don't need to access this buffer anymore, unmap
+  stagingBufferMemory.unmapMemory();
+
+  // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
+  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    uvBuffer.first, uvBuffer.second
+  );
+
+  // Copy the host-visible buffer to the non-host-visible buffer
+  CopyBuffer(stagingBuffer, uvBuffer.first, bufferSize);
 }
 void App::CreateAccelerationStructures()
 {
+  vk::BufferDeviceAddressInfo vertAddrInfo{ .buffer = *vertexBuffer.first };
+  vk::DeviceAddress vertAddr = device.getBufferAddressKHR(vertAddrInfo);
+  vk::BufferDeviceAddressInfo idxAddrInfo{ .buffer = *indexBuffer.first };
+  vk::DeviceAddress idxAddr = device.getBufferAddressKHR(idxAddrInfo);
 
+  instances.reserve(submeshes.size());
+  blasBuffers.reserve(submeshes.size());
+  blasHandles.reserve(submeshes.size());
+  
+  vk::TransformMatrixKHR identity{};
+  identity.matrix = std::array<std::array<float, 4>, 3>{ {
+      std::array<float, 4> {1.0f, 0.0f, 0.0f, 0.0f},
+      std::array<float, 4> {0.0f, 1.0f, 0.0f, 0.0f},
+      std::array<float, 4> {0.0f, 0.0f, 1.0f, 0.0f},
+  } };
+
+  for (size_t i = 0; i < submeshes.size(); i++) {
+    auto& submesh = submeshes[i];
+
+    // Prepare the geometry data
+    auto trianglesData = vk::AccelerationStructureGeometryTrianglesDataKHR{
+      .vertexFormat = vk::Format::eR32G32B32Sfloat,
+      .vertexData = vertAddr,
+      .vertexStride = sizeof(Vertex),
+      .maxVertex = submesh.maxVertex,
+      .indexType = vk::IndexType::eUint32,
+      .indexData = idxAddr + submesh.indexOffset * sizeof(uint32_t)
+    };
+
+    vk::AccelerationStructureGeometryDataKHR geometryData(trianglesData);
+
+    vk::AccelerationStructureGeometryKHR blasGeometry{
+      .geometryType = vk::GeometryTypeKHR::eTriangles,
+      .geometry = geometryData,
+      .flags = vk::GeometryFlagBitsKHR::eOpaque
+    };
+
+    vk::AccelerationStructureBuildGeometryInfoKHR blasBuildGeometryInfo{
+      .type = vk::AccelerationStructureTypeKHR::eBottomLevel,
+      .mode = vk::BuildAccelerationStructureModeKHR::eBuild,
+      .geometryCount = 1,
+      .pGeometries = &blasGeometry
+    };
+
+    auto primitiveCount = static_cast<uint32_t>(submesh.indexCount / 3);
+
+    vk::AccelerationStructureBuildSizesInfoKHR blasBuildSizes =
+      device.getAccelerationStructureBuildSizesKHR(
+        vk::AccelerationStructureBuildTypeKHR::eDevice, 
+        blasBuildGeometryInfo, 
+        { primitiveCount }
+      );
+
+    // Create a scratch buffer for the BLAS, this will hold temporary data
+    // during the build process
+    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> scratchBuffer = std::pair(nullptr, nullptr);
+    CreateBuffer(
+      blasBuildSizes.buildScratchSize,
+      vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+      vk::MemoryPropertyFlagBits::eDeviceLocal,
+      scratchBuffer.first, scratchBuffer.second
+    );
+
+    // Save the scratch buffer address in the build info structure
+    vk::BufferDeviceAddressInfo scratchAddressInfo{ .buffer = *scratchBuffer.first };
+    vk::DeviceAddress scratchAddr = device.getBufferAddressKHR(scratchAddressInfo);
+    blasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;
+
+    // Create a buffer for the BLAS itself now that we now the required size
+    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> blasBuffer = std::pair(nullptr, nullptr);
+    blasBuffers.emplace_back(std::move(blasBuffer));
+    CreateBuffer(
+      blasBuildSizes.accelerationStructureSize,
+      vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR |
+      vk::BufferUsageFlagBits::eShaderDeviceAddress |
+      vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+      vk::MemoryPropertyFlagBits::eDeviceLocal,
+      blasBuffers[i].first, blasBuffers[i].second
+    );
+
+    // Create and store the BLAS handle
+    vk::AccelerationStructureCreateInfoKHR blasCreateInfo{
+        .buffer = blasBuffers[i].first,
+        .offset = 0,
+        .size = blasBuildSizes.accelerationStructureSize,
+        .type = vk::AccelerationStructureTypeKHR::eBottomLevel,
+    };
+
+    blasHandles.emplace_back(device.createAccelerationStructureKHR(blasCreateInfo));
+
+    // Save the BLAS handle in the build info structure
+    blasBuildGeometryInfo.dstAccelerationStructure = blasHandles[i];
+
+    // Prepare the build range for the BLAS
+    vk::AccelerationStructureBuildRangeInfoKHR blasRangeInfo{
+        .primitiveCount = primitiveCount,
+        .primitiveOffset = 0,
+        .firstVertex = submesh.firstVertex,
+        .transformOffset = 0
+    };
+
+    // Build the BLAS
+    auto cmd = BeginSingleTimeCommands();
+    cmd.buildAccelerationStructuresKHR({ blasBuildGeometryInfo }, { &blasRangeInfo });
+    EndSingleTimeCommands(cmd);
+
+    vk::AccelerationStructureDeviceAddressInfoKHR addrInfo {
+        .accelerationStructure = *blasHandles[i]
+    };
+    vk::DeviceAddress blasDeviceAddr = device.getAccelerationStructureAddressKHR(addrInfo);
+
+    vk::AccelerationStructureInstanceKHR instance {
+        .transform = identity,
+        .mask = 0xFF,
+        .accelerationStructureReference = blasDeviceAddr
+    };
+
+    instances.push_back(instance);
+  }
+
+  vk::DeviceSize instBufferSize = sizeof(instances[0]) * instances.size();
+  CreateBuffer(
+    instBufferSize,
+    vk::BufferUsageFlagBits::eShaderDeviceAddress |
+    vk::BufferUsageFlagBits::eTransferDst |
+    vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+    vk::MemoryPropertyFlagBits::eHostVisible |
+    vk::MemoryPropertyFlagBits::eHostCoherent,
+    instanceBuffer.first, instanceBuffer.second
+  );
+
+  void* ptr = instanceBuffer.second.mapMemory(0, instBufferSize);
+  memcpy(ptr, instances.data(), instBufferSize);
+  instanceBuffer.second.unmapMemory();
+
+  vk::BufferDeviceAddressInfo instanceAddrInfo{ .buffer = instanceBuffer.first };
+  vk::DeviceAddress instanceAddr = device.getBufferAddressKHR(instanceAddrInfo);
+
+  // Prepare the geometry (instance) data
+  auto instancesData = vk::AccelerationStructureGeometryInstancesDataKHR{
+      .arrayOfPointers = vk::False,
+      .data = instanceAddr
+  };
+
+  vk::AccelerationStructureGeometryDataKHR geometryData(instancesData);
+
+  vk::AccelerationStructureGeometryKHR tlasGeometry{
+      .geometryType = vk::GeometryTypeKHR::eInstances,
+      .geometry = geometryData
+  };
+
+  vk::AccelerationStructureBuildGeometryInfoKHR tlasBuildGeometryInfo{
+      .type = vk::AccelerationStructureTypeKHR::eTopLevel,
+      .mode = vk::BuildAccelerationStructureModeKHR::eBuild,
+      .geometryCount = 1,
+      .pGeometries = &tlasGeometry
+  };
+
+  // Query the memory sizes that will be needed for this TLAS
+  auto primitiveCount = static_cast<uint32_t>(instances.size());
+
+  vk::AccelerationStructureBuildSizesInfoKHR tlasBuildSizes =
+    device.getAccelerationStructureBuildSizesKHR(
+      vk::AccelerationStructureBuildTypeKHR::eDevice,
+      tlasBuildGeometryInfo,
+      { primitiveCount }
+    );
+
+  // Create a scratch buffer for the TLAS, this will hold temporary data
+  // during the build process
+  CreateBuffer(
+    tlasBuildSizes.buildScratchSize,
+    vk::BufferUsageFlagBits::eStorageBuffer |
+    vk::BufferUsageFlagBits::eShaderDeviceAddress,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    tlasScratchBuffer.first, tlasScratchBuffer.second
+  );
+
+  // Save the scratch buffer address in the build info structure
+  vk::BufferDeviceAddressInfo scratchAddressInfo{ .buffer = *tlasScratchBuffer.first };
+  vk::DeviceAddress scratchAddr = device.getBufferAddressKHR(scratchAddressInfo);
+  tlasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;
+
+  // Create a buffer for the TLAS itself now that we now the required size
+  CreateBuffer(
+    tlasBuildSizes.accelerationStructureSize,
+    vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR |
+    vk::BufferUsageFlagBits::eShaderDeviceAddress |
+    vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    tlasBuffer.first, tlasBuffer.second
+  );
+
+  // Create and store the TLAS handle
+  vk::AccelerationStructureCreateInfoKHR tlasCreateInfo{
+      .buffer = tlasBuffer.first,
+      .offset = 0,
+      .size = tlasBuildSizes.accelerationStructureSize,
+      .type = vk::AccelerationStructureTypeKHR::eTopLevel,
+  };
+
+  tlas = device.createAccelerationStructureKHR(tlasCreateInfo);
+
+  // Save the TLAS handle in the build info structure
+  tlasBuildGeometryInfo.dstAccelerationStructure = tlas;
+
+  // Prepare the build range for the TLAS
+  vk::AccelerationStructureBuildRangeInfoKHR tlasRangeInfo{
+      .primitiveCount = primitiveCount,
+      .primitiveOffset = 0,
+      .firstVertex = 0,
+      .transformOffset = 0
+  };
+
+  // Build the TLAS
+  auto cmd = BeginSingleTimeCommands();
+  cmd.buildAccelerationStructuresKHR({ tlasBuildGeometryInfo }, { &tlasRangeInfo });
+  EndSingleTimeCommands(cmd);
 }
 void App::CreateInstanceLUTBuffer()
 {
+  vk::DeviceSize bufferSize = sizeof(InstanceLUT) * instanceLUTs.size();
 
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
+
+  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
+  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eTransferSrc,
+    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+    stagingBuffer, stagingBufferMemory
+  );
+
+  // Map and copy our loaded vertices data to the GPU host-visible memory
+  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(dataStaging, instanceLUTs.data(), (size_t)bufferSize);
+  // We don't need to access this buffer anymore, unmap
+  stagingBufferMemory.unmapMemory();
+
+  // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
+  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    instanceLUTBuffer.first, instanceLUTBuffer.second
+  );
+
+  // Copy the host-visible buffer to the non-host-visible buffer
+  CopyBuffer(stagingBuffer, instanceLUTBuffer.first, bufferSize);
 }
 
 // Create DescriptorPools that can allocate DescriptorSets. It's like a check making sure not too many descriptors of
@@ -2083,20 +2431,25 @@ void App::LoadGeometry()
 
         // v_offset is a value offset, i_offset is an index offset
         // We need to append the indices to the materials indices vector
-        size_t i_offset = mats[*matIt].indices.size();
+        size_t i_offset = mats[*matIt].indices.size(), ii_offset = indices.size();
         mats[*matIt].indices.resize(mats[*matIt].indices.size() + indexAccessor->count);
+        indices.resize(indices.size() + indexAccessor->count);
 
         // write in values
-        for (cgltf_size i = 0; i < written_uints; i++)
+        for (cgltf_size i = 0; i < written_uints; i++) {
           mats[*matIt].indices[i + i_offset] = unpacked_indices[i] + v_offset;
-        
+          indices[i + ii_offset] = unpacked_indices[i] + v_offset;
+        }
+
         // Insert the indices in reverse order if the material is double-sided (triggers a redraw of the backface as a 
         // frontface, using a reverse iterator and offsets from rbegin (which is the end in the direction of begin)
-        if (mats[*matIt].doubleSided)
+        if (mats[*matIt].doubleSided) {
+          indices.insert(indices.end(), indices.rbegin(), indices.rbegin() + written_uints);
           mats[*matIt].indices.insert(
-            mats[*matIt].indices.end(), mats[*matIt].indices.rbegin(), 
+            mats[*matIt].indices.end(), mats[*matIt].indices.rbegin(),
             mats[*matIt].indices.rbegin() + written_uints
           );
+        }
         
         // finished with the unpacked_indices
         free(unpacked_indices);
@@ -2182,7 +2535,10 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateVertexBuffer(cons
   // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
   CreateBuffer(
     bufferSize,
-    vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    vk::BufferUsageFlagBits::eVertexBuffer | 
+    vk::BufferUsageFlagBits::eTransferDst | 
+    vk::BufferUsageFlagBits::eShaderDeviceAddress |
+    vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
     vk::MemoryPropertyFlagBits::eDeviceLocal,
     copyBuffer.first, copyBuffer.second
   );
@@ -2706,6 +3062,14 @@ void App::CreateBuffer(
     .allocationSize = memRequirements.size,
     .memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties)
   };
+
+  // if the buffer shares a shader device address we need space in the buffer for those addresses
+  vk::MemoryAllocateFlagsInfo allocFlagsInfo{};
+  if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress) {
+    allocFlagsInfo.flags = vk::MemoryAllocateFlagBits::eDeviceAddress;
+    allocInfo.pNext = &allocFlagsInfo;
+  }
+
   bufferMemory = vk::raii::DeviceMemory(device, allocInfo);
   buffer.bindMemory(*bufferMemory, 0);
 }

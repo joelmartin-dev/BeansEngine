@@ -144,10 +144,13 @@ struct App {
   // PickPhysicalDevice
   std::vector<const char*> requiredDeviceExtensions = {
     vk::KHRSwapchainExtensionName,
-    vk::KHRDynamicRenderingExtensionName,
     vk::KHRSpirv14ExtensionName,
     vk::KHRSynchronization2ExtensionName,
-    vk::KHRCreateRenderpass2ExtensionName
+    vk::KHRCreateRenderpass2ExtensionName,
+    vk::KHRAccelerationStructureExtensionName,
+    vk::KHRBufferDeviceAddressExtensionName,
+    vk::KHRDeferredHostOperationsExtensionName,
+    vk::KHRRayQueryExtensionName
   };
   vk::raii::PhysicalDevice physicalDevice = nullptr;
   
@@ -245,6 +248,7 @@ struct App {
   // LoadGLTF
   cgltf_data* asset = nullptr;
   std::vector<Vertex> vertices;
+  std::vector<uint32_t> indices;
   std::vector<Mesh> meshes;
   std::vector<Material> mats;
   std::vector<Material*> mats_DS;
