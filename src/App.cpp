@@ -190,7 +190,7 @@ void App::InitWindow()
       auto app = static_cast<App*>(glfwGetWindowUserPointer(_pWindow));
 
       // the camera handles input internally, pass the arguments along
-      app->camera.key_handler(_pWindow, key, scancode, action, mods);
+      app->camera.KeyHandler(_pWindow, key, scancode, action, mods);
 
       if (action != GLFW_PRESS) return;
       
@@ -232,7 +232,7 @@ void App::InitWindow()
       // Application uses two input modes: raw motion and cursor position
       // We only want to check cursor position when raw motion is enabled (requires cursor to be disabled)
       if (glfwGetInputMode(_pWindow, GLFW_CURSOR) == GLFW_CURSOR_DISABLED)
-        static_cast<App*>(glfwGetWindowUserPointer(_pWindow))->camera.cursor_handler(xpos, ypos);
+        static_cast<App*>(glfwGetWindowUserPointer(_pWindow))->camera.CursorHandler(xpos, ypos);
   });
 }
 
@@ -419,7 +419,7 @@ void App::MainLoop()
     glfwGetCursorPos(pWindow, &xpos, &ypos);
 
     // A straight >> on delta would not allow for decimals
-    camera.update(static_cast<double>(delta) / static_cast<double>(2 << deltaExp));
+    camera.Update(static_cast<double>(delta) / static_cast<double>(2 << deltaExp));
 
     // Lock to 60fps, wait for previous frame to finish                                           1/60.0
     while (std::chrono::duration_cast<std::chrono::microseconds>(frameEnd - frameStart).count() < 16667)
@@ -2212,27 +2212,32 @@ void App::LoadGeometry()
 
       // There isn't a defined order that the attributes must be listed in to be valid glTF entries. Because of this, we
       // have no idea which attribute represent position and which is texcoords without asking
-      cgltf_accessor* posAccessor = NULL; cgltf_accessor* uvAccessor = NULL;
+      cgltf_accessor* posAccessor = NULL; cgltf_accessor* uvAccessor = NULL; cgltf_accessor* normAccessor = NULL;
       // Check each attribute until both pos and uv found
       for (cgltf_size attrIt = 0; attrIt < p->attributes_count; attrIt++) {
         // Check this attribute
         auto attr = &p->attributes[attrIt];
 
         if (attr->type == cgltf_attribute_type_position)
-            posAccessor = attr->data;
+          posAccessor = attr->data;
         else if (attr->type == cgltf_attribute_type_texcoord)
-            uvAccessor = attr->data;
+          uvAccessor = attr->data;
+        else if (attr->type == cgltf_attribute_type_normal)
+          normAccessor = attr->data;
 
         // if both have been found, exit
-        if (posAccessor && uvAccessor) break;
+        if (posAccessor && uvAccessor && normAccessor) break;
       }
       if (!posAccessor) throw std::runtime_error("failed to get positions!");
       if (!uvAccessor) throw std::runtime_error("failed to get texcoords!");
+      if (!normAccessor) throw std::runtime_error("failed to get normal!");
 
       // Unpack vertex positions into glm::vec3 vector
       auto positions = GetAccessorData<glm::vec3>(posAccessor);
       // Unpack vertex texcoords into glm::vec2 vector
       auto uvs = GetAccessorData<glm::vec2>(uvAccessor);
+      // Unpack vertex normals into glm::vec3 vector
+      auto norms = GetAccessorData<glm::vec3>(normAccessor);
 
       // Get the model's scale
       glm::vec3 scale(1.0f);
@@ -2247,6 +2252,7 @@ void App::LoadGeometry()
       for (size_t i = 0; i < posAccessor->count; i++) {
         vertices[v_offset + i].pos = positions[i] * scale; // positions adjusted for model scale
         vertices[v_offset + i].texCoord = uvs[i];
+        vertices[v_offset + i].norm = norms[i];
       }
     }
   }
@@ -2382,7 +2388,9 @@ void App::UpdateUniformBuffer(uint32_t imageIndex)
 {
   UniformBuffer ubo{};
   ubo.deltaTime = static_cast<float>(delta) / 1000.0f;
-  ubo.accumTime = static_cast<float>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - start).count()) / 1024.0f;
+  ubo.accumTime = static_cast<float>(
+    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - start).count()
+  ) / 1024.0f;
   // Copy the new data to the mapped data
   memcpy(uniformBuffersMapped[imageIndex], &ubo, sizeof(ubo));
 }
@@ -2391,7 +2399,10 @@ void App::UpdateUniformBuffer(uint32_t imageIndex)
 void App::UpdateModelViewProjection(uint32_t imageIndex)
 {
   MVP mvp{};
-  mvp.mvp = camera.getMVPMatrix();
+  mvp.model = camera.GetModelMatrix();
+  mvp.view = camera.GetViewMatrix();
+  mvp.proj = camera.GetProjMatrix();
+  mvp.pos = camera.GetPos();
   // Copy the new data to the mapped data
   memcpy(mvpBuffersMapped[imageIndex], &mvp, sizeof(mvp));
 }
@@ -2431,8 +2442,10 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
   vk::ImageMemoryBarrier2 depthBarrier {
     .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
     .srcAccessMask = {},
-    .dstStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-    .dstAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+    .dstStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                    vk::PipelineStageFlagBits2::eLateFragmentTests,
+    .dstAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentRead | 
+                     vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
     .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
     .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
     .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
@@ -2483,7 +2496,11 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
 
   commandBuffers[currentFrame].beginRendering(renderingInfo);
 
-  commandBuffers[currentFrame].setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
+  commandBuffers[currentFrame].setViewport(0, vk::Viewport(
+      0.0f, 0.0f,
+      static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height),
+      0.0f, 1.0f
+   ));
   commandBuffers[currentFrame].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
 
   // STATIC MODELS

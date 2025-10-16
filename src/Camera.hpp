@@ -35,14 +35,18 @@ struct Camera
   glm::dvec3 forward;
   glm::dvec3 right;
 
-  glm::mat4 getViewMatrix();
-  glm::mat4 getRotationMatrix() const;
-  glm::mat4 getMVPMatrix();
+  glm::mat4 GetViewMatrix() const;
+  glm::mat4 GetProjMatrix() const;
+  glm::mat4 GetRotationMatrix() const;
+  glm::mat4 GetModelMatrix() const;
+  glm::mat4 GetMVPMatrix() const;
 
-  void update(double delta);
+  glm::dvec3 GetPos() const;
 
-  void cursor_handler(double xpos, double ypos);
-  void key_handler(GLFWwindow* pWindow, int key, int scancode, int action, int mods);
+  void Update(double delta);
+
+  void CursorHandler(double xpos, double ypos);
+  void KeyHandler(GLFWwindow* pWindow, int key, int scancode, int action, int mods);
 };
 
 #endif

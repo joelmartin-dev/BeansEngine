@@ -61,6 +61,8 @@ constexpr uint32_t LIGHT_COUNT = 8;
 static char model_path[256] = "assets/sponza/Sponza.gltf";
 static char slang_path[256] = "assets/shaders/shader.slang";
 static char spirv_path[256] = "assets/shaders/shader.spv";
+static char ref_slang_path[256] = "assets/shaders/reference.slang";
+static char ref_spirv_path[256] = "assets/shaders/reference.spv";
 #ifdef RESTIR
 static char compute_slang_path[256] = "assets/shaders/pt.slang";
 #else

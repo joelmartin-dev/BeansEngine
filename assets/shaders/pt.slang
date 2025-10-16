@@ -203,5 +203,5 @@ float4 fragMain(VSOutput vertIn) : SV_TARGET
 [numthreads(1, 1, 1)]
 void compMain(uint3 threadId : SV_DispatchThreadID)
 {
-    texture.Store(threadId.xy, mainImage(float2(threadId.xy)));
+    //texture.Store(threadId.xy, mainImage(float2(threadId.xy)));
 }

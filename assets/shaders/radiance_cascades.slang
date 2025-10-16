@@ -21,27 +21,46 @@ VSOutput vertMain(VSInput input)
     return output;
 }
 
-struct PInput {
-    float2 pos : SV_PointCoord;
-    float3 col : COLOR0;
+struct Ray {
+    float2 direction;
+    float magnitude;
 };
 
-[shader("fragment")]
-float4 fragMain(PInput pointIn) : SV_TARGET
-{
-    float2 coord = pointIn.pos - float2(0.5);
-    return float4(pointIn.col, 0.5 - length(coord));
+struct Probe {
+    float2 pos;
+    int rayCount;
+};
+
+float sdSegment(float2 p, float2 a, float2 b, float r) {
+    float h = min(0.2f, max(0.0f, dot(p - a, b - a) / dot(b - a, b - a)));
+    return length(p - a - (b - a) * h) - r;
 }
 
-struct Cascade {
-    int2 renderExtent;
-    float2 cascadeExtent;
-    int cascadeCount;
-    int cascadeIndex;
-    float cascadeLinear;
-    float cascadeInterval;
-};
-//ConstantBuffer<Cascade> cascade;
+float4 cascadeN(int cascade, float2 texCoord) {
+    Probe probes[4];
+    probes[0] = Probe(float2(0.25f, 0.25f), 4); // Top Left
+    probes[1] = Probe(float2(0.75f, 0.25f), 4); // Top Right
+    probes[2] = Probe(float2(0.25f, 0.75f), 4); // Bottom Left
+    probes[3] = Probe(float2(0.75f, 0.75f), 4); // Bottom Right
+
+    for (int probeIdx = 0; probeIdx < 4; probeIdx++) {
+        for (int rayIdx = 0; rayIdx < 4; rayIdx++) {
+            Ray ray = Ray(normalize(float2(cospi(rayIdx / 2.0f), sinpi(rayIdx / 2.0f))), 0.001f);
+            float3 cyan = float3(0.0f, 1.0f, 1.0f);
+            if (sdSegment(texCoord, probes[probeIdx].pos, probes[probeIdx].pos + ray.direction, ray.magnitude) < 0.0001f) {
+                return float4(cyan, 1.0f);
+            }
+        }
+    }
+    return float4(float3(0.0), 1.0);
+}
+
+[shader("fragment")]
+float4 fragMain(VSOutput vertIn) : SV_TARGET
+{
+    return float4(0.);
+    //return cascadeN(0, vertIn.fragTexCoord);
+}
 
 [shader("compute")]
 [numthreads(1,1,1)]

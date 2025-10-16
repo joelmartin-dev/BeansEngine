@@ -5,7 +5,10 @@
 
 // For passing the Model View Projection matrix to the GPU for vertex transformations
 struct MVP {
-  glm::aligned_mat4 mvp = glm::aligned_mat4();
+  glm::aligned_mat4 model = glm::aligned_mat4();
+  glm::aligned_mat4 view = glm::aligned_mat4();
+  glm::aligned_mat4 proj = glm::aligned_mat4();
+  glm::aligned_vec3 pos = glm::aligned_vec3();
 };
 
 // For passing cpu-based timing information to the GPU

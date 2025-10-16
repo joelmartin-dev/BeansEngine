@@ -3,19 +3,12 @@
 #include "glm/gtc/matrix_transform.hpp"
 #include "glm/gtc/quaternion.hpp"
 
-glm::mat4 Camera::getViewMatrix()
+glm::mat4 Camera::GetViewMatrix() const
 {
   return glm::lookAt(position, position + forward, glm::dvec3(0.0, 1.0, 0.0));
 }
-
-glm::mat4 Camera::getRotationMatrix() const
+glm::mat4 Camera::GetProjMatrix() const
 {
-  return glm::identity<glm::mat4>();
-}
-
-glm::mat4 Camera::getMVPMatrix()
-{
-  auto view = getViewMatrix();
   auto proj = glm::perspective(
     glm::radians(fov),
     viewportWidth / viewportHeight,
@@ -23,11 +16,33 @@ glm::mat4 Camera::getMVPMatrix()
     100.0f
   );
   proj[1][1] *= -1;
-  auto model = glm::rotate(getRotationMatrix(), 0.0f, glm::vec3(0.0f, 0.0f, 1.0f));
+  return proj;
+}
+
+glm::mat4 Camera::GetRotationMatrix() const
+{
+  return glm::identity<glm::mat4>();
+}
+
+glm::mat4 Camera::GetModelMatrix() const
+{
+  return glm::rotate(GetRotationMatrix(), 0.0f, glm::vec3(0.0f, 0.0f, 1.0f));
+}
+
+glm::mat4 Camera::GetMVPMatrix() const
+{
+  auto view = GetViewMatrix();
+  auto proj = GetProjMatrix();
+  auto model = GetModelMatrix();
   return proj * view * model;
 }
 
-void Camera::update(double delta)
+glm::dvec3 Camera::GetPos() const
+{
+  return position;
+}
+
+void Camera::Update(double delta)
 {
   forward.x = static_cast<float>(cos(yaw) * cos(pitch));
   forward.y = static_cast<float>(sin(pitch));
@@ -47,11 +62,11 @@ void Camera::update(double delta)
 
   position += (forward * velocity.z + right * velocity.x + glm::dvec3(0.0, 1.0, 0.0) * velocity.y) * static_cast<double>(moveSpeed) * delta * static_cast<double>(mod);
 
-  // cursor_handler needs manual invoking to stop continuous movement
-  if (mouseMode) cursor_handler(oldXpos, oldYpos);
+  // CursorHandler needs manual invoking to stop continuous movement
+  if (mouseMode) CursorHandler(oldXpos, oldYpos);
 }
 
-void Camera::cursor_handler(double xpos, double ypos)
+void Camera::CursorHandler(double xpos, double ypos)
 {
   double deltaXpos = oldXpos - xpos;
   double deltaYpos = oldYpos - ypos;
@@ -63,7 +78,7 @@ void Camera::cursor_handler(double xpos, double ypos)
   deltaYaw = -deltaXpos;
 }
 
-void Camera::key_handler(GLFWwindow* pWindow, int key, int scancode, int action, int mods)
+void Camera::KeyHandler(GLFWwindow* pWindow, int key, int scancode, int action, int mods)
 {
   if (action == GLFW_REPEAT || action == GLFW_PRESS)
   {

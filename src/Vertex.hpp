@@ -10,6 +10,7 @@ struct Vertex {
   glm::vec3 pos = {};
   glm::vec3 colour = {};
   glm::vec2 texCoord = {};
+  glm::vec3 norm = {};
 
   // How the struct is passed
   static vk::VertexInputBindingDescription getBindingDescription()
@@ -18,7 +19,7 @@ struct Vertex {
   }
 
   // How the struct's data is laid out
-  static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions()
+  static std::array<vk::VertexInputAttributeDescription, 4> getAttributeDescriptions()
   {
     return {
       // location, binding, format, offset
@@ -26,14 +27,15 @@ struct Vertex {
       // Formats are aliases for in-shader data types, e.g. R32Sfloat is float, R64Sfloat is double
       vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
       vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, colour)),
-      vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord))
+      vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord)),
+      vk::VertexInputAttributeDescription(3, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, norm))
     };
   }
 
   // equal_to function, needed for use of Vertex as Key in unordered containers e.g. unordered_map(Key, T, hash(Key), equal_to(Key))
   bool operator==(const Vertex& other) const
   {
-    return pos == other.pos && colour == other.colour && texCoord == other.texCoord;
+    return pos == other.pos && colour == other.colour && texCoord == other.texCoord && norm == other.norm;
   }
 };
 
@@ -41,9 +43,10 @@ struct Vertex {
 template<> struct std::hash<Vertex> {
   size_t operator()(Vertex const& vertex) const noexcept
   {
-    return ((hash<glm::vec3>()(vertex.pos) ^
+    return (((hash<glm::vec3>()(vertex.pos) ^
       (hash<glm::vec3>()(vertex.colour) << 1)) >> 1) ^
-      (hash<glm::vec2>()(vertex.texCoord) << 1);
+      (hash<glm::vec2>()(vertex.texCoord) << 1) >> 1) ^
+      (hash<glm::vec3>()(vertex.norm) << 1);
   }
 };
 #endif
