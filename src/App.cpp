@@ -269,9 +269,9 @@ void App::InitVulkan()
   LoadGLTF(std::filesystem::path(model_path).make_preferred());
   CreateVertexBuffers();
   CreateIndexBuffers();
-  CreateUVBuffer();
-  CreateAccelerationStructures();
-  CreateInstanceLUTBuffer();
+  // CreateUVBuffer();
+  // CreateAccelerationStructures();
+  // CreateInstanceLUTBuffer();
 
   CreatePathTracingTexture();
   
@@ -654,11 +654,11 @@ void App::PickPhysicalDevice()
         features.template get<vk::PhysicalDeviceVulkan12Features>().runtimeDescriptorArray &&
         features.template get<vk::PhysicalDeviceVulkan12Features>().shaderSampledImageArrayNonUniformIndexing &&
         features.template get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress &&
+        // makes timeline semaphores available for synchronisation
+        features.template get<vk::PhysicalDeviceVulkan12Features>().timelineSemaphore &&
         features.template get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().accelerationStructure &&
         features.template get<vk::PhysicalDeviceRayQueryFeaturesKHR>().rayQuery;
-        // makes timeline semaphores available for synchronisation
-        features.template get<vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>().timelineSemaphore;
-
+        
       // If all true, this physical device is fit for purpose and we can stop checking
       return supportsVulkan1_4 &&
              supportsSamplerAnisotropy &&
@@ -1010,18 +1010,10 @@ void App::CreateDescriptorSetLayouts()
   // PATH TRACING
   {
     std::array radianceBindings = {
-      // Binding for deltaTime, accumTime
-      vk::DescriptorSetLayoutBinding(
-        0,                                    // Binding
-        vk::DescriptorType::eUniformBuffer,   // Descriptor Type
-        1,                                    // Descriptors Count
-        vk::ShaderStageFlagBits::eCompute,    // Stage Flags
-        nullptr                               // pImmutableSamplers
-      ),
-      // The next two bindings will actually use the same Image, but with different access privileges
+      // The bindings will actually use the same Image, but with different access types
       // Writing access in the compute stage
       vk::DescriptorSetLayoutBinding(
-        1,
+        0,
         vk::DescriptorType::eStorageImage,
         1,
         vk::ShaderStageFlagBits::eCompute,
@@ -1029,7 +1021,7 @@ void App::CreateDescriptorSetLayouts()
       ),
       // Sampling access in the fragment stage
       vk::DescriptorSetLayoutBinding(
-        2,
+        1,
         vk::DescriptorType::eCombinedImageSampler,
         1,
         vk::ShaderStageFlagBits::eFragment,
@@ -1098,8 +1090,8 @@ void App::CreateUniformBuffers()
   mvpBuffers.clear();
   mvpBuffersMapped.clear();
   
-  uniformBuffers.clear();
-  uniformBuffersMapped.clear();
+  // uniformBuffers.clear();
+  // uniformBuffersMapped.clear();
 
   // General breakdown:
   // 1. Create a buffer with sizeof(UserStruct) in DeviceMemory with accessor userStructBuffer
@@ -1121,21 +1113,6 @@ void App::CreateUniformBuffers()
     mvpBuffers.emplace_back(std::pair(std::move(mvpBuffer), std::move(mvpBufferMemory)));
     // Map the DEVICE_LOCAL memory
     mvpBuffersMapped.emplace_back(mvpBuffers.back().second.mapMemory(0, mvpBufferSize));
-
-    vk::DeviceSize uniformBufferSize = sizeof(UniformBuffer);
-    vk::raii::Buffer uniformBuffer({});
-    vk::raii::DeviceMemory uniformBufferMemory({});
-    // Create the buffer in DEVICE_LOCAL memory
-    CreateBuffer(
-      uniformBufferSize,
-      vk::BufferUsageFlagBits::eUniformBuffer,
-      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-      uniformBuffer, uniformBufferMemory
-    );
-    // Persist the objects by binding their lifetime to a class member
-    uniformBuffers.emplace_back(std::pair(std::move(uniformBuffer), std::move(uniformBufferMemory)));
-    // Map the DEVICE_LOCAL memory
-    uniformBuffersMapped.emplace_back(uniformBuffers.back().second.mapMemory(0, uniformBufferSize));
   }
 }
 
@@ -1601,7 +1578,6 @@ void App::CreateDescriptorPools()
   {
     // We need at least 1 Uniform Buffer, 1 StorageImage and 1 CombinedImageSampler per frame in flight
     std::array computePoolSizes = {
-      vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
       vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, MAX_FRAMES_IN_FLIGHT),
       vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT),
     };
@@ -1674,12 +1650,6 @@ void App::CreateDescriptorSets()
 
     // Fill in the descriptor sets
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-      // Time information (delta, time since start)
-      vk::DescriptorBufferInfo bufferInfo {
-        .buffer = static_cast<vk::Buffer>(uniformBuffers[i].first),
-        .offset = 0,
-        .range = sizeof(UniformBuffer)
-      };
       // Writable interface for image
       vk::DescriptorImageInfo imageInfo {
         .imageView = static_cast<vk::ImageView>(pathTracingTextureView),
@@ -1694,22 +1664,16 @@ void App::CreateDescriptorSets()
 
       // Link descriptor set, binding and resource together
       std::array descriptorWrites = {
-        // Time info as Uniform Buffer
-        vk::WriteDescriptorSet{
-          .dstSet = static_cast<vk::DescriptorSet>(radianceCascadesOutput.descriptorSets[i]),
-          .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
-          .descriptorType = vk::DescriptorType::eUniformBuffer, .pBufferInfo = &bufferInfo
-        },
         // Image as StorageImage
         vk::WriteDescriptorSet{
           .dstSet = static_cast<vk::DescriptorSet>(radianceCascadesOutput.descriptorSets[i]),
-          .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1,
+          .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
           .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfo
         },
         // Image as CombinedImageSampler
         vk::WriteDescriptorSet{
           .dstSet = static_cast<vk::DescriptorSet>(radianceCascadesOutput.descriptorSets[i]),
-          .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1,
+          .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1,
           .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &samplerInfo
         },
       };
@@ -1795,7 +1759,7 @@ void App::DrawFrame()
     throw std::runtime_error("failed to acquire swap chain image!");
 
   // Update uniform buffers
-  UpdateUniformBuffer(currentFrame); UpdateModelViewProjection(currentFrame);
+  UpdateModelViewProjection(currentFrame);
   
   // A command buffer needs to be in the initial state to record. Resetting the command pool resets all of the buffers
   // allocated in that pool. Command buffers can also be reset individually (begin() has an implicit reset if the buffer
@@ -2111,9 +2075,17 @@ void App::CreateComputePipeline()
     .pName = "compMain"
   };
 
+  // We supply the compute stage with new time information each frame using the TimePC struct for push constants
+  vk::PushConstantRange pushConstantRange {
+    .stageFlags = vk::ShaderStageFlagBits::eCompute,
+    .offset = 0,
+    .size = sizeof(TimePC)
+  };
+
   // Which DescriptorSetLayouts will be used by this pipeline
   vk::PipelineLayoutCreateInfo pipelineLayoutInfo {
-    .setLayoutCount = 1, .pSetLayouts = &*radianceCascadesOutput.descriptorSetLayout
+    .setLayoutCount = 1, .pSetLayouts = &*radianceCascadesOutput.descriptorSetLayout,
+    .pushConstantRangeCount = 1, .pPushConstantRanges = &pushConstantRange
   };
   computePipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 
@@ -2389,9 +2361,6 @@ void App::LoadGeometry()
 
   for (cgltf_size meshIt = 0; meshIt < asset->meshes_count; meshIt++) {
     auto m = &asset->meshes[meshIt];
-
-    std::vector<Primitive> prims(m->primitives_count);
-
     for (cgltf_size primIt = 0; primIt < m->primitives_count; primIt++) {
       auto p = &m->primitives[primIt];
 
@@ -2499,6 +2468,16 @@ void App::LoadGeometry()
         vertices[v_offset + i].texCoord = uvs[i];
         vertices[v_offset + i].norm = norms[i];
       }
+
+      // submeshes.push_back({
+      //   .indexOffset = startOffset,
+      //   .indexCount = indexCount,
+      //   .materialID = globalMaterialID,
+      //   .firstVertex = 0u,
+      //   .maxVertex = localMaxV + 1,
+      //   .alphaCut = p->material->alpha_mode > cgltf_alpha_mode_opaque,
+      //   .reflective = p->material->has_specular
+      // });
     }
   }
 
@@ -2671,18 +2650,6 @@ void App::ReloadShaders()
 }
 
 // For an explanation of memory mapping, see the comment "HOW DOES MEMORY WORK?" above CreateUniformBuffers
-// Update the uniform buffer containing timing data
-void App::UpdateUniformBuffer(uint32_t imageIndex)
-{
-  UniformBuffer ubo{};
-  ubo.deltaTime = static_cast<float>(delta) / 1000.0f;
-  ubo.accumTime = static_cast<float>(
-    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - start).count()
-  ) / 1024.0f;
-  // Copy the new data to the mapped data
-  memcpy(uniformBuffersMapped[imageIndex], &ubo, sizeof(ubo));
-}
-
 // Update the uniform buffer containing the Model View Projection matrix from the Camera
 void App::UpdateModelViewProjection(uint32_t imageIndex)
 {
@@ -2707,6 +2674,14 @@ void App::RecordComputeCommandBuffer()
     { radianceCascadesOutput.descriptorSets[currentFrame] },
     {}
   );
+  TimePC pushConstant {
+    .deltaTime = static_cast<float>(delta) / 1000.0f,
+    .accumTime = static_cast<float>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - start).count()
+    ) / 1024.0f
+  };
+  computeCommandBuffers[currentFrame].pushConstants<TimePC>(
+    *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
   // For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
   computeCommandBuffers[currentFrame].dispatch(WIDTH, HEIGHT, 1);  
   computeCommandBuffers[currentFrame].end();

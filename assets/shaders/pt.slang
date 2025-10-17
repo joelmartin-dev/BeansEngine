@@ -21,11 +21,11 @@ VSOutput vertMain(VSInput input)
     return output;
 }
 
-[[vk::binding(1, 0)]]
+[[vk::binding(0, 0)]]
 [[vk::image_format("rgba16f")]]
 RWTexture2D texture;
 
-[[vk::binding(2, 0)]]
+[[vk::binding(1, 0)]]
 Sampler2D sampler;
 
 // Play with the two following values to change quality.
@@ -166,19 +166,19 @@ float3 radiance(Ray r) {
     return acc;
 }
 
-struct UniformBuffer {
+struct PushConstant {
     float deltaTime;
     float accumTime;
 };
-[[vk::binding(0, 0)]]
-ConstantBuffer<UniformBuffer> ubo;
+[push_constant]
+PushConstant pc;
 
 float4 mainImage(in float2 fragCoord) {
     initSpheres();
     float2 uv = 2. * (fragCoord / float2(1440., 900.)) - 1.;
     uv.y = (uv.y - 1.0) * -1.0;
-    seed = sin(ubo.accumTime) * length(uv - fragCoord);
-    //seed = ubo.accumTime;
+    seed = sin(pc.accumTime) * length(uv - fragCoord);
+    //seed = pc.accumTime;
     float3 camPos = float3(50., 20., 160.);
     float3 cz = normalize(float3(50., -10., 81.6) - camPos);
     float3 cx = float3(1., 0., 0.);

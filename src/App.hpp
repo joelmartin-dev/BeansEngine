@@ -242,8 +242,6 @@ struct App {
   // CreateUniformBuffers
   std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> mvpBuffers;
   std::vector<void*> mvpBuffersMapped;
-  std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> uniformBuffers;
-  std::vector<void*> uniformBuffersMapped;
   
   // LoadGLTF
   cgltf_data* asset = nullptr;
@@ -383,7 +381,7 @@ struct App {
   void ReloadShaders();
 
   // DrawFrame
-  void UpdateUniformBuffer(uint32_t imageIndex);
+  //void UpdateUniformBuffer(uint32_t imageIndex);
   void UpdateModelViewProjection(uint32_t imageIndex);
   void RecordComputeCommandBuffer();
   void RecordCommandBuffer(uint32_t imageIndex);

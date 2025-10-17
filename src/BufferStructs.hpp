@@ -12,9 +12,14 @@ struct MVP {
 };
 
 // For passing cpu-based timing information to the GPU
-struct UniformBuffer {
+struct TimePC {
   float deltaTime = 1.0f;
   float accumTime = 0.0f;
+};
+
+struct PushConstant {
+  uint32_t materialIndex;
+  uint32_t reflective;
 };
 
 struct SubMesh {
