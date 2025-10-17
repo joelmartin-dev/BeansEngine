@@ -4,21 +4,9 @@
 #include <vulkan/vulkan_raii.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "Vertex.hpp"
-
 // stores the unique data of each primitive in a gltf
 struct Material {
-  std::vector<uint32_t> indices;
-
-  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> indexBuffer = std::pair(nullptr, nullptr);
-
-  bool doubleSided = false;
-
-  std::vector<vk::raii::DescriptorSet> descriptorSets;
-};
-
-struct Primitive {
-
+  uint32_t id;
 };
 
 struct Mesh {

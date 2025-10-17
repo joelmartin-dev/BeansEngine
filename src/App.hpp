@@ -252,7 +252,6 @@ struct App {
   std::vector<uint32_t> indices;
   std::vector<Mesh> meshes;
   std::vector<Material> mats;
-  std::vector<Material*> mats_DS;
   std::vector<std::pair<vk::raii::Image, vk::raii::DeviceMemory>> textureImages;
   std::mutex m;
   std::vector<vk::raii::ImageView> textureImageViews;
@@ -280,7 +279,6 @@ struct App {
   vk::raii::AccelerationStructureKHR tlas = nullptr;
 
   std::vector<SubMesh> submeshes;
-  std::vector<cgltf_material> materials;
 
   // CreateInstanceLUT
   std::vector<InstanceLUT> instanceLUTs;
@@ -295,7 +293,7 @@ struct App {
   vk::raii::DescriptorPool imguiDescriptorPool = nullptr;
   vk::raii::DescriptorPool computeDescriptorPool = nullptr;
   
-  // CreateDescriptorSets (stored inside Material and Quad)
+  // CreateDescriptorSets
   std::vector<vk::raii::DescriptorSet> globalDescriptorSets;
   std::vector<vk::raii::DescriptorSet> materialDescriptorSets;
   std::vector<vk::raii::DescriptorSet> computeDescriptorSets;

@@ -276,8 +276,10 @@ void App::InitVulkan()
   CreateVertexBuffers();
   CreateIndexBuffers();
   CreateUVBuffer();
+#ifdef REFERENCE
   CreateAccelerationStructures();
   //CreateInstanceLUTBuffer();
+#endif
 
   CreatePathTracingTexture();
   
@@ -343,8 +345,7 @@ void App::MainLoop()
 
   // This is not great logic, but at the moment the glTF assets are loaded as triangle lists meaning every 3 indices is 
   // a triangle (as opposed to triangle strips which is indices.size - 2 as each new index uses the previous two)
-  for (auto& mat : mats) stats.tris += static_cast<uint32_t>(mat.indices.size());
-  stats.tris /= 3; // total number of indices / 3 should give tri count according to triangle list
+  stats.tris = vertices.size() / 3; // total number of indices / 3 should give tri count according to triangle list
 
   double xpos, ypos; // cursor position
 
@@ -451,11 +452,19 @@ void App::Cleanup()
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();
 #endif
-  // while they are user-defined structs, the vector takes care of them
-  // so long as it is explicitly cleared
-  mats.clear();
 
-  //computeDescriptorSets.clear();
+  submeshes.clear();
+  
+  {
+    radianceCascadesOutput.graphicsPipeline = std::pair(nullptr, nullptr);
+    radianceCascadesOutput.descriptorSets.clear();
+    radianceCascadesOutput.descriptorSetLayout = nullptr;
+    radianceCascadesOutput.descriptorPool = nullptr;
+  }
+
+  globalDescriptorSets.clear();
+  materialDescriptorSets.clear();
+  computeDescriptorSets.clear();
 
   // there are issues with GLFW and Wayland that requires these be freed first
   CleanupSwapChain();
@@ -1007,6 +1016,7 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eFragment,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
+#ifdef REFERENCE
       vk::DescriptorSetLayoutBinding(
         1,                                    // Binding
         vk::DescriptorType::eAccelerationStructureKHR,   // Descriptor Type
@@ -1014,6 +1024,7 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eFragment,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
+#endif
       vk::DescriptorSetLayoutBinding(
         2,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
@@ -1028,13 +1039,13 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eFragment,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
-      vk::DescriptorSetLayoutBinding(
-        4,                                    // Binding
-        vk::DescriptorType::eStorageBuffer,   // Descriptor Type
-        1,                                    // Descriptors Count
-        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
-        nullptr                               // pImmutableSamplers
-      ),
+      // vk::DescriptorSetLayoutBinding(
+      //   4,                                    // Binding
+      //   vk::DescriptorType::eStorageBuffer,   // Descriptor Type
+      //   1,                                    // Descriptors Count
+      //   vk::ShaderStageFlagBits::eFragment,   // Stage Flags
+      //   nullptr                               // pImmutableSamplers
+      // ),
     };
 
     // Copy the bindings into the layout info
@@ -1269,7 +1280,9 @@ void App::CreateIndexBuffers()
       vk::BufferUsageFlagBits::eIndexBuffer | 
       vk::BufferUsageFlagBits::eTransferDst | 
       vk::BufferUsageFlagBits::eShaderDeviceAddress |
+#ifdef REFERENCE
       vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
+#endif
       vk::BufferUsageFlagBits::eStorageBuffer,
       vk::MemoryPropertyFlagBits::eDeviceLocal,
       indexBuffer.first, indexBuffer.second
@@ -1277,43 +1290,6 @@ void App::CreateIndexBuffers()
 
     // Copy the host-visible buffer to the non-host-visible buffer
     CopyBuffer(stagingBuffer, indexBuffer.first, bufferSize);
-  }
-
-  // Each material group will have their own index buffer
-  // We calculated each index with an offset 
-  for (auto& mat : mats) {
-    // The exact same as CreateVertexBuffers, but the second buffer has IndexBuffer usage
-    // indices are all the same type
-    vk::DeviceSize bufferSize = sizeof(mat.indices[0]) * mat.indices.size();
-    vk::raii::Buffer stagingBuffer({});
-    vk::raii::DeviceMemory stagingBufferMemory({});
-
-    // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
-    // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
-    CreateBuffer(
-      bufferSize,
-      vk::BufferUsageFlagBits::eTransferSrc,
-      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-      stagingBuffer, stagingBufferMemory
-    );
-
-    // Map and copy our loaded vertices data to the GPU host-visible memory
-    void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-    memcpy(dataStaging, mat.indices.data(), (size_t)bufferSize);
-    // We don't need to access this buffer anymore, unmap
-    stagingBufferMemory.unmapMemory();
-
-    // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
-    // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
-    CreateBuffer(
-      bufferSize,
-      vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
-      vk::MemoryPropertyFlagBits::eDeviceLocal,
-      mat.indexBuffer.first, mat.indexBuffer.second
-    );
-
-    // Copy the host-visible buffer to the non-host-visible buffer
-    CopyBuffer(stagingBuffer, mat.indexBuffer.first, bufferSize);
   }
 }
 
@@ -1356,6 +1332,7 @@ void App::CreateUVBuffer()
   // Copy the host-visible buffer to the non-host-visible buffer
   CopyBuffer(stagingBuffer, uvBuffer.first, bufferSize);
 }
+
 void App::CreateAccelerationStructures()
 {
   vk::BufferDeviceAddressInfo vertAddrInfo{ .buffer = *vertexBuffer.first };
@@ -1625,7 +1602,9 @@ void App::CreateDescriptorPools()
     // We need at least 1 Uniform Buffer and 1 CombinedImageSampler per material group per frame in flight
     std::array graphicsPoolSizes = {
       vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
+#ifdef REFERENCE
       vk::DescriptorPoolSize(vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT),
+#endif
       vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
       vk::DescriptorPoolSize(vk::DescriptorType::eSampler, MAX_FRAMES_IN_FLIGHT),
       vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage, static_cast<uint32_t>(mats.size())),
@@ -1784,6 +1763,7 @@ void App::CreateDescriptorSets()
         .pBufferInfo = &bufferInfo
       };
 
+#ifdef REFERENCE
       vk::WriteDescriptorSetAccelerationStructureKHR asInfo {
         .accelerationStructureCount = 1,
         .pAccelerationStructures = &*tlas
@@ -1797,6 +1777,7 @@ void App::CreateDescriptorSets()
         .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eAccelerationStructureKHR
       };
+#endif
 
       vk::DescriptorBufferInfo indexBufferInfo {
         .buffer = *indexBuffer.first,
@@ -1846,8 +1827,14 @@ void App::CreateDescriptorSets()
       // std::array<vk::WriteDescriptorSet, 5> descriptorWrites = 
       //   { bufferWrite, asWrite, indexBufferWrite, uvBufferWrite, instanceLUTBufferWrite };
 
-      std::array<vk::WriteDescriptorSet, 4> descriptorWrites = 
-        { bufferWrite, asWrite, indexBufferWrite, uvBufferWrite };
+      std::array descriptorWrites = {
+        bufferWrite, 
+#ifdef REFERENCE
+        asWrite,
+#endif 
+        indexBufferWrite, 
+        uvBufferWrite 
+      };
 
 
       // Write the descriptor sets to the GPU
@@ -2565,10 +2552,7 @@ void App::LoadGeometry()
         ) == 0;
       });
       if (matIt == matIdxs.end()) throw std::runtime_error("failed to find material!");
-
-      // We store the double-sidedness so we can skip them in the initial draw order at draw time
-      mats[*matIt].doubleSided = static_cast<bool>(p->material->double_sided);
-      if (mats[*matIt].doubleSided) mats_DS.push_back(&mats[*matIt]);
+      mats[*matIt].id = *matIt;
 
       // v_offset will help in evaluating the absolute value of this primitives indices so they match up with the
       // correct vertices in the vertex buffer
@@ -2590,25 +2574,18 @@ void App::LoadGeometry()
 
         // v_offset is a value offset, i_offset is an index offset
         // We need to append the indices to the materials indices vector
-        size_t i_offset = mats[*matIt].indices.size(), ii_offset = indices.size();
-        mats[*matIt].indices.resize(mats[*matIt].indices.size() + indexAccessor->count);
+        size_t i_offset = indices.size();
         indices.resize(indices.size() + indexAccessor->count);
 
         // write in values
         for (cgltf_size i = 0; i < written_uints; i++) {
-          mats[*matIt].indices[i + i_offset] = unpacked_indices[i] + v_offset;
-          indices[i + ii_offset] = unpacked_indices[i] + v_offset;
+          indices[i + i_offset] = unpacked_indices[i] + v_offset;
         }
 
         // Insert the indices in reverse order if the material is double-sided (triggers a redraw of the backface as a 
         // frontface, using a reverse iterator and offsets from rbegin (which is the end in the direction of begin)
-        if (mats[*matIt].doubleSided) {
+        if (p->material->double_sided)
           indices.insert(indices.end(), indices.rbegin(), indices.rbegin() + written_uints);
-          mats[*matIt].indices.insert(
-            mats[*matIt].indices.end(), mats[*matIt].indices.rbegin(),
-            mats[*matIt].indices.rbegin() + written_uints
-          );
-        }
         
         indexOffset = indices.size();
 
@@ -2978,31 +2955,6 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
         *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
       commandBuffers[currentFrame].drawIndexed(submesh.indexCount, 1, submesh.indexOffset, 0, 0);
     }
-
-    // for (auto& mat : mats) {
-    //   if (mat.doubleSided) continue; // all the double sided materials have transparent pixels
-    //   commandBuffers[currentFrame].bindIndexBuffer(*mat.indexBuffer.first, 0, vk::IndexType::eUint32);
-    //   commandBuffers[currentFrame].bindDescriptorSets(
-    //     vk::PipelineBindPoint::eGraphics,
-    //     graphicsPipeline.first,
-    //     0,
-    //     *mat.descriptorSets[currentFrame],
-    //     nullptr
-    //   );
-    //   commandBuffers[currentFrame].drawIndexed(static_cast<uint32_t>(mat.indices.size()), 1, 0, 0, 0);
-    // }
-    // // Draw transparent materials last
-    // for (auto& mat : mats_DS) {
-    //   commandBuffers[currentFrame].bindIndexBuffer(*mat->indexBuffer.first, 0, vk::IndexType::eUint32);
-    //   commandBuffers[currentFrame].bindDescriptorSets(
-    //     vk::PipelineBindPoint::eGraphics,
-    //     graphicsPipeline.first,
-    //     0,
-    //     *mat->descriptorSets[currentFrame],
-    //     nullptr
-    //   );
-    //   commandBuffers[currentFrame].drawIndexed(static_cast<uint32_t>(mat->indices.size()), 1, 0, 0, 0);
-    // }
   }
 
   // COMPUTE RESULTS

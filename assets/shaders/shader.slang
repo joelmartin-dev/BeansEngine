@@ -24,14 +24,6 @@ StructuredBuffer<uint> indexBuffer;
 [[vk::binding(3,0)]]
 StructuredBuffer<float2> uvBuffer;
 
-// TASK09: Instance look-up table
-struct InstanceLUT {
-    uint materialID;
-    uint indexBufferOffset;
-};
-[[vk::binding(4,0)]]
-StructuredBuffer<InstanceLUT> instanceLUTBuffer;
-
 struct VSOutput
 {
     float4 pos : SV_Position;
