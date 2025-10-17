@@ -7,8 +7,6 @@ SRC_DIR := src
 DEPS_DIR := deps
 OBJ_DIR := obj
 LIB_DIR := lib
-ASSETS_DIR := assets
-MODEL_PATH := ../$(ASSETS_DIR)/sponza/Sponza.gltf
 
 CC := clang
 CXX := clang++
@@ -36,10 +34,11 @@ WARNING_FLAGS := $(addprefix -W,$(WARNINGS))
 OPTIM_LEVEL := -O0
 
 DEBUG := -g
+DEBUG_CPP := _DEBUG
 
-COMPUTE :=
+RESTIR := RESTIR
 
-DEFINES := $(COMPUTE) KHRONOS_STATIC GLM_ENABLE_EXPERIMENTAL VULKAN_HPP_NO_STRUCT_CONSTRUCTORS IMGUI_IMPL_VULKAN_USE_VOLK
+DEFINES := $(RESTIR) $(DEBUG_CPP) KHRONOS_STATIC GLM_ENABLE_EXPERIMENTAL VULKAN_HPP_NO_STRUCT_CONSTRUCTORS IMGUI_IMPL_VULKAN_USE_VOLK
 D_FLAGS := $(addprefix -D,$(DEFINES))
 
 # C Preprocessor flags
@@ -51,14 +50,14 @@ CXX_FLAGS := $(CXX_VERSION)
 C_VERSION := -std=c17
 C_FLAGS := $(C_VERSION)
 
-LD_FLAGS := -L$(LIB_DIR) -lglfw3 -lvolk -lktx_read
+LD_FLAGS := -L$(LIB_DIR) -lglfw3 -lvolk -lktx_read -L$(VULKAN_SDK)/lib -lslang -lslang-rt
 
 # $@ is target name
 # $^ is all prerequisites
 # $< is the first prerequisite
 # $? is all prerequisites newer than target
 
-$(BUILD_DIR)/$(TARGET_EXEC): $(OBJS)# shaders
+$(BUILD_DIR)/$(TARGET_EXEC): $(OBJS)
 	mkdir -p $(dir $@)
 	$(CXX) $(OBJS) -o $@ $(LD_FLAGS)
 
@@ -70,23 +69,10 @@ $(OBJ_DIR)/%.cpp.o: %.cpp
 	mkdir -p $(dir $@)
 	$(CXX) $(CPP_FLAGS) $(CXX_FLAGS) -c $< -o $@
 
-ASSETS_DIR := assets
-SHADERS_DIR := shaders
-SPIRVS_DIR := shaders
-
-SHADERS = $(shell find $(ASSETS_DIR)/$(SHADERS_DIR) \( -name '*.slang' \) -printf '%P\n')
-SPIRVS = $(SHADERS:%.slang=$(ASSETS_DIR)/$(SPIRVS_DIR)/%.spv)
-
-$(ASSETS_DIR)/$(SPIRVS_DIR)/%.spv: $(ASSETS_DIR)/$(SHADERS_DIR)/%.slang
-	mkdir -p $(dir $@)
-	slangc $< -target spirv -profile spirv_1_4 -emit-spirv-directly -fvk-use-entrypoint-name -entry vertMain -entry fragMain -entry compMain -o $@
-
-.PHONY: printf shaders clean clean_modules run
+.PHONY: printf clean run
 
 run:
 	./$(BUILD_DIR)/$(TARGET_EXEC)
-
-shaders: $(SPIRVS)
 
 clean:
 	rm -rf $(OBJ_DIR)
@@ -97,4 +83,3 @@ clean_shaders:
 
 printf:
 
-	

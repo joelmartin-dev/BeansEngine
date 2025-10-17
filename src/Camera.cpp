@@ -134,7 +134,7 @@ void Camera::KeyHandler(GLFWwindow* pWindow, int key, int scancode, int action, 
 
   if (action == GLFW_RELEASE)
   {
-    printf("Released %i\r", key);
+    //printf("Released %i\r", key);
     switch (key)
     {
       case GLFW_KEY_W:
