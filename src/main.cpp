@@ -9,9 +9,11 @@
 
 #include "App.hpp"
 
-int main()
+int main(int argc, char** argv)
 {
   App app = {};
+  if (argc > 1) app.useWayland = false;
+  else app.useWayland = true;
 
   try
   {

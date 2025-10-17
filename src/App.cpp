@@ -8,7 +8,6 @@
 #include <future>     // for async execution
 #include <limits>     // for maximums of data types e.g. UINT64_MAX
 #include <ranges>     // C++ syntax replacement for common control flow structure e.g. std::for instead of for()
-#include <random>     // Controlled pseudo-randomness
 #include <stdexcept>  // for exceptions e.g. runtime_error
 #include <vector>     // dynamic arrays
 
@@ -154,6 +153,13 @@ void App::Run()
 // Create a Window capable of a Vulkan-addressable surface
 void App::InitWindow()
 {
+#ifndef _WIN32
+  if (!useWayland){
+    std::clog << "falling back to x11" << std::endl;
+    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+  } 
+    
+#endif
   // load GLFW functions and members
   if (glfwInit() != GLFW_TRUE) throw std::runtime_error("failed to initialise GLFW!");
 
@@ -258,6 +264,8 @@ void App::InitVulkan()
   CreateComputeCommandBuffers();
   CreateSyncObjects();
   
+  // We need to know the number of textures BEFORE we create the descriptor set layouts
+  LoadGLTF(std::filesystem::path(model_path).make_preferred());
   CreateDescriptorSetLayouts(); // Define how data is organised in descriptor sets
   
   InitSlang();// Compile shaders
@@ -265,13 +273,11 @@ void App::InitVulkan()
   
   //======== Transform external data into usable data =========//
   CreateUniformBuffers();
-
-  LoadGLTF(std::filesystem::path(model_path).make_preferred());
   CreateVertexBuffers();
   CreateIndexBuffers();
-  // CreateUVBuffer();
-  // CreateAccelerationStructures();
-  // CreateInstanceLUTBuffer();
+  CreateUVBuffer();
+  CreateAccelerationStructures();
+  //CreateInstanceLUTBuffer();
 
   CreatePathTracingTexture();
   
@@ -971,6 +977,19 @@ void App::CreateSyncObjects()
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) inFlightFences.emplace_back(device, vk::FenceCreateInfo{});
 }
 
+// Load the glTF data at path into class members
+void App::LoadGLTF(const std::filesystem::path& path)
+{
+  // Parse the glTF file into a cgltf_asset, a usable container of all the glTF pointers to the companion bin 
+  LoadAsset(path.generic_string().c_str()); // passing c_str as cgltf is a C library, not C++
+  // Load asset textures. The paths of the textures will be relative to the asset's directory, so pass parent path.
+  LoadTextures(path.parent_path());
+  // Create a universal sampler (like a set of rules to follow if the image doesn't match up 1-to-1 with a surface)
+  CreateTextureSampler();
+  // Load vertex data, grouped by material
+  LoadGeometry();
+}
+
 // Each pipeline needs to know what structures will be passed to the GPU during its lifetime. Not specific data, but
 // just the expected layout of the data once it exists
 void App::CreateDescriptorSetLayouts()
@@ -978,33 +997,95 @@ void App::CreateDescriptorSetLayouts()
   // STANDARD 3D MODELS
   {
     // Descriptor bindings are like slots in descriptor sets
-    std::array bindings = {
+    std::array globalBindings = {
       // Binding for the Model View Projection matrix from the Camera, used exclusively by the vertex shader
       vk::DescriptorSetLayoutBinding(
         0,                                    // Binding
         vk::DescriptorType::eUniformBuffer,   // Descriptor Type
         1,                                    // Descriptors Count
-        vk::ShaderStageFlagBits::eVertex,     // Stage Flags
+        vk::ShaderStageFlagBits::eVertex | 
+        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
+      vk::DescriptorSetLayoutBinding(
+        1,                                    // Binding
+        vk::DescriptorType::eAccelerationStructureKHR,   // Descriptor Type
+        1,                                    // Descriptors Count
+        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
+        nullptr                               // pImmutableSamplers
+      ),
+      vk::DescriptorSetLayoutBinding(
+        2,                                    // Binding
+        vk::DescriptorType::eStorageBuffer,   // Descriptor Type
+        1,                                    // Descriptors Count
+        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
+        nullptr                               // pImmutableSamplers
+      ),
+      vk::DescriptorSetLayoutBinding(
+        3,                                    // Binding
+        vk::DescriptorType::eStorageBuffer,   // Descriptor Type
+        1,                                    // Descriptors Count
+        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
+        nullptr                               // pImmutableSamplers
+      ),
+      vk::DescriptorSetLayoutBinding(
+        4,                                    // Binding
+        vk::DescriptorType::eStorageBuffer,   // Descriptor Type
+        1,                                    // Descriptors Count
+        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
+        nullptr                               // pImmutableSamplers
+      ),
+    };
+
+    // Copy the bindings into the layout info
+    vk::DescriptorSetLayoutCreateInfo globalLayoutInfo{
+      .bindingCount = static_cast<uint32_t>(globalBindings.size()),
+      .pBindings = globalBindings.data()
+    };
+
+    // Initialise
+    descriptorSetLayoutGlobal = vk::raii::DescriptorSetLayout(device, globalLayoutInfo);
+    
+    uint32_t textureCount = static_cast<uint32_t>(textureImageViews.size());
+
+    std::array materialBindings = {
       // Binding for a texture (colloquial), used exclusively by the fragment shader
       vk::DescriptorSetLayoutBinding(
+        0,
+        vk::DescriptorType::eSampler,
         1,
-        vk::DescriptorType::eCombinedImageSampler,
+        vk::ShaderStageFlagBits::eFragment,
+        nullptr
+      ),
+      vk::DescriptorSetLayoutBinding(
         1,
+        vk::DescriptorType::eSampledImage,
+        textureCount,
         vk::ShaderStageFlagBits::eFragment,
         nullptr
       ),
     };
 
-    // Copy the bindings into the layout info
-    vk::DescriptorSetLayoutCreateInfo layoutInfo{
-      .bindingCount = static_cast<uint32_t>(bindings.size()),
-      .pBindings = bindings.data()
+    std::vector<vk::DescriptorBindingFlags> bindingFlags = {
+      vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+      vk::DescriptorBindingFlagBits::ePartiallyBound | 
+        vk::DescriptorBindingFlagBits::eVariableDescriptorCount | 
+        vk::DescriptorBindingFlagBits::eUpdateAfterBind
     };
 
-    // Initialise
-    descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
+    vk::DescriptorSetLayoutBindingFlagsCreateInfo flagsCreateInfo {
+      .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
+      .pBindingFlags = bindingFlags.data()
+    };
+
+    vk::DescriptorSetLayoutCreateInfo matLayoutInfo = {
+      .pNext = &flagsCreateInfo,
+      .flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool,
+      .bindingCount = static_cast<uint32_t>(materialBindings.size()),
+      .pBindings = materialBindings.data()
+    };
+
+    descriptorSetLayoutMaterial = vk::raii::DescriptorSetLayout(device, matLayoutInfo);
   }
 
   // PATH TRACING
@@ -1114,19 +1195,6 @@ void App::CreateUniformBuffers()
     // Map the DEVICE_LOCAL memory
     mvpBuffersMapped.emplace_back(mvpBuffers.back().second.mapMemory(0, mvpBufferSize));
   }
-}
-
-// Load the glTF data at path into class members
-void App::LoadGLTF(const std::filesystem::path& path)
-{
-  // Parse the glTF file into a cgltf_asset, a usable container of all the glTF pointers to the companion bin 
-  LoadAsset(path.generic_string().c_str()); // passing c_str as cgltf is a C library, not C++
-  // Load asset textures. The paths of the textures will be relative to the asset's directory, so pass parent path.
-  LoadTextures(path.parent_path());
-  // Create a universal sampler (like a set of rules to follow if the image doesn't match up 1-to-1 with a surface)
-  CreateTextureSampler();
-  // Load vertex data, grouped by material
-  LoadGeometry();
 }
 
 // For Path-Tracing Reference, create a read-write Image of the same resolution as the initial framebuffers
@@ -1509,6 +1577,7 @@ void App::CreateAccelerationStructures()
   cmd.buildAccelerationStructuresKHR({ tlasBuildGeometryInfo }, { &tlasRangeInfo });
   EndSingleTimeCommands(cmd);
 }
+
 void App::CreateInstanceLUTBuffer()
 {
   vk::DeviceSize bufferSize = sizeof(InstanceLUT) * instanceLUTs.size();
@@ -1555,17 +1624,19 @@ void App::CreateDescriptorPools()
   {
     // We need at least 1 Uniform Buffer and 1 CombinedImageSampler per material group per frame in flight
     std::array graphicsPoolSizes = {
-      vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,
-        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * mats.size())),
-      vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler,
-        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT * mats.size()))
+      vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
+      vk::DescriptorPoolSize(vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT),
+      vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
+      vk::DescriptorPoolSize(vk::DescriptorType::eSampler, MAX_FRAMES_IN_FLIGHT),
+      vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage, static_cast<uint32_t>(mats.size())),
     };
 
     vk::DescriptorPoolCreateInfo graphicsPoolInfo{
       // DescriptorSets can be individually freed
-      .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+      .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet | 
+                 vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind,
       // We need at least one descriptor set per material group per frame in flight
-      .maxSets = MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(mats.size()),
+      .maxSets = MAX_FRAMES_IN_FLIGHT + 1,
       // Attach the DescriptorPoolSizes
       .poolSizeCount = static_cast<uint32_t>(graphicsPoolSizes.size()),
       .pPoolSizes = graphicsPoolSizes.data()
@@ -1683,55 +1754,158 @@ void App::CreateDescriptorSets()
   }
   // STANDARD 3D MODELS
   {
-    size_t matIdx = 0;
-    for (auto& mat : mats) {
-      // MAX_FRAMES_IN_FLIGHT copies of DescriptorSetLayout
-      std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);
+    // MAX_FRAMES_IN_FLIGHT copies of DescriptorSetLayout
+    std::vector<vk::DescriptorSetLayout> globalLayouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayoutGlobal);
 
-      // Collate the relevant info (DescriptorPool and DescriptorSetLayouts)
-      vk::DescriptorSetAllocateInfo allocInfo{
-        .descriptorPool = static_cast<vk::DescriptorPool>(graphicsDescriptorPool),
-        .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
-        .pSetLayouts = layouts.data(),
+    // Collate the relevant info (DescriptorPool and DescriptorSetLayouts)
+    vk::DescriptorSetAllocateInfo globalAllocInfo{
+      .descriptorPool = static_cast<vk::DescriptorPool>(graphicsDescriptorPool),
+      .descriptorSetCount = static_cast<uint32_t>(globalLayouts.size()),
+      .pSetLayouts = globalLayouts.data(),
+    };
+
+    globalDescriptorSets.clear();
+    globalDescriptorSets = device.allocateDescriptorSets(globalAllocInfo);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+      // MVP Buffer
+      vk::DescriptorBufferInfo bufferInfo{
+        .buffer = *mvpBuffers[i].first,
+        .offset = 0,
+        .range = sizeof(MVP)
       };
 
-      mat.descriptorSets.clear();
-      mat.descriptorSets = device.allocateDescriptorSets(allocInfo);
+      vk::WriteDescriptorSet bufferWrite {
+        .dstSet = globalDescriptorSets[i],
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .pBufferInfo = &bufferInfo
+      };
 
-      for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        // MVP Buffer
-        vk::DescriptorBufferInfo bufferInfo{
-          .buffer = static_cast<vk::Buffer>(mvpBuffers[i].first),
-          .offset = 0,
-          .range = sizeof(MVP)
-        };
-        // Albedo texture for the surface
-        vk::DescriptorImageInfo imageInfo{
-          .sampler = static_cast<vk::Sampler>(textureSampler),
-          .imageView = static_cast<vk::ImageView>(textureImageViews[matIdx]),
-          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
-        };
+      vk::WriteDescriptorSetAccelerationStructureKHR asInfo {
+        .accelerationStructureCount = 1,
+        .pAccelerationStructures = &*tlas
+      };
 
-        // Link descriptor set, binding and resource together
-        std::array descriptorWrites = {
-          // Model View Projection 4x4 Matrix (homogeneous coordinates) as Uniform Buffer
-          vk::WriteDescriptorSet {
-            .dstSet = static_cast<vk::DescriptorSet>(mat.descriptorSets[i]),
-            .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
-            .descriptorType = vk::DescriptorType::eUniformBuffer, .pBufferInfo = &bufferInfo
-          },
-          // Albedo Texture as CombinedImageSampler
-          vk::WriteDescriptorSet {
-            .dstSet = static_cast<vk::DescriptorSet>(mat.descriptorSets[i]),
-            .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1,
-            .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo
-          },
-        };
-        // Write the descriptor sets to the GPU
-        device.updateDescriptorSets(descriptorWrites, {});
-      }
-      matIdx++;
+      vk::WriteDescriptorSet asWrite {
+        .pNext = &asInfo,
+        .dstSet = globalDescriptorSets[i],
+        .dstBinding = 1,
+        .dstArrayElement = 0, 
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eAccelerationStructureKHR
+      };
+
+      vk::DescriptorBufferInfo indexBufferInfo {
+        .buffer = *indexBuffer.first,
+        .offset = 0,
+        .range = sizeof(uint32_t) * indices.size()
+      };
+
+      vk::WriteDescriptorSet indexBufferWrite {
+        .dstSet = globalDescriptorSets[i],
+        .dstBinding = 2,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eStorageBuffer,
+        .pBufferInfo = &indexBufferInfo
+      };
+
+      vk::DescriptorBufferInfo uvBufferInfo {
+        .buffer = *uvBuffer.first,
+        .offset = 0,
+        .range = sizeof(glm::vec2) * vertices.size()
+      };
+
+      vk::WriteDescriptorSet uvBufferWrite {
+        .dstSet = globalDescriptorSets[i],
+        .dstBinding = 3,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eStorageBuffer,
+        .pBufferInfo = &uvBufferInfo
+      };
+
+      // vk::DescriptorBufferInfo instanceLUTBufferInfo {
+      //   .buffer = *instanceLUTBuffer.first,
+      //   .offset = 0,
+      //   .range = sizeof(InstanceLUT) * instanceLUTs.size()
+      // };
+
+      // vk::WriteDescriptorSet instanceLUTBufferWrite {
+      //   .dstSet = globalDescriptorSets[i],
+      //   .dstBinding = 4,
+      //   .dstArrayElement = 0,
+      //   .descriptorCount = 1,
+      //   .descriptorType = vk::DescriptorType::eStorageBuffer,
+      //   .pBufferInfo = &instanceLUTBufferInfo
+      // };
+
+      // std::array<vk::WriteDescriptorSet, 5> descriptorWrites = 
+      //   { bufferWrite, asWrite, indexBufferWrite, uvBufferWrite, instanceLUTBufferWrite };
+
+      std::array<vk::WriteDescriptorSet, 4> descriptorWrites = 
+        { bufferWrite, asWrite, indexBufferWrite, uvBufferWrite };
+
+
+      // Write the descriptor sets to the GPU
+      device.updateDescriptorSets(descriptorWrites, {});
     }
+
+    std::vector<uint32_t> variableCounts = { static_cast<uint32_t>(textureImageViews.size()) };
+    vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountInfo = {
+      .descriptorSetCount = 1,
+      .pDescriptorCounts = variableCounts.data()
+    };
+
+    std::vector<vk::DescriptorSetLayout> layouts { *descriptorSetLayoutMaterial };
+
+    vk::DescriptorSetAllocateInfo matAllocInfo {
+      .pNext = &variableCountInfo,
+      .descriptorPool = *graphicsDescriptorPool,
+      .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+      .pSetLayouts = layouts.data(),
+    };
+
+    materialDescriptorSets = device.allocateDescriptorSets(matAllocInfo);
+
+    vk::DescriptorImageInfo samplerInfo {
+      .sampler = textureSampler
+    };
+
+    vk::WriteDescriptorSet samplerWrite {
+      .dstSet = materialDescriptorSets[0],
+      .dstBinding = 0,
+      .dstArrayElement = 0,
+      .descriptorCount = 1,
+      .descriptorType = vk::DescriptorType::eSampler,
+      .pImageInfo = &samplerInfo
+    };
+
+    device.updateDescriptorSets({samplerWrite}, {});
+
+    std::vector<vk::DescriptorImageInfo> imageInfos;
+    imageInfos.reserve(textureImageViews.size());
+    for (auto& imageView: textureImageViews) {
+      vk::DescriptorImageInfo imageInfo {
+        .imageView = imageView,
+        .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+      };
+      imageInfos.push_back(imageInfo);
+    }
+
+    vk::WriteDescriptorSet materialWrite {
+      .dstSet = materialDescriptorSets[0],
+      .dstBinding = 1,
+      .dstArrayElement = 0,
+      .descriptorCount = static_cast<uint32_t>(imageInfos.size()),
+      .descriptorType = vk::DescriptorType::eSampledImage,
+      .pImageInfo = imageInfos.data()
+    };
+
+    device.updateDescriptorSets({materialWrite}, {});
   }
 }
 
@@ -1952,8 +2126,19 @@ void App::CreateGraphicsPipeline()
     .stencilTestEnable = vk::False
   };
 
+  std::array descriptorSetLayouts = { *descriptorSetLayoutGlobal, *descriptorSetLayoutMaterial };
+
+  vk::PushConstantRange pushConstantRange {
+    .stageFlags = vk::ShaderStageFlagBits::eFragment,
+    .offset = 0,
+    .size = sizeof(PushConstant)
+  };
+
   // Which DescriptorSetLayouts will be used by this pipeline
-  vk::PipelineLayoutCreateInfo pipelineLayoutInfo { .setLayoutCount = 1, .pSetLayouts = &*descriptorSetLayout };
+  vk::PipelineLayoutCreateInfo pipelineLayoutInfo { 
+    .setLayoutCount = 2, .pSetLayouts = descriptorSetLayouts.data(),
+    .pushConstantRangeCount = 1, .pPushConstantRanges = &pushConstantRange
+  };
   graphicsPipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 
   // Which attachments are involved
@@ -2359,10 +2544,15 @@ void App::LoadGeometry()
   meshes.clear();
   meshes.resize(asset->meshes_count); // We know how many meshes there are
 
+  uint32_t indexOffset = 0;
+
   for (cgltf_size meshIt = 0; meshIt < asset->meshes_count; meshIt++) {
     auto m = &asset->meshes[meshIt];
+
     for (cgltf_size primIt = 0; primIt < m->primitives_count; primIt++) {
       auto p = &m->primitives[primIt];
+
+      uint32_t startOffset = indexOffset;
 
       // An array where each index's value is its index e.g. { 0, 1, 2, 3 }
       auto matIdxs = std::views::iota(cgltf_size{ 0 }, asset->materials_count);
@@ -2420,6 +2610,8 @@ void App::LoadGeometry()
           );
         }
         
+        indexOffset = indices.size();
+
         // finished with the unpacked_indices
         free(unpacked_indices);
       }
@@ -2469,15 +2661,15 @@ void App::LoadGeometry()
         vertices[v_offset + i].norm = norms[i];
       }
 
-      // submeshes.push_back({
-      //   .indexOffset = startOffset,
-      //   .indexCount = indexCount,
-      //   .materialID = globalMaterialID,
-      //   .firstVertex = 0u,
-      //   .maxVertex = localMaxV + 1,
-      //   .alphaCut = p->material->alpha_mode > cgltf_alpha_mode_opaque,
-      //   .reflective = p->material->has_specular
-      // });
+      submeshes.push_back({
+        .indexOffset = startOffset,
+        .indexCount = indexOffset - startOffset,
+        .materialID = static_cast<int>(*matIt),
+        .firstVertex = 0u,
+        .maxVertex = static_cast<uint32_t>(vertices.size()),
+        .alphaCut = p->material->alpha_mode > cgltf_alpha_mode_opaque,
+        .reflective = p->material->has_specular == 1
+      });
     }
   }
 
@@ -2770,33 +2962,47 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
   // STATIC MODELS
   {
     commandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline.second);
-
     commandBuffers[currentFrame].bindVertexBuffers(0, *vertexBuffer.first, { 0 });
+    commandBuffers[currentFrame].bindIndexBuffer(*indexBuffer.first, 0, vk::IndexType::eUint32);
+    commandBuffers[currentFrame].bindDescriptorSets(
+      vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 0, *globalDescriptorSets[currentFrame], nullptr);
+    commandBuffers[currentFrame].bindDescriptorSets(
+      vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
 
-    for (auto& mat : mats) {
-      if (mat.doubleSided) continue; // all the double sided materials have transparent pixels
-      commandBuffers[currentFrame].bindIndexBuffer(*mat.indexBuffer.first, 0, vk::IndexType::eUint32);
-      commandBuffers[currentFrame].bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        graphicsPipeline.first,
-        0,
-        *mat.descriptorSets[currentFrame],
-        nullptr
-      );
-      commandBuffers[currentFrame].drawIndexed(static_cast<uint32_t>(mat.indices.size()), 1, 0, 0, 0);
+    for (auto& submesh: submeshes) {
+      PushConstant pushConstant {
+        .materialIndex = static_cast<uint32_t>(submesh.materialID),
+        .reflective = submesh.reflective
+      };
+      commandBuffers[currentFrame].pushConstants<PushConstant>(
+        *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
+      commandBuffers[currentFrame].drawIndexed(submesh.indexCount, 1, submesh.indexOffset, 0, 0);
     }
-    // Draw transparent materials last
-    for (auto& mat : mats_DS) {
-      commandBuffers[currentFrame].bindIndexBuffer(*mat->indexBuffer.first, 0, vk::IndexType::eUint32);
-      commandBuffers[currentFrame].bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        graphicsPipeline.first,
-        0,
-        *mat->descriptorSets[currentFrame],
-        nullptr
-      );
-      commandBuffers[currentFrame].drawIndexed(static_cast<uint32_t>(mat->indices.size()), 1, 0, 0, 0);
-    }
+
+    // for (auto& mat : mats) {
+    //   if (mat.doubleSided) continue; // all the double sided materials have transparent pixels
+    //   commandBuffers[currentFrame].bindIndexBuffer(*mat.indexBuffer.first, 0, vk::IndexType::eUint32);
+    //   commandBuffers[currentFrame].bindDescriptorSets(
+    //     vk::PipelineBindPoint::eGraphics,
+    //     graphicsPipeline.first,
+    //     0,
+    //     *mat.descriptorSets[currentFrame],
+    //     nullptr
+    //   );
+    //   commandBuffers[currentFrame].drawIndexed(static_cast<uint32_t>(mat.indices.size()), 1, 0, 0, 0);
+    // }
+    // // Draw transparent materials last
+    // for (auto& mat : mats_DS) {
+    //   commandBuffers[currentFrame].bindIndexBuffer(*mat->indexBuffer.first, 0, vk::IndexType::eUint32);
+    //   commandBuffers[currentFrame].bindDescriptorSets(
+    //     vk::PipelineBindPoint::eGraphics,
+    //     graphicsPipeline.first,
+    //     0,
+    //     *mat->descriptorSets[currentFrame],
+    //     nullptr
+    //   );
+    //   commandBuffers[currentFrame].drawIndexed(static_cast<uint32_t>(mat->indices.size()), 1, 0, 0, 0);
+    // }
   }
 
   // COMPUTE RESULTS

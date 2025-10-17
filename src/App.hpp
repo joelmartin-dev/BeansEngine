@@ -43,7 +43,6 @@ const std::vector validationLayers = { // not array; vector allows implicit typi
 #include "Measurement.hpp" // Real-time performance metrics
 #include "Model.hpp" // Alias structures for glTF data
 #include "Vertex.hpp" // Hashable Vertex primitive, with position, colour and uvs
-#include "Particle.hpp" // Hashable Particle primitive, with position and colour
 #include "RadianceStructs.hpp" // Vertex2D + Scene, with position and emissive colour
 #include "BufferStructs.hpp" // Structs for passing data to shaders
 
@@ -59,10 +58,13 @@ constexpr uint32_t LIGHT_COUNT = 8;
 
 // Default asset paths
 static char model_path[256] = "assets/sponza/Sponza.gltf";
+#ifndef REFERENCE
 static char slang_path[256] = "assets/shaders/shader.slang";
+#else
+static char slang_path[256] = "assets/shaders/reference.slang";
+#endif
 static char spirv_path[256] = "assets/shaders/shader.spv";
-static char ref_slang_path[256] = "assets/shaders/reference.slang";
-static char ref_spirv_path[256] = "assets/shaders/reference.spv";
+
 #ifdef RESTIR
 static char compute_slang_path[256] = "assets/shaders/pt.slang";
 #else
@@ -194,7 +196,8 @@ struct App {
   uint32_t semaphoreIndex = 0;
   
   // CreateDescriptorSetLayouts
-  vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
+  vk::raii::DescriptorSetLayout descriptorSetLayoutGlobal = nullptr;
+  vk::raii::DescriptorSetLayout descriptorSetLayoutMaterial = nullptr;
   vk::raii::DescriptorSetLayout computeDescriptorSetLayout = nullptr;
   
   // InitSlang
@@ -293,6 +296,8 @@ struct App {
   vk::raii::DescriptorPool computeDescriptorPool = nullptr;
   
   // CreateDescriptorSets (stored inside Material and Quad)
+  std::vector<vk::raii::DescriptorSet> globalDescriptorSets;
+  std::vector<vk::raii::DescriptorSet> materialDescriptorSets;
   std::vector<vk::raii::DescriptorSet> computeDescriptorSets;
 
   // CreateComputeDescriptorSets
@@ -308,6 +313,9 @@ struct App {
   // Extra objects
   RenderTarget radianceCascadesOutput;
   Scene scene;
+#ifndef _WIN32
+  bool useWayland;
+#endif
 
   void Run();
 
@@ -332,11 +340,11 @@ struct App {
   void CreateCommandBuffers();
   void CreateComputeCommandBuffers();
   void CreateSyncObjects();
+  void LoadGLTF(const std::filesystem::path& path);
   void CreateDescriptorSetLayouts();
   void InitSlang();
   void CreatePipelines();
   void CreateUniformBuffers();
-  void LoadGLTF(const std::filesystem::path& path);
   void CreateVertexBuffers();
   void CreateIndexBuffers();
   void CreateUVBuffer();
