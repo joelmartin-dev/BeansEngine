@@ -51,7 +51,7 @@ CXX_FLAGS := $(CXX_VERSION)
 C_VERSION := -std=c17
 C_FLAGS := $(C_VERSION)
 
-LD_FLAGS := -L$(VULKAN_SDK)/lib -lslang -lslang-rt -L$(LIB_DIR) -lglfw3 -lvolk -lktx_read
+LD_FLAGS := -L$(LIB_DIR) -lglfw3 -lvolk -lktx_read -lslang -lslang-rt
 
 # $@ is target name
 # $^ is all prerequisites

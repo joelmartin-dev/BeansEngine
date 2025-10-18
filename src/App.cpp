@@ -1465,6 +1465,10 @@ void App::CreateAccelerationStructures()
     };
 
     instances.push_back(instance);
+
+    instances[i].instanceCustomIndex = static_cast<uint32_t>(i);
+
+    instanceLUTs.push_back({ static_cast<uint32_t>(submesh.materialID), submesh.indexOffset });
   }
 
   vk::DeviceSize instBufferSize = sizeof(instances[0]) * instances.size();
@@ -1569,7 +1573,6 @@ void App::CreateAccelerationStructures()
 
 void App::CreateInstanceLUTBuffer()
 {
-  instanceLUTs.resize(1);
   vk::DeviceSize bufferSize = sizeof(InstanceLUT) * instanceLUTs.size();
 
   vk::raii::Buffer stagingBuffer({});

@@ -71,8 +71,21 @@ PushConstant pc;
 static const float EPSILON = 0.01;
 
 float2 intersection_uv(uint instanceID, uint primIndex, float2 barycentrics) {
-    // TASK10
-    return float2(0.0, 0.0);
+    uint indexOffset = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].indexBufferOffset;
+
+    uint i0 = indexBuffer[indexOffset + (primIndex * 3 + 0)];
+    uint i1 = indexBuffer[indexOffset + (primIndex * 3 + 1)];
+    uint i2 = indexBuffer[indexOffset + (primIndex * 3 + 2)];
+
+    float2 uv0 = uvBuffer[i0];
+    float2 uv1 = uvBuffer[i1];
+    float2 uv2 = uvBuffer[i2];
+
+    float w0 = 1.0 - barycentrics.x - barycentrics.y;
+    float w1 = barycentrics.x;
+    float w2 = barycentrics.y;
+
+    return w0 * uv0 + w1 * uv1 + w2 * uv2;
 }
 
 void apply_reflection(float3 P, float3 N, inout float4 baseColor) {
