@@ -61,11 +61,11 @@ Texture2D<float4> textures[];
 
 struct PushConstant {
     uint materialIndex;
+    uint reflective;
+    float3 lightDir;
 };
 [push_constant]
 PushConstant pc;
-
-static const float3 lightDir = float3(-6.0, 0.0, 6.0);
 
 // Small epsilon to avoid self-intersection
 static const float EPSILON = 0.01;
@@ -82,7 +82,42 @@ void apply_reflection(float3 P, float3 N, inout float4 baseColor) {
 // TASK05: Implement ray query shadows
 bool in_shadow(float3 P)
 {
-    bool hit = false;
+    // Build the shadow ray from the world position toward the light
+    RayDesc shadowRayDesc;
+    shadowRayDesc.Origin = P;
+    shadowRayDesc.Direction = normalize(pc.lightDir);
+    shadowRayDesc.TMin = EPSILON;
+    shadowRayDesc.TMax = 1e4;
+
+    // Initialize a ray query for shadows
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES |
+             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
+    let rayFlags = RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES |
+                   RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
+
+    sq.TraceRayInline(accelerationStructure, rayFlags, 0xFF, shadowRayDesc);
+
+    while (sq.Proceed())
+    {
+        uint instanceID = sq.CandidateRayInstanceCustomIndex();
+        uint primIndex = sq.CandidatePrimitiveIndex();
+
+        float2 uv = intersection_uv(instanceID, primIndex, sq.CandidateTriangleBarycentrics());
+
+        uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
+        float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, 0);
+
+        if (intersectionColor.a < 0.5) {
+            // If the triangle is transparent, we continue to trace
+            // to find the next opaque triangle.
+        } else {
+            // If we hit an opaque triangle, we stop tracing.
+            sq.CommitNonOpaqueTriangleHit();
+        }
+    }
+
+    // If the shadow ray intersects an opaque triangle, we consider the pixel in shadow
+    bool hit = (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
 
     return hit;
 }
@@ -90,6 +125,19 @@ bool in_shadow(float3 P)
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET {
    float4 baseColor = textures[pc.materialIndex].Sample(textureSampler, vertIn.fragTexCoord);
+
+   if (baseColor.a < 0.5) discard;
+
+   float3 P = vertIn.worldPos;
+
+   bool inShadow = in_shadow(P);
+
+   // Darken if in shadow
+   if (inShadow) {
+       baseColor.rgb *= 0.1;
+   }
+
+
 
    return baseColor;
 }

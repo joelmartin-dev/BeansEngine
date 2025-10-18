@@ -12,8 +12,10 @@
 int main(int argc, char** argv)
 {
   App app = {};
+#ifndef _WIN32
   if (argc > 1) app.useWayland = false;
   else app.useWayland = true;
+#endif
 
   try
   {
@@ -30,7 +32,7 @@ int main(int argc, char** argv)
 #ifdef _WIN32
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    main();
+    main(0, "");
     return 0;
 }
 #endif

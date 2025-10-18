@@ -20,6 +20,7 @@ struct TimePC {
 struct PushConstant {
   uint32_t materialIndex;
   uint32_t reflective;
+  glm::aligned_vec3 lightDir;
 };
 
 struct SubMesh {

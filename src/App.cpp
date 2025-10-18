@@ -278,7 +278,7 @@ void App::InitVulkan()
   CreateUVBuffer();
 #ifdef REFERENCE
   CreateAccelerationStructures();
-  //CreateInstanceLUTBuffer();
+  CreateInstanceLUTBuffer();
 #endif
 
   CreatePathTracingTexture();
@@ -349,6 +349,8 @@ void App::MainLoop()
 
   double xpos, ypos; // cursor position
 
+  lightDir = glm::vec3(0.0f, 1.0f, 0.0f);
+
   auto frameStart = std::chrono::system_clock::now(); // time at start of loop (including input polling, ui updating)
   auto frameEnd = std::chrono::system_clock::time_point::max(); // time at end of loop
 
@@ -402,6 +404,14 @@ void App::MainLoop()
       
       ImGui::SliderFloat("Shift Speed", &camera.shiftSpeed, 0.01f, 4.0f);
       ImGui::SliderInt("Delta Mult", &deltaExp, 0, 32);
+
+      ImGui::Spacing();
+
+      ImGui::Text("Light Direction");
+      ImGui::SliderFloat("LX", &lightDir.x, -1.0f, 1.0f);
+      ImGui::SliderFloat("LY", &lightDir.y, -1.0f, 1.0f);
+      ImGui::SliderFloat("LZ", &lightDir.z, -1.0f, 1.0f);
+
       ImGui::End();
     }
     // SHADER PATHS
@@ -1039,13 +1049,15 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eFragment,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
-      // vk::DescriptorSetLayoutBinding(
-      //   4,                                    // Binding
-      //   vk::DescriptorType::eStorageBuffer,   // Descriptor Type
-      //   1,                                    // Descriptors Count
-      //   vk::ShaderStageFlagBits::eFragment,   // Stage Flags
-      //   nullptr                               // pImmutableSamplers
-      // ),
+#ifdef REFERENCE
+      vk::DescriptorSetLayoutBinding(
+        4,                                    // Binding
+        vk::DescriptorType::eStorageBuffer,   // Descriptor Type
+        1,                                    // Descriptors Count
+        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
+        nullptr                               // pImmutableSamplers
+      ),
+#endif
     };
 
     // Copy the bindings into the layout info
@@ -1369,7 +1381,7 @@ void App::CreateAccelerationStructures()
     vk::AccelerationStructureGeometryKHR blasGeometry{
       .geometryType = vk::GeometryTypeKHR::eTriangles,
       .geometry = geometryData,
-      .flags = vk::GeometryFlagBitsKHR::eOpaque
+      .flags = submesh.alphaCut ? vk::GeometryFlagsKHR(0) : vk::GeometryFlagBitsKHR::eOpaque
     };
 
     vk::AccelerationStructureBuildGeometryInfoKHR blasBuildGeometryInfo{
@@ -1557,6 +1569,7 @@ void App::CreateAccelerationStructures()
 
 void App::CreateInstanceLUTBuffer()
 {
+  instanceLUTs.resize(1);
   vk::DeviceSize bufferSize = sizeof(InstanceLUT) * instanceLUTs.size();
 
   vk::raii::Buffer stagingBuffer({});
@@ -1809,23 +1822,20 @@ void App::CreateDescriptorSets()
         .pBufferInfo = &uvBufferInfo
       };
 
-      // vk::DescriptorBufferInfo instanceLUTBufferInfo {
-      //   .buffer = *instanceLUTBuffer.first,
-      //   .offset = 0,
-      //   .range = sizeof(InstanceLUT) * instanceLUTs.size()
-      // };
+      vk::DescriptorBufferInfo instanceLUTBufferInfo {
+        .buffer = *instanceLUTBuffer.first,
+        .offset = 0,
+        .range = sizeof(InstanceLUT) * instanceLUTs.size()
+      };
 
-      // vk::WriteDescriptorSet instanceLUTBufferWrite {
-      //   .dstSet = globalDescriptorSets[i],
-      //   .dstBinding = 4,
-      //   .dstArrayElement = 0,
-      //   .descriptorCount = 1,
-      //   .descriptorType = vk::DescriptorType::eStorageBuffer,
-      //   .pBufferInfo = &instanceLUTBufferInfo
-      // };
-
-      // std::array<vk::WriteDescriptorSet, 5> descriptorWrites = 
-      //   { bufferWrite, asWrite, indexBufferWrite, uvBufferWrite, instanceLUTBufferWrite };
+      vk::WriteDescriptorSet instanceLUTBufferWrite {
+        .dstSet = globalDescriptorSets[i],
+        .dstBinding = 4,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eStorageBuffer,
+        .pBufferInfo = &instanceLUTBufferInfo
+      };
 
       std::array descriptorWrites = {
         bufferWrite, 
@@ -1833,9 +1843,11 @@ void App::CreateDescriptorSets()
         asWrite,
 #endif 
         indexBufferWrite, 
-        uvBufferWrite 
+        uvBufferWrite,
+#ifdef REFERENCE
+        instanceLUTBufferWrite
+#endif
       };
-
 
       // Write the descriptor sets to the GPU
       device.updateDescriptorSets(descriptorWrites, {});
@@ -2723,6 +2735,10 @@ void App::CompileShader(const char* src, const char* dst)
     slang::CompilerOptionEntry {
       .name = slang::CompilerOptionName::MatrixLayoutColumn,
       .value = slang::CompilerOptionValue {.intValue0 = true }
+    },
+    slang::CompilerOptionEntry {
+      .name = slang::CompilerOptionName::Capability,
+      .value = slang::CompilerOptionValue {.intValue0 = globalSession->findCapability("spvRayQueryKHR")}
     }
   };
   sessionDesc.compilerOptionEntries = compilerOptionEntries.data();
@@ -2949,7 +2965,8 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
     for (auto& submesh: submeshes) {
       PushConstant pushConstant {
         .materialIndex = static_cast<uint32_t>(submesh.materialID),
-        .reflective = submesh.reflective
+        .reflective = submesh.reflective,
+        .lightDir = lightDir
       };
       commandBuffers[currentFrame].pushConstants<PushConstant>(
         *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);

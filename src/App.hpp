@@ -314,6 +314,7 @@ struct App {
 #ifndef _WIN32
   bool useWayland;
 #endif
+  glm::vec3 lightDir;
 
   void Run();
 
