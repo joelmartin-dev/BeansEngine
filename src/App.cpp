@@ -276,6 +276,7 @@ void App::InitVulkan()
   CreateVertexBuffers();
   CreateIndexBuffers();
   CreateUVBuffer();
+  CreateNrmBuffer();
 #ifdef REFERENCE
   CreateAccelerationStructures();
   CreateInstanceLUTBuffer();
@@ -445,6 +446,8 @@ void App::MainLoop()
 
     // we have to set delta here because the next logical line in the loop will set frameStart
     delta = std::chrono::duration_cast<std::chrono::microseconds>(frameEnd - frameStart).count();
+    runtime = static_cast<float>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - start).count());
   }
   device.waitIdle();
 }
@@ -465,12 +468,12 @@ void App::Cleanup()
 
   submeshes.clear();
   
-  {
-    radianceCascadesOutput.graphicsPipeline = std::pair(nullptr, nullptr);
-    radianceCascadesOutput.descriptorSets.clear();
-    radianceCascadesOutput.descriptorSetLayout = nullptr;
-    radianceCascadesOutput.descriptorPool = nullptr;
-  }
+  // {
+  //   gIOutput.graphicsPipeline = std::pair(nullptr, nullptr);
+  //   gIOutput.descriptorSets.clear();
+  //   gIOutput.descriptorSetLayout = nullptr;
+  //   gIOutput.descriptorPool = nullptr;
+  // }
 
   globalDescriptorSets.clear();
   materialDescriptorSets.clear();
@@ -556,7 +559,7 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(
   void*
 )
 {
-  if ((severity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) == severity)
+  if ((severity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) == severity)// | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo) == severity)
     std::cerr << "validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
 
   return vk::False;
@@ -1023,7 +1026,7 @@ void App::CreateDescriptorSetLayouts()
         vk::DescriptorType::eUniformBuffer,   // Descriptor Type
         1,                                    // Descriptors Count
         vk::ShaderStageFlagBits::eVertex | 
-        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
+        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
 #ifdef REFERENCE
@@ -1031,7 +1034,7 @@ void App::CreateDescriptorSetLayouts()
         1,                                    // Binding
         vk::DescriptorType::eAccelerationStructureKHR,   // Descriptor Type
         1,                                    // Descriptors Count
-        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
+        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
 #endif
@@ -1039,25 +1042,46 @@ void App::CreateDescriptorSetLayouts()
         2,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
         1,                                    // Descriptors Count
-        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
+        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
       vk::DescriptorSetLayoutBinding(
         3,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
         1,                                    // Descriptors Count
-        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
+        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
-#ifdef REFERENCE
       vk::DescriptorSetLayoutBinding(
         4,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
         1,                                    // Descriptors Count
-        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
+        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
+        nullptr                               // pImmutableSamplers
+      ),
+#ifdef REFERENCE
+      vk::DescriptorSetLayoutBinding(
+        5,                                    // Binding
+        vk::DescriptorType::eStorageBuffer,   // Descriptor Type
+        1,                                    // Descriptors Count
+        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
 #endif
+      vk::DescriptorSetLayoutBinding(
+        6,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        nullptr
+      ),
+      vk::DescriptorSetLayoutBinding(
+        7,
+        vk::DescriptorType::eStorageImage,
+        1,
+        vk::ShaderStageFlagBits::eCompute,
+        nullptr
+      )
     };
 
     // Copy the bindings into the layout info
@@ -1077,14 +1101,14 @@ void App::CreateDescriptorSetLayouts()
         0,
         vk::DescriptorType::eSampler,
         1,
-        vk::ShaderStageFlagBits::eFragment,
+        vk::ShaderStageFlagBits::eCompute,
         nullptr
       ),
       vk::DescriptorSetLayoutBinding(
         1,
         vk::DescriptorType::eSampledImage,
         textureCount,
-        vk::ShaderStageFlagBits::eFragment,
+        vk::ShaderStageFlagBits::eCompute,
         nullptr
       ),
     };
@@ -1110,38 +1134,6 @@ void App::CreateDescriptorSetLayouts()
 
     descriptorSetLayoutMaterial = vk::raii::DescriptorSetLayout(device, matLayoutInfo);
   }
-
-  // PATH TRACING
-  {
-    std::array radianceBindings = {
-      // The bindings will actually use the same Image, but with different access types
-      // Writing access in the compute stage
-      vk::DescriptorSetLayoutBinding(
-        0,
-        vk::DescriptorType::eStorageImage,
-        1,
-        vk::ShaderStageFlagBits::eCompute,
-        nullptr
-      ),
-      // Sampling access in the fragment stage
-      vk::DescriptorSetLayoutBinding(
-        1,
-        vk::DescriptorType::eCombinedImageSampler,
-        1,
-        vk::ShaderStageFlagBits::eFragment,
-        nullptr
-      ),
-    };
-
-    // Copy the bindings to layout info
-    vk::DescriptorSetLayoutCreateInfo radianceLayoutInfo{
-      .bindingCount = static_cast<uint32_t>(radianceBindings.size()),
-      .pBindings = radianceBindings.data()
-    };
-
-    // Initialise
-    radianceCascadesOutput.descriptorSetLayout = vk::raii::DescriptorSetLayout(device, radianceLayoutInfo);
-  }
 }
 
 // Initialise a Global Slang Session, allowing Slang to SPIR-V compilation in-app at runtime
@@ -1161,7 +1153,6 @@ void App::InitSlang()
 void App::CreatePipelines()
 {
   CreateGraphicsPipeline();
-  CreateComputeGraphicsPipeline();
   CreateComputePipeline();
 }
 
@@ -1225,8 +1216,8 @@ void App::CreatePathTracingTexture()
 {
   // Create the Image on the GPU
   CreateImage(
-    WIDTH, HEIGHT, 1,
-    vk::Format::eR16G16B16A16Sfloat, vk::ImageTiling::eOptimal,
+    swapChainExtent.width, swapChainExtent.height, 1,
+    vk::Format::eR32G32B32A32Sfloat, vk::ImageTiling::eOptimal,
     vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
     vk::MemoryPropertyFlagBits::eDeviceLocal,
     pathTracingTexture.first, pathTracingTexture.second
@@ -1238,7 +1229,7 @@ void App::CreatePathTracingTexture()
   // Create a view for the Image
   pathTracingTextureView = CreateImageView(
     pathTracingTexture.first,
-    vk::Format::eR16G16B16A16Sfloat,
+    vk::Format::eR32G32B32A32Sfloat,
     vk::ImageAspectFlagBits::eColor,
     1
   );
@@ -1343,6 +1334,46 @@ void App::CreateUVBuffer()
 
   // Copy the host-visible buffer to the non-host-visible buffer
   CopyBuffer(stagingBuffer, uvBuffer.first, bufferSize);
+}
+
+void App::CreateNrmBuffer()
+{
+  // Extract the normals (with 1 padding float to align data for GPU)
+  std::vector<glm::aligned_vec4> nrms;
+  nrms.reserve(vertices.size());
+  for (auto& v : vertices) nrms.push_back(glm::aligned_vec4(v.norm, 1.0));
+  
+  vk::DeviceSize bufferSize = sizeof(nrms[0]) * nrms.size();
+
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
+
+  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
+  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eTransferSrc,
+    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+    stagingBuffer, stagingBufferMemory
+  );
+
+  // Map and copy our loaded vertices data to the GPU host-visible memory
+  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(dataStaging, nrms.data(), (size_t)bufferSize);
+  // We don't need to access this buffer anymore, unmap
+  stagingBufferMemory.unmapMemory();
+
+  // Create a Normals Buffer in DEVICE_LOCAL memory not necessarily visible to host
+  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    nrmBuffer.first, nrmBuffer.second
+  );
+
+  // Copy the host-visible buffer to the non-host-visible buffer
+  CopyBuffer(stagingBuffer, nrmBuffer.first, bufferSize);
 }
 
 void App::CreateAccelerationStructures()
@@ -1622,6 +1653,8 @@ void App::CreateDescriptorPools()
       vk::DescriptorPoolSize(vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT),
 #endif
       vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
+      vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT),
+      vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, MAX_FRAMES_IN_FLIGHT),
       vk::DescriptorPoolSize(vk::DescriptorType::eSampler, MAX_FRAMES_IN_FLIGHT),
       vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage, static_cast<uint32_t>(mats.size())),
     };
@@ -1639,27 +1672,6 @@ void App::CreateDescriptorPools()
 
     // Initialise pool
     graphicsDescriptorPool = vk::raii::DescriptorPool(device, graphicsPoolInfo);
-  }
-  // PATH TRACING
-  {
-    // We need at least 1 Uniform Buffer, 1 StorageImage and 1 CombinedImageSampler per frame in flight
-    std::array computePoolSizes = {
-      vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, MAX_FRAMES_IN_FLIGHT),
-      vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT),
-    };
-
-    vk::DescriptorPoolCreateInfo computePoolInfo {
-      // DescriptorSets can be individually freed
-      .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
-      // We need at least one descriptor set per frame in flight
-      .maxSets = MAX_FRAMES_IN_FLIGHT,
-      // Attach the DescriptorPoolSizes
-      .poolSizeCount = static_cast<uint32_t>(computePoolSizes.size()),
-      .pPoolSizes = computePoolSizes.data()
-    };
-
-    // Initialise pool
-    radianceCascadesOutput.descriptorPool = vk::raii::DescriptorPool(device, computePoolInfo);
   }
 #ifdef _DEBUG
   // IMGUI DEBUG PANELS
@@ -1699,54 +1711,6 @@ void App::CreateDescriptorPools()
 // Collation of Descriptors for shaders
 void App::CreateDescriptorSets()
 {
-  // PATH TRACING (Vertex and Fragment Stages)
-  {
-    // MAX_FRAMES_IN_FLIGHT copies of DescriptorSetLayout
-    std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *radianceCascadesOutput.descriptorSetLayout);
-
-    // Collate the relevant info (DescriptorPool and DescriptorSetLayouts)
-    vk::DescriptorSetAllocateInfo allocInfo {
-      .descriptorPool = static_cast<vk::DescriptorPool>(radianceCascadesOutput.descriptorPool),
-      .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
-      .pSetLayouts = layouts.data(),
-    };
-    
-    radianceCascadesOutput.descriptorSets.clear();
-    radianceCascadesOutput.descriptorSets = device.allocateDescriptorSets(allocInfo);
-
-    // Fill in the descriptor sets
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-      // Writable interface for image
-      vk::DescriptorImageInfo imageInfo {
-        .imageView = static_cast<vk::ImageView>(pathTracingTextureView),
-        .imageLayout = vk::ImageLayout::eGeneral,
-      };
-      // Samplable interface for image
-      vk::DescriptorImageInfo samplerInfo {
-        .sampler = textureSampler,
-        .imageView = static_cast<vk::ImageView>(pathTracingTextureView),
-        .imageLayout = vk::ImageLayout::eGeneral,
-      };
-
-      // Link descriptor set, binding and resource together
-      std::array descriptorWrites = {
-        // Image as StorageImage
-        vk::WriteDescriptorSet{
-          .dstSet = static_cast<vk::DescriptorSet>(radianceCascadesOutput.descriptorSets[i]),
-          .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
-          .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfo
-        },
-        // Image as CombinedImageSampler
-        vk::WriteDescriptorSet{
-          .dstSet = static_cast<vk::DescriptorSet>(radianceCascadesOutput.descriptorSets[i]),
-          .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1,
-          .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &samplerInfo
-        },
-      };
-      // Write the descriptor sets to the GPU
-      device.updateDescriptorSets(descriptorWrites, {});
-    }
-  }
   // STANDARD 3D MODELS
   {
     // MAX_FRAMES_IN_FLIGHT copies of DescriptorSetLayout
@@ -1825,6 +1789,21 @@ void App::CreateDescriptorSets()
         .pBufferInfo = &uvBufferInfo
       };
 
+      vk::DescriptorBufferInfo nrmBufferInfo {
+        .buffer = *nrmBuffer.first,
+        .offset = 0,
+        .range = sizeof(glm::aligned_vec4) * vertices.size()
+      };
+
+      vk::WriteDescriptorSet nrmBufferWrite {
+        .dstSet = globalDescriptorSets[i],
+        .dstBinding = 4,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eStorageBuffer,
+        .pBufferInfo = &nrmBufferInfo
+      };
+
       vk::DescriptorBufferInfo instanceLUTBufferInfo {
         .buffer = *instanceLUTBuffer.first,
         .offset = 0,
@@ -1833,12 +1812,40 @@ void App::CreateDescriptorSets()
 
       vk::WriteDescriptorSet instanceLUTBufferWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 4,
+        .dstBinding = 5,
         .dstArrayElement = 0,
         .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .pBufferInfo = &instanceLUTBufferInfo
       };
+
+      // Samplable interface for image
+      vk::DescriptorImageInfo samplerInfo {
+        .sampler = textureSampler,
+        .imageView = static_cast<vk::ImageView>(pathTracingTextureView),
+        .imageLayout = vk::ImageLayout::eGeneral,
+      };
+      
+      // Image as CombinedImageSampler
+      vk::WriteDescriptorSet samplerWrite {
+        .dstSet = globalDescriptorSets[i],
+        .dstBinding = 6, .dstArrayElement = 0, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &samplerInfo
+      };
+
+      // Writable interface for image
+      vk::DescriptorImageInfo imageInfo {
+        .imageView = static_cast<vk::ImageView>(pathTracingTextureView),
+        .imageLayout = vk::ImageLayout::eGeneral,
+      };
+
+      // Image as StorageImage
+      vk::WriteDescriptorSet imageWrite {
+        .dstSet = globalDescriptorSets[i],
+        .dstBinding = 7, .dstArrayElement = 0, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfo
+      };
+
 
       std::array descriptorWrites = {
         bufferWrite, 
@@ -1847,9 +1854,12 @@ void App::CreateDescriptorSets()
 #endif 
         indexBufferWrite, 
         uvBufferWrite,
+        nrmBufferWrite,
 #ifdef REFERENCE
-        instanceLUTBufferWrite
+        instanceLUTBufferWrite,
 #endif
+        samplerWrite,
+        imageWrite
       };
 
       // Write the descriptor sets to the GPU
@@ -2024,6 +2034,7 @@ void App::DrawFrame()
 
   // move on to the next frame
   currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+  frame++;
 }
 
 // When the surface's resolution is updated/the swap chain has gone bad
@@ -2054,6 +2065,9 @@ void App::RecreateSwapChain()
   // Update the camera to reflect the new resolution
   camera.viewportWidth = static_cast<float>(swapChainExtent.width);
   camera.viewportHeight = static_cast<float>(swapChainExtent.height);
+
+  CreatePathTracingTexture();
+  ReloadShaders();
 }
 
 // The swap chain needs to be cleaned up in two places: RecreateSwapChain() and Cleanup()
@@ -2168,91 +2182,13 @@ void App::CreateGraphicsPipeline()
   graphicsPipeline.second = vk::raii::Pipeline(device, nullptr, pipelineInfo);
 }
 
-
-void App::CreateComputeGraphicsPipeline()
-{
-  // Reset the class member
-  radianceCascadesOutput.graphicsPipeline = std::pair(nullptr, nullptr);
-
-  // The GPU-ready compiled shader code
-  auto shaderModule = CreateShaderModule(ReadFile(compute_spirv_path));
-
-  // All the stages come from the same SPIR-V file, so same shaderModule
-  // Need to identify the entrypoint names: "vertMain", "fragMain"
-  vk::PipelineShaderStageCreateInfo vertShaderStageCreateInfo {
-    .stage = vk::ShaderStageFlagBits::eVertex,
-    .module = shaderModule,
-    .pName = "vertMain"
-  };
-  vk::PipelineShaderStageCreateInfo fragShaderStageCreateInfo {
-    .stage = vk::ShaderStageFlagBits::eFragment,
-    .module = shaderModule,
-    .pName = "fragMain"
-  };
-  std::array shaderStages = { vertShaderStageCreateInfo, fragShaderStageCreateInfo };
-
-  // Get the user-defined format of vertices. Ours is each entry is a vertex, not an instance
-  auto bindingDescription = Vertex::getBindingDescription();
-  // Vertices are comprised of float3 pos, float3 colour, float2 texCoord
-  auto attributesDescriptions = Vertex::getAttributeDescriptions();
-
-  // Combine all that vertex info
-  vk::PipelineVertexInputStateCreateInfo vertexInputInfo {
-    .vertexBindingDescriptionCount = 1,
-    .pVertexBindingDescriptions = &bindingDescription,
-    .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributesDescriptions.size()),
-    .pVertexAttributeDescriptions = attributesDescriptions.data()
-  };
-
-  // Parse indices as triangles by groups of 3 elements
-  vk::PipelineInputAssemblyStateCreateInfo inputAssemblyInfo { .topology = vk::PrimitiveTopology::eTriangleList };
-
-  const vk::PipelineDepthStencilStateCreateInfo depthStencil {
-    // We're not using the depthStencil in this pipeline
-    .depthTestEnable = vk::False, .depthWriteEnable = vk::False,
-    .depthCompareOp = vk::CompareOp::eLess,
-    .depthBoundsTestEnable = vk::False,
-    .stencilTestEnable = vk::False
-  };
-
-  // Which DescriptorSetLayouts will be used by this pipeline
-  vk::PipelineLayoutCreateInfo pipelineLayoutInfo {
-    .setLayoutCount = 1, .pSetLayouts = &*radianceCascadesOutput.descriptorSetLayout
-  };
-  radianceCascadesOutput.graphicsPipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
-
-  // Which attachments are involved
-  vk::PipelineRenderingCreateInfo pipelineRenderingInfo = {
-    .colorAttachmentCount = 1, .pColorAttachmentFormats = &swapChainSurfaceFormat,
-    .depthAttachmentFormat = FindDepthFormat()
-  };
-
-  // Collate all the info
-  vk::GraphicsPipelineCreateInfo graphicsPipelineInfo {
-    .pNext = &pipelineRenderingInfo,
-    .stageCount = static_cast<uint32_t>(shaderStages.size()),
-    .pStages = shaderStages.data(),
-    .pVertexInputState = &vertexInputInfo,
-    .pInputAssemblyState = &inputAssemblyInfo,
-    .pViewportState = &viewportInfo,
-    .pRasterizationState = &rasterizerInfo,
-    .pMultisampleState = &multisamplingInfo,
-    .pDepthStencilState = &depthStencil,
-    .pColorBlendState = &colorBlendInfo,
-    .pDynamicState = &dynamicInfo,
-    .layout = *radianceCascadesOutput.graphicsPipeline.first
-  };
-
-  radianceCascadesOutput.graphicsPipeline.second = vk::raii::Pipeline(device, nullptr, graphicsPipelineInfo);
-}
-
 void App::CreateComputePipeline()
 {
   // Reset the class member
   computePipeline = std::pair(nullptr, nullptr);
   
   // The GPU-ready compiled shader code
-  auto shaderModule = CreateShaderModule(ReadFile(compute_spirv_path));
+  auto shaderModule = CreateShaderModule(ReadFile(spirv_path));
 
   // All the stages come from the same SPIR-V file, so same shaderModule
   // Need to identify the entrypoint names: "compMain"
@@ -2262,16 +2198,17 @@ void App::CreateComputePipeline()
     .pName = "compMain"
   };
 
-  // We supply the compute stage with new time information each frame using the TimePC struct for push constants
+  std::array descriptorSetLayouts = { *descriptorSetLayoutGlobal, *descriptorSetLayoutMaterial };
+
   vk::PushConstantRange pushConstantRange {
     .stageFlags = vk::ShaderStageFlagBits::eCompute,
     .offset = 0,
-    .size = sizeof(TimePC)
+    .size = sizeof(PushConstant)
   };
 
   // Which DescriptorSetLayouts will be used by this pipeline
-  vk::PipelineLayoutCreateInfo pipelineLayoutInfo {
-    .setLayoutCount = 1, .pSetLayouts = &*radianceCascadesOutput.descriptorSetLayout,
+  vk::PipelineLayoutCreateInfo pipelineLayoutInfo { 
+    .setLayoutCount = 2, .pSetLayouts = descriptorSetLayouts.data(),
     .pushConstantRangeCount = 1, .pPushConstantRanges = &pushConstantRange
   };
   computePipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
@@ -2651,6 +2588,7 @@ void App::LoadGeometry()
         vertices[v_offset + i].pos = positions[i] * scale; // positions adjusted for model scale
         vertices[v_offset + i].texCoord = uvs[i];
         vertices[v_offset + i].norm = norms[i];
+        vertices[v_offset + i].colour = norms[i];
       }
 
       submeshes.push_back({
@@ -2833,6 +2771,7 @@ void App::ReloadShaders()
     fclose(f);
   }
 
+  frame = 0;
   // After the initial creation, this acts more like RecreatePipelines
   CreatePipelines();
 }
@@ -2844,10 +2783,14 @@ void App::UpdateModelViewProjection(uint32_t imageIndex)
   MVP mvp{};
   mvp.model = camera.GetModelMatrix();
   mvp.view = camera.GetViewMatrix();
+  mvp.invView = glm::inverse(mvp.view);
   mvp.proj = camera.GetProjMatrix();
-  mvp.pos = camera.GetPos();
+  mvp.invProj = glm::inverse(mvp.proj);
+  frame = (oldView != mvp.view) ? 0 : frame;
+
   // Copy the new data to the mapped data
   memcpy(mvpBuffersMapped[imageIndex], &mvp, sizeof(mvp));
+  oldView = mvp.view;
 }
 
 // Record commands for compute (dispatching)
@@ -2856,22 +2799,21 @@ void App::RecordComputeCommandBuffer()
   // Fairly simple, just dispatch a number of threads to work on a compute shader
   computeCommandBuffers[currentFrame].begin({});
   computeCommandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline.second);
+
   computeCommandBuffers[currentFrame].bindDescriptorSets(
-    vk::PipelineBindPoint::eCompute, computePipeline.first, 0,
-    // DescriptorSets (plural, so spoof multiple with initializer list)
-    { radianceCascadesOutput.descriptorSets[currentFrame] },
-    {}
-  );
-  TimePC pushConstant {
-    .deltaTime = static_cast<float>(delta) / 1000.0f,
-    .accumTime = static_cast<float>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - start).count()
-    ) / 1024.0f
+    vk::PipelineBindPoint::eCompute, *computePipeline.first, 0, *globalDescriptorSets[currentFrame], nullptr);
+  computeCommandBuffers[currentFrame].bindDescriptorSets(
+    vk::PipelineBindPoint::eCompute, *computePipeline.first, 1, *materialDescriptorSets[0], nullptr);
+
+  PushConstant pushConstant {
+    .frame = frame,
+    .time = runtime
   };
-  computeCommandBuffers[currentFrame].pushConstants<TimePC>(
+  computeCommandBuffers[currentFrame].pushConstants<PushConstant>(
     *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
+
   // For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
-  computeCommandBuffers[currentFrame].dispatch(WIDTH, HEIGHT, 1);  
+  computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / 32 + 1, swapChainExtent.height / 32 + 1, 1);  
   computeCommandBuffers[currentFrame].end();
 }
 
@@ -2956,40 +2898,45 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
   commandBuffers[currentFrame].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
 
   // STATIC MODELS
-  {
-    commandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline.second);
-    commandBuffers[currentFrame].bindVertexBuffers(0, *vertexBuffer.first, { 0 });
-    commandBuffers[currentFrame].bindIndexBuffer(*indexBuffer.first, 0, vk::IndexType::eUint32);
-    commandBuffers[currentFrame].bindDescriptorSets(
-      vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 0, *globalDescriptorSets[currentFrame], nullptr);
-    commandBuffers[currentFrame].bindDescriptorSets(
-      vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
+  // {
+  //   commandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline.second);
+  //   commandBuffers[currentFrame].bindVertexBuffers(0, *vertexBuffer.first, { 0 });
+  //   commandBuffers[currentFrame].bindIndexBuffer(*indexBuffer.first, 0, vk::IndexType::eUint32);
+  //   commandBuffers[currentFrame].bindDescriptorSets(
+  //     vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 0, *globalDescriptorSets[currentFrame], nullptr);
+  //   commandBuffers[currentFrame].bindDescriptorSets(
+  //     vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
 
-    for (auto& submesh: submeshes) {
-      PushConstant pushConstant {
-        .materialIndex = static_cast<uint32_t>(submesh.materialID),
-        .reflective = submesh.reflective,
-        .lightDir = lightDir
-      };
-      commandBuffers[currentFrame].pushConstants<PushConstant>(
-        *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
-      commandBuffers[currentFrame].drawIndexed(submesh.indexCount, 1, submesh.indexOffset, 0, 0);
-    }
-  }
+  //   for (auto& submesh: submeshes) {
+  //     PushConstant pushConstant {
+  //       .materialIndex = static_cast<uint32_t>(submesh.materialID),
+  //       .frame = frame++,
+  //       .res = glm::aligned_u32vec2(swapChainExtent.width, swapChainExtent.height),
+  //       .refresh = refresh
+  //     };
+  //     commandBuffers[currentFrame].pushConstants<PushConstant>(
+  //       *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
+  //     commandBuffers[currentFrame].drawIndexed(submesh.indexCount, 1, submesh.indexOffset, 0, 0);
+  //   }
+  // }
 
   // COMPUTE RESULTS
   // render these after model as we want them in front without needing the depth buffer
   {
     commandBuffers[currentFrame].bindPipeline(
-      vk::PipelineBindPoint::eGraphics, *radianceCascadesOutput.graphicsPipeline.second);
+      vk::PipelineBindPoint::eGraphics, *graphicsPipeline.second);
     commandBuffers[currentFrame].bindVertexBuffers(0, *triangleBuffer.first, { 0 });
     commandBuffers[currentFrame].bindDescriptorSets(
-      vk::PipelineBindPoint::eGraphics,
-      radianceCascadesOutput.graphicsPipeline.first,
-      0,
-      *radianceCascadesOutput.descriptorSets[currentFrame],
-      nullptr
-    );
+      vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 0, *globalDescriptorSets[currentFrame], nullptr);
+    commandBuffers[currentFrame].bindDescriptorSets(
+      vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
+
+    PushConstant pushConstant {
+      .frame = frame,
+      .time = runtime
+    };
+    commandBuffers[currentFrame].pushConstants<PushConstant>(
+      *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
     commandBuffers[currentFrame].draw(3, 1, 0, 0);
   }
 

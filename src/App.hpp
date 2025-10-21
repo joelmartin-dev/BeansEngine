@@ -65,11 +65,7 @@ static char slang_path[256] = "assets/shaders/reference.slang";
 #endif
 static char spirv_path[256] = "assets/shaders/shader.spv";
 
-#ifdef RESTIR
-static char compute_slang_path[256] = "assets/shaders/pt.slang";
-#else
 static char compute_slang_path[256] = "assets/shaders/radiance_cascades.slang";
-#endif
 static char compute_spirv_path[256] = "assets/shaders/compute.spv";
 
 /*===================================================== Terminology ==================================================//
@@ -267,6 +263,9 @@ struct App {
   // CreateUVBuffers
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> uvBuffer = std::pair(nullptr, nullptr);
 
+  // CreateUVBuffers
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> nrmBuffer = std::pair(nullptr, nullptr);
+
   // CreateAccelerationStructures
   std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> blasBuffers;
   std::vector<vk::raii::AccelerationStructureKHR> blasHandles;
@@ -307,14 +306,18 @@ struct App {
   bool framebufferResized = false;
   int64_t delta = 1;
   std::chrono::system_clock::time_point start = std::chrono::system_clock::now();
+  float runtime;
+  uint32_t frame = 0;
 
   // Extra objects
-  RenderTarget radianceCascadesOutput;
+  //RenderTarget gIOutput;
   Scene scene;
 #ifndef _WIN32
   bool useWayland;
 #endif
   glm::vec3 lightDir;
+  glm::aligned_mat4x4 oldView;
+  bool refresh;
 
   void Run();
 
@@ -347,6 +350,7 @@ struct App {
   void CreateVertexBuffers();
   void CreateIndexBuffers();
   void CreateUVBuffer();
+  void CreateNrmBuffer();
   void CreateAccelerationStructures();
   void CreateInstanceLUTBuffer();
   void CreatePathTracingTexture();
@@ -365,7 +369,6 @@ struct App {
   // Pipelines
   [[nodiscard]] vk::raii::ShaderModule CreateShaderModule(const std::vector<char>& code) const;
   void CreateGraphicsPipeline();
-  void CreateComputeGraphicsPipeline();
   void CreateComputePipeline();
 
   // LoadGLTF (Asset loading)

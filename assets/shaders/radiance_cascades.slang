@@ -45,8 +45,8 @@ float4 cascadeN(int cascade, float2 texCoord) {
 
     for (int probeIdx = 0; probeIdx < 4; probeIdx++) {
         for (int rayIdx = 0; rayIdx < 4; rayIdx++) {
-            Ray ray = Ray(normalize(float2(cospi(rayIdx / 2.0f), sinpi(rayIdx / 2.0f))), 0.001f);
-            float3 cyan = float3(0.0f, 1.0f, 1.0f);
+            const Ray ray = Ray(normalize(float2(cospi(rayIdx / 2.0f), sinpi(rayIdx / 2.0f))), 0.001f);
+            const float3 cyan = float3(0.0f, 1.0f, 1.0f);
             if (sdSegment(texCoord, probes[probeIdx].pos, probes[probeIdx].pos + ray.direction, ray.magnitude) < 0.0001f) {
                 return float4(cyan, 1.0f);
             }
@@ -58,8 +58,8 @@ float4 cascadeN(int cascade, float2 texCoord) {
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET
 {
-    return float4(0.);
-    //return cascadeN(0, vertIn.fragTexCoord);
+    //return float4(0.);
+    return cascadeN(0, vertIn.fragTexCoord);
 }
 
 [shader("compute")]
