@@ -32,7 +32,8 @@ int main(int argc, char** argv)
 #ifdef _WIN32
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    main(0, "");
-    return 0;
+  
+  main(0, new char*[0]);
+  return 0;
 }
 #endif
