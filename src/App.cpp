@@ -261,7 +261,6 @@ void App::InitVulkan()
   //===== Command Buffers =====//
   CreateCommandPool();
   CreateCommandBuffers();
-  CreateComputeCommandBuffers();
   CreateSyncObjects();
   
   // We need to know the number of textures BEFORE we create the descriptor set layouts
@@ -350,33 +349,38 @@ void App::MainLoop()
 
   double xpos, ypos; // cursor position
 
-  lightDir = glm::vec3(0.0f, 1.0f, 0.0f);
+  sunIntensity = 50.0f;
+  auto oldSunIntensity = sunIntensity;
+
+  sunDir = normalize(glm::vec3(-0.5f, 1.0f, -0.25f));
+  auto oldSunDir = sunDir;
 
   auto frameStart = std::chrono::system_clock::now(); // time at start of loop (including input polling, ui updating)
   auto frameEnd = std::chrono::system_clock::time_point::max(); // time at end of loop
 
   while (glfwWindowShouldClose(pWindow) != GLFW_TRUE) { // while user has not quit
     frameStart = std::chrono::system_clock::now();
+    
     glfwPollEvents(); // check user input
-
+    
     // if the window was resized, resize framebuffers to match
     if (framebufferResized) {
       framebufferResized = false;
       RecreateSwapChain();
     }
-
-#ifdef _DEBUG
+    
+    #ifdef _DEBUG
     // You have to call all of these to update the UI
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-
+    
     /*=================================================== ImGui UI ===================================================//
-        To create a window, use ImGui::Begin(label, showBool, flags).
-        Each call to some ImGui UI element occuring between Begin and End are treated as part of the same window.
-        ImGui::Spacing adds a bit of vertical padding between elements.
+    To create a window, use ImGui::Begin(label, showBool, flags).
+    Each call to some ImGui UI element occuring between Begin and End are treated as part of the same window.
+    ImGui::Spacing adds a bit of vertical padding between elements.
     */
-
+    
     // CAMERA CONTROLS
     {
       ImGui::Begin("Camera Controls", &showControls, {});
@@ -386,7 +390,7 @@ void App::MainLoop()
       ImGui::SliderScalar("X", ImGuiDataType_Double, &camera.position.x, &lower, &upper);
       ImGui::SliderScalar("Y", ImGuiDataType_Double, &camera.position.y, &lower, &upper);
       ImGui::SliderScalar("Z", ImGuiDataType_Double, &camera.position.z, &lower, &upper);
-
+      
       ImGui::Spacing();
       
       auto pi   = glm::pi<double>(), neg_pi   = -pi;
@@ -405,14 +409,15 @@ void App::MainLoop()
       
       ImGui::SliderFloat("Shift Speed", &camera.shiftSpeed, 0.01f, 4.0f);
       ImGui::SliderInt("Delta Mult", &deltaExp, 0, 32);
-
+      
       ImGui::Spacing();
-
+      
       ImGui::Text("Light Direction");
-      ImGui::SliderFloat("LX", &lightDir.x, -1.0f, 1.0f);
-      ImGui::SliderFloat("LY", &lightDir.y, -1.0f, 1.0f);
-      ImGui::SliderFloat("LZ", &lightDir.z, -1.0f, 1.0f);
-
+      ImGui::SliderFloat("Intensity", &sunIntensity, 0.0f, 200.0f);
+      ImGui::SliderFloat("LX", &sunDir.x, -1.0f, 1.0f);
+      ImGui::SliderFloat("LY", &sunDir.y, -1.0f, 1.0f);
+      ImGui::SliderFloat("LZ", &sunDir.z, -1.0f, 1.0f);
+      
       ImGui::End();
     }
     // SHADER PATHS
@@ -425,25 +430,31 @@ void App::MainLoop()
       ImGui::InputText("Compute SPIR-V Path", compute_spirv_path, IM_ARRAYSIZE(compute_spirv_path));
       ImGui::End();
     }
-
+    
     ImGui::Render(); // Prepares the UI for rendering, DOES NOT RENDER ANYTHING
-#endif
+    #endif
+    
+    if (oldSunIntensity != sunIntensity || oldSunDir != sunDir) {
+      frame = 0;
+      oldSunIntensity = sunIntensity;
+      oldSunDir = sunDir;
+    }
 
     auto drawStart = std::chrono::system_clock::now(); // timing specifically how long all of the graphics stuff takes
     DrawFrame();
-
+    
     // Updating variables for next frame (everything is delta-dependent, so effects won't take impact until next frame)
     glfwGetCursorPos(pWindow, &xpos, &ypos);
-
+    
     // A straight >> on delta would not allow for decimals
     camera.Update(static_cast<double>(delta) / static_cast<double>(2 << deltaExp));
-
+    
     // Lock to 60fps, wait for previous frame to finish                                           1/60.0
     while (std::chrono::duration_cast<std::chrono::microseconds>(frameEnd - frameStart).count() < 16667)
       frameEnd = std::chrono::system_clock::now();
     
     frameEnd = std::chrono::system_clock::now();
-
+  
     // we have to set delta here because the next logical line in the loop will set frameStart
     delta = std::chrono::duration_cast<std::chrono::microseconds>(frameEnd - frameStart).count();
     runtime = static_cast<float>(
@@ -559,7 +570,7 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(
   void*
 )
 {
-  if ((severity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) == severity)// | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo) == severity)
+  //if ((severity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) == severity)// | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo) == severity)
     std::cerr << "validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
 
   return vk::False;
@@ -955,19 +966,6 @@ void App::CreateCommandBuffers()
   };
 
   commandBuffers = vk::raii::CommandBuffers(device, allocInfo);
-}
-
-// Same as above
-void App::CreateComputeCommandBuffers()
-{
-  computeCommandBuffers.clear();
-  
-  vk::CommandBufferAllocateInfo allocInfo {
-    .commandPool = commandPool, // the pool to allocate from
-    .level = vk::CommandBufferLevel::ePrimary, // will be submitted directly to queue
-    .commandBufferCount = MAX_FRAMES_IN_FLIGHT, // how many buffers to allocate for
-  };
-  
   computeCommandBuffers = vk::raii::CommandBuffers(device, allocInfo);
 }
 
@@ -1093,7 +1091,7 @@ void App::CreateDescriptorSetLayouts()
     // Initialise
     descriptorSetLayoutGlobal = vk::raii::DescriptorSetLayout(device, globalLayoutInfo);
     
-    uint32_t textureCount = static_cast<uint32_t>(textureImageViews.size());
+    uint32_t textureCount = static_cast<uint32_t>(baseTextureImageViews.size());
 
     std::array materialBindings = {
       // Binding for a texture (colloquial), used exclusively by the fragment shader
@@ -1648,15 +1646,28 @@ void App::CreateDescriptorPools()
   {
     // We need at least 1 Uniform Buffer and 1 CombinedImageSampler per material group per frame in flight
     std::array graphicsPoolSizes = {
+      // Model View Projection matrices
       vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
 #ifdef REFERENCE
+      // TLAS
       vk::DescriptorPoolSize(vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT),
 #endif
+      // Index Buffer
       vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
+      // UV Buffer
+      vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
+      // Normal Buffer
+      vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
+      // BLAS LUT Buffer
+      vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
+      // Compute Output Image Sampler
       vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT),
+      // Compute Output Writable Image
       vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, MAX_FRAMES_IN_FLIGHT),
+      // Material Texture Sampler
       vk::DescriptorPoolSize(vk::DescriptorType::eSampler, MAX_FRAMES_IN_FLIGHT),
-      vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage, static_cast<uint32_t>(mats.size())),
+      // Textures
+      vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage, static_cast<uint32_t>(baseTextureImageViews.size())),
     };
 
     vk::DescriptorPoolCreateInfo graphicsPoolInfo{
@@ -1821,7 +1832,7 @@ void App::CreateDescriptorSets()
 
       // Samplable interface for image
       vk::DescriptorImageInfo samplerInfo {
-        .sampler = textureSampler,
+        .sampler = baseTextureSampler,
         .imageView = static_cast<vk::ImageView>(pathTracingTextureView),
         .imageLayout = vk::ImageLayout::eGeneral,
       };
@@ -1866,7 +1877,7 @@ void App::CreateDescriptorSets()
       device.updateDescriptorSets(descriptorWrites, {});
     }
 
-    std::vector<uint32_t> variableCounts = { static_cast<uint32_t>(textureImageViews.size()) };
+    std::vector<uint32_t> variableCounts = { static_cast<uint32_t>(baseTextureImageViews.size()) };
     vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountInfo = {
       .descriptorSetCount = 1,
       .pDescriptorCounts = variableCounts.data()
@@ -1884,7 +1895,7 @@ void App::CreateDescriptorSets()
     materialDescriptorSets = device.allocateDescriptorSets(matAllocInfo);
 
     vk::DescriptorImageInfo samplerInfo {
-      .sampler = textureSampler
+      .sampler = baseTextureSampler
     };
 
     vk::WriteDescriptorSet samplerWrite {
@@ -1899,8 +1910,8 @@ void App::CreateDescriptorSets()
     device.updateDescriptorSets({samplerWrite}, {});
 
     std::vector<vk::DescriptorImageInfo> imageInfos;
-    imageInfos.reserve(textureImageViews.size());
-    for (auto& imageView: textureImageViews) {
+    imageInfos.reserve(baseTextureImageViews.size());
+    for (auto& imageView: baseTextureImageViews) {
       vk::DescriptorImageInfo imageInfo {
         .imageView = imageView,
         .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
@@ -1950,7 +1961,7 @@ void App::DrawFrame()
   // A command buffer needs to be in the initial state to record. Resetting the command pool resets all of the buffers
   // allocated in that pool. Command buffers can also be reset individually (begin() has an implicit reset if the buffer
   // is not in the initial state).
-  commandPool.reset();
+  //commandPool.reset();
 
   //// Update timeline value for this frame
   uint64_t computeWaitValue = timelineValue, computeSignalValue = ++timelineValue;
@@ -2246,15 +2257,15 @@ void App::LoadAsset(const char* path)
   mats.resize(asset->materials_count);
 
   // Reset and rebuild arrays of textures and texture views for indexed access
-  textureImages.clear();
-  textureImages.reserve(static_cast<size_t>(asset->materials_count));
+  baseTextureImages.clear();
+  baseTextureImages.reserve(static_cast<size_t>(asset->materials_count));
 
-  textureImageViews.clear();
-  textureImageViews.reserve(static_cast<size_t>(asset->materials_count));
+  baseTextureImageViews.clear();
+  baseTextureImageViews.reserve(static_cast<size_t>(asset->materials_count));
 
   for (size_t i = 0; i < asset->materials_count; i++) {
-    textureImages.emplace_back(std::pair(nullptr, nullptr));
-    textureImageViews.emplace_back(nullptr);
+    baseTextureImages.emplace_back(std::pair(nullptr, nullptr));
+    baseTextureImageViews.emplace_back(nullptr);
   }
 
 }
@@ -2331,19 +2342,19 @@ void App::CreateTextureImage(const char* texturePath, size_t idx)
     vk::ImageTiling::eOptimal,
     vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
     vk::MemoryPropertyFlagBits::eDeviceLocal,
-    textureImages[idx].first, textureImages[idx].second
+    baseTextureImages[idx].first, baseTextureImages[idx].second
   );
 
   // CRITICAL SECTION: each of the following functions involves recording a command buffer
   while (!m.try_lock());
   // Get the image ready for copying to
   TransitionImageLayout(
-    textureImages[idx].first, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, mipLevels);
+    baseTextureImages[idx].first, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, mipLevels);
   // Copy the host-visible buffer to somewhere else in GPU memory
-  CopyBufferToImage(stagingBuffer, textureImages[idx].first, texWidth, texHeight, mipLevels, kTexture);
+  CopyBufferToImage(stagingBuffer, baseTextureImages[idx].first, texWidth, texHeight, mipLevels, kTexture);
   // Get the image ready for sampling in the shader
   TransitionImageLayout(
-    textureImages[idx].first, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, mipLevels);
+    baseTextureImages[idx].first, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, mipLevels);
   // CRITICAL SECTION OVER
   m.unlock();
   
@@ -2351,8 +2362,8 @@ void App::CreateTextureImage(const char* texturePath, size_t idx)
   ktxTexture2_Destroy(kTexture);
 
   // Create the corresponding View
-  textureImageViews[idx] =
-    CreateImageView(textureImages[idx].first, textureFormat, vk::ImageAspectFlagBits::eColor, mipLevels);
+  baseTextureImageViews[idx] =
+    CreateImageView(baseTextureImages[idx].first, textureFormat, vk::ImageAspectFlagBits::eColor, mipLevels);
 }
 
 // Transition-only command buffer submission
@@ -2439,7 +2450,7 @@ void App::CreateTextureSampler()
     .minLod = 0.0f, .maxLod = vk::LodClampNone
   };
 
-  textureSampler = vk::raii::Sampler(device, samplerInfo);
+  baseTextureSampler = vk::raii::Sampler(device, samplerInfo);
 }
 
 /*=============================================== USING TEMPLATE TYPES ===============================================//
@@ -2796,6 +2807,7 @@ void App::UpdateModelViewProjection(uint32_t imageIndex)
 // Record commands for compute (dispatching)
 void App::RecordComputeCommandBuffer()
 {
+  computeCommandBuffers[currentFrame].reset();
   // Fairly simple, just dispatch a number of threads to work on a compute shader
   computeCommandBuffers[currentFrame].begin({});
   computeCommandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline.second);
@@ -2807,19 +2819,22 @@ void App::RecordComputeCommandBuffer()
 
   PushConstant pushConstant {
     .frame = frame,
-    .time = runtime
+    .time = runtime,
+    .intensity = sunIntensity,
+    .lightDir = glm::normalize(sunDir)
   };
   computeCommandBuffers[currentFrame].pushConstants<PushConstant>(
     *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
 
   // For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
-  computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / 32 + 1, swapChainExtent.height / 32 + 1, 1);  
+  computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / 8 + 1, swapChainExtent.height / 8 + 1, 1);  
   computeCommandBuffers[currentFrame].end();
 }
 
 // The graphics command buffer
 void App::RecordCommandBuffer(uint32_t imageIndex)
 {
+  commandBuffers[currentFrame].reset();
   commandBuffers[currentFrame].begin({});
 
   // Transition the swap chain image so its optimal for writing to the colour attachment of the framebuffer

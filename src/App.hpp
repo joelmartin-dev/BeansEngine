@@ -180,8 +180,6 @@ struct App {
   
   // CreateCommandBuffers
   std::vector<vk::raii::CommandBuffer> commandBuffers;
-  
-  // CreateComputeCommandBuffers
   std::vector<vk::raii::CommandBuffer> computeCommandBuffers;
   
   // CreateSyncObjects
@@ -248,10 +246,11 @@ struct App {
   std::vector<uint32_t> indices;
   std::vector<Mesh> meshes;
   std::vector<Material> mats;
-  std::vector<std::pair<vk::raii::Image, vk::raii::DeviceMemory>> textureImages;
   std::mutex m;
-  std::vector<vk::raii::ImageView> textureImageViews;
-  vk::raii::Sampler textureSampler = nullptr;
+  std::vector<std::pair<vk::raii::Image, vk::raii::DeviceMemory>> baseTextureImages;
+  std::vector<vk::raii::ImageView> baseTextureImageViews;
+  vk::raii::Sampler baseTextureSampler = nullptr;
+
 
   // CreateVertexBuffer
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> vertexBuffer = std::pair(nullptr, nullptr);
@@ -315,9 +314,9 @@ struct App {
 #ifndef _WIN32
   bool useWayland;
 #endif
-  glm::vec3 lightDir;
+  float sunIntensity;
+  glm::aligned_vec3 sunDir;
   glm::aligned_mat4x4 oldView;
-  bool refresh;
 
   void Run();
 
@@ -340,7 +339,6 @@ struct App {
   void CreateDepthResources();
   void CreateCommandPool();
   void CreateCommandBuffers();
-  void CreateComputeCommandBuffers();
   void CreateSyncObjects();
   void LoadGLTF(const std::filesystem::path& path);
   void CreateDescriptorSetLayouts();

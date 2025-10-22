@@ -86,6 +86,8 @@ struct InstanceLUT {
 struct PushConstant {
     uint frame;
     float time;
+    float intensity;
+    float3 lightDir;
 };
 [push_constant] PushConstant pc;
 
@@ -145,19 +147,30 @@ float3 randomDirection(uint rngState) {
 }
 
 // Mimic horizon by interpolating a sky colour if the ray is pointing up, ground if down
-float3 skyColour(float3 direction)
+float3 skyColour(float3 bounceDir, float3 sunDir)
 {
+    const float3 topColour = float3(0.25f, 0.5f, 1.0f);
+    const float3 halfColour = float3(0.4f, 0.5, 0.6f);
+    const float3 bottomColour = float3(0.03f);
     // if pointing up
-    if (direction.y > 0.0f) return lerp(float3(50.0f), float3(0.25f, 0.5f, 1.0f), direction.y);
+    if (bounceDir.y > 0.0f) {
+        const float3 skyColour = lerp(halfColour, topColour, bounceDir.y);
+
+        const float t = smoothstep(0.99f, 0.996f, abs(dot(bounceDir, sunDir)));
+        const float3 sunBias = lerp(skyColour, float3(1.0f, 0.9f, 0.9f) * pc.intensity, t);
+        return sunBias;
+    }
     // pointing down
-    else return float3(0.03f);
+    else {
+        return lerp(halfColour, bottomColour, abs(bounceDir.y));
+    }
 }
 
 // Get point light illumination at a point
 float3 directIllumination(float3 worldHitPos)
 {
     float3 lightPositions[] = {
-        float3(0.0, 1.7, 0.0), float3(1.0, 1.7, 0.0), float3(-1.0, 1.7, 0.0)
+        float3(0.0, 1.7, 0.0)//, float3(1.0, 1.7, 0.0), float3(-1.0, 1.7, 0.0)
     };
     float lightIntensities[] = {5.0};
     float3 lightColours[] = { float3(1.0) };
@@ -179,7 +192,7 @@ float3 directIllumination(float3 worldHitPos)
 }
 
 [shader("compute")]
-[numthreads(32, 32, 1)]
+[numthreads(8, 8, 1)]
 void compMain(uint3 threadIdx: SV_DispatchThreadID)
 {
     const uint2 pixelCoords = threadIdx.xy;
@@ -201,10 +214,10 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     const float2 clipCoords = pixelCenter / (float2)imgSize.xy * 2.0 - 1.0;   // Convert to NDC [-1,1]
     const float4 viewCoords = mul(ubo.invProj, float4(clipCoords, 1.0, 1.0)); // Transform to view space
     
+    // More samples == faster convergence, slower execution (but minus new frame overhead)
     const uint MAX_SAMPLES = 2;
-    const uint MAX_DEPTH = 8;
+    const uint MAX_DEPTH = 6;
     const float INITIAL_MISS_DISTANCE = 1000.0f;
-    const float3 lightDir = normalize(float3(0., 1., 0.));
 
     float3 summedPixelCol = float3(0.0);
     for (uint sampleID = 0; sampleID < MAX_SAMPLES; sampleID++) {
@@ -224,12 +237,13 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             rayDesc.TMax = missDistance;
             
             // attenuate missDistance
-            missDistance /= (depth + 1.0);
+            //missDistance /= (depth + 1.0);
 
-            RayQuery<RAY_FLAG_CULL_BACK_FACING_TRIANGLES> rq;
-            let rayFlags = RAY_FLAG_CULL_BACK_FACING_TRIANGLES;
+            RayQuery<RAY_FLAG_NONE> rq;
+            let rayFlags = RAY_FLAG_NONE;
 
             rq.TraceRayInline(accelerationStructure, rayFlags, 0xFF, rayDesc);
+
             while (rq.Proceed()) {
                 uint instanceID = rq.CandidateInstanceIndex();
                 uint primIndex = rq.CandidatePrimitiveIndex();
@@ -249,7 +263,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             }
 
             if (rq.CommittedStatus() == COMMITTED_NOTHING) {
-                accumCol *= skyColour(rayDirection);
+                accumCol *= skyColour(rayDirection, pc.lightDir);
                 summedPixelCol += accumCol;
                 
                 break;
@@ -268,23 +282,51 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CommittedRayT() / 10.0);
 
             const float3 worldHitPos = rayOrigin + rayDirection * rq.CommittedRayT();
-            const float3 L = 1.;//directIllumination(worldHitPos);
+            const float3 L = 1.0;//directIllumination(worldHitPos);
 
             accumCol *= L * intersectionColor.rgb;
 
             // Go to the world position of hit
             rayOrigin += rayDirection * rq.CommittedRayT();
+            
             const float3 bounceRandom = randomDirection(seed);
+            
             rayDirection = normalize(mul(worldToObject, norm).xyz + bounceRandom);
-
-            // return float4(rayDirection, 1.0);
+            
+            // Avoid self-intersections by starting slightly above the surface
             rayOrigin += rayDirection * 0.001;
+            
+            // Check direct illumination at point (still random, biased towards light)
+            if (depth + 1 >= MAX_DEPTH) {
+                const float3 bounceRandom = randomDirection(seed);
+                rayDirection = normalize(pc.lightDir + bounceRandom);
+        
+                rayDesc.Direction = rayDirection;
+                rayDesc.Origin = rayOrigin;
+                rayDesc.TMin = 0.0;
+                rayDesc.TMax = INITIAL_MISS_DISTANCE;
+        
+                RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
+                let rayFlags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
+        
+                sq.TraceRayInline(accelerationStructure, rayFlags, 0xFF, rayDesc);
+                while (sq.Proceed()) sq.CommitNonOpaqueTriangleHit();
+        
+                if (sq.CommittedStatus() == COMMITTED_NOTHING) {
+                    accumCol *= skyColour(rayDirection, pc.lightDir);
+                    summedPixelCol += accumCol;
+                }
+            }
+            
+            float lum = dot(accumCol, float3(0.212671f, 0.715160f, 0.072169f));
+            const float fireflyClampThreshold = 10.0f;
+            if (lum > fireflyClampThreshold) accumCol *= fireflyClampThreshold / lum;
+            accumCol = 1.0 - exp(-1.0 * accumCol);
         }
-
-        float lum = dot(accumCol, float3(0.212671F, 0.715160F, 0.072169F));
-        const float fireflyClampThreshold = 10.0f;
-        if (lum > fireflyClampThreshold) accumCol *= fireflyClampThreshold / lum;
     }
+
+    summedPixelCol /= (float)MAX_SAMPLES;
+
 
     if (pc.frame == 0) {
         outImage[pixelCoords] = float4(summedPixelCol, 1.0);

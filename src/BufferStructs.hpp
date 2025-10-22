@@ -15,6 +15,8 @@ struct MVP {
 struct PushConstant {
   uint32_t frame;
   float time;
+  float intensity;
+  glm::aligned_vec3 lightDir;
 };
 
 struct SubMesh {
