@@ -27,6 +27,17 @@ struct SubMesh {
   uint32_t maxVertex;
   bool alphaCut;
   bool reflective;
+
+  bool operator==(const SubMesh& other) const
+  {
+    return indexOffset == other.indexOffset &&
+           indexCount == other.indexCount && 
+           materialID == other.materialID && 
+           firstVertex == other.firstVertex && 
+           maxVertex == other.maxVertex && 
+           alphaCut == other.alphaCut && 
+           reflective == other.reflective;
+  }
 };
 
 struct InstanceLUT {

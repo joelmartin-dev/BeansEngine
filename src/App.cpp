@@ -218,13 +218,8 @@ void App::InitWindow()
         // same reason for Alt as reloading case above
         if (mods & GLFW_MOD_ALT)
         {
-          if (mods & GLFW_MOD_CONTROL)
-            static_cast<App*>(glfwGetWindowUserPointer(_pWindow))->
-              CompileShader(compute_slang_path, compute_spirv_path);
-          else {
-            static_cast<App*>(glfwGetWindowUserPointer(_pWindow))->
-              CompileShader(slang_path, spirv_path);
-          }
+          static_cast<App*>(glfwGetWindowUserPointer(_pWindow))->
+            CompileShader(slang_path, spirv_path);
           static_cast<App*>(glfwGetWindowUserPointer(_pWindow))->ReloadShaders();
         }
         break;
@@ -276,10 +271,8 @@ void App::InitVulkan()
   CreateIndexBuffers();
   CreateUVBuffer();
   CreateNrmBuffer();
-#ifdef REFERENCE
   CreateAccelerationStructures();
-  CreateInstanceLUTBuffer();
-#endif
+  CreateBLASInstanceLUTBuffer();
 
   CreatePathTracingTexture();
   
@@ -426,8 +419,6 @@ void App::MainLoop()
       ImGui::InputText("Model Path", model_path, IM_ARRAYSIZE(model_path));
       ImGui::InputText("Slang Path", slang_path, IM_ARRAYSIZE(slang_path));
       ImGui::InputText("SPIR-V Path", spirv_path, IM_ARRAYSIZE(spirv_path));
-      ImGui::InputText("Compute Slang Path", compute_slang_path, IM_ARRAYSIZE(compute_slang_path));
-      ImGui::InputText("Compute SPIR-V Path", compute_spirv_path, IM_ARRAYSIZE(compute_spirv_path));
       ImGui::End();
     }
     
@@ -692,6 +683,7 @@ void App::PickPhysicalDevice()
         features.template get<vk::PhysicalDeviceVulkan12Features>().descriptorBindingVariableDescriptorCount &&
         features.template get<vk::PhysicalDeviceVulkan12Features>().runtimeDescriptorArray &&
         features.template get<vk::PhysicalDeviceVulkan12Features>().shaderSampledImageArrayNonUniformIndexing &&
+        features.template get<vk::PhysicalDeviceVulkan12Features>().hostQueryReset &&
         features.template get<vk::PhysicalDeviceVulkan12Features>().bufferDeviceAddress &&
         // makes timeline semaphores available for synchronisation
         features.template get<vk::PhysicalDeviceVulkan12Features>().timelineSemaphore &&
@@ -768,6 +760,7 @@ void App::CreateLogicalDevice()
       .descriptorBindingPartiallyBound = true, 
       .descriptorBindingVariableDescriptorCount = true,
       .runtimeDescriptorArray = true, 
+      .hostQueryReset = true,
       .timelineSemaphore = true,
       .bufferDeviceAddress = true,
     },    // vk::PhysicalDeviceVulkan12Features
@@ -1027,7 +1020,6 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
-#ifdef REFERENCE
       vk::DescriptorSetLayoutBinding(
         1,                                    // Binding
         vk::DescriptorType::eAccelerationStructureKHR,   // Descriptor Type
@@ -1035,7 +1027,6 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
-#endif
       vk::DescriptorSetLayoutBinding(
         2,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
@@ -1057,7 +1048,6 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
-#ifdef REFERENCE
       vk::DescriptorSetLayoutBinding(
         5,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
@@ -1065,7 +1055,6 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
-#endif
       vk::DescriptorSetLayoutBinding(
         6,
         vk::DescriptorType::eCombinedImageSampler,
@@ -1144,7 +1133,6 @@ void App::InitSlang()
 
   // We manually call CompileShader for all shaders on start, ensuring SPIR-V exists by the time pipelines are created
   CompileShader(slang_path, spirv_path);
-  CompileShader(compute_slang_path, compute_spirv_path);
 }
 
 // Purely for readability, call all the CreateXPipeline functions
@@ -1281,9 +1269,7 @@ void App::CreateIndexBuffers()
       vk::BufferUsageFlagBits::eIndexBuffer | 
       vk::BufferUsageFlagBits::eTransferDst | 
       vk::BufferUsageFlagBits::eShaderDeviceAddress |
-#ifdef REFERENCE
       vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
-#endif
       vk::BufferUsageFlagBits::eStorageBuffer,
       vk::MemoryPropertyFlagBits::eDeviceLocal,
       indexBuffer.first, indexBuffer.second
@@ -1374,17 +1360,40 @@ void App::CreateNrmBuffer()
   CopyBuffer(stagingBuffer, nrmBuffer.first, bufferSize);
 }
 
+
+/*================================================== BLAS and TLAS ===================================================//
+  There are two Acceleration Structure types: Bottom Level and Top Level. A scene's geometry is split up into BLAS
+  blasInstances and traversed using a TLAS. On an abstract level, a BLAS lets rays test directly against geometry 
+  and a TLAS lets rays test against bounding boxes whose contents can then be looked up.
+
+  A Bottom Level Acceleration Structure (BLAS) contains geometry data for a ray to test against.
+  A Top Level Acceleration Structure contains opaque handles to BLAS blasInstances that a ray can test against the 
+  bounding box of while traversing the scene.
+
+  They have the same relationship as vertices and indices. Vertices store the attributes, indices act as instances 
+  of those vertices.
+*/
+// Create the BLAS and TLAS for the scene
 void App::CreateAccelerationStructures()
 {
-  vk::BufferDeviceAddressInfo vertAddrInfo{ .buffer = *vertexBuffer.first };
-  vk::DeviceAddress vertAddr = device.getBufferAddressKHR(vertAddrInfo);
-  vk::BufferDeviceAddressInfo idxAddrInfo{ .buffer = *indexBuffer.first };
-  vk::DeviceAddress idxAddr = device.getBufferAddressKHR(idxAddrInfo);
+  // Used to query the calculated size of a compacted buffer after the creation of uncompacted buffer
+  vk::QueryPoolCreateInfo queryPoolCreateInfo {
+    .queryType = vk::QueryType::eAccelerationStructureCompactedSizeKHR,
+    .queryCount = 1
+  };
+  vk::raii::QueryPool queryPool = device.createQueryPool(queryPoolCreateInfo);
+  queryPool.reset(0, 1);
 
-  instances.reserve(submeshes.size());
+  //================================================== BOTTOM LEVEL ==================================================//
+  // The BLAS instances require handles to the address + offset of vertices and indices
+  vk::DeviceAddress vertAddr = device.getBufferAddressKHR({ .buffer = *vertexBuffer.first });
+  vk::DeviceAddress idxAddr = device.getBufferAddressKHR({ .buffer = *indexBuffer.first });
+
+  blasInstances.reserve(submeshes.size());
   blasBuffers.reserve(submeshes.size());
   blasHandles.reserve(submeshes.size());
-  
+
+  // We perform no additional transformations on the acceleration structures, leave as identity
   vk::TransformMatrixKHR identity{};
   identity.matrix = std::array<std::array<float, 4>, 3>{ {
       std::array<float, 4> {1.0f, 0.0f, 0.0f, 0.0f},
@@ -1392,164 +1401,227 @@ void App::CreateAccelerationStructures()
       std::array<float, 4> {0.0f, 0.0f, 1.0f, 0.0f},
   } };
 
-  for (size_t i = 0; i < submeshes.size(); i++) {
-    auto& submesh = submeshes[i];
-
-    // Prepare the geometry data
+  // Almost the entire scene is static, so we want to compact the data suitably
+  // Read in the Vertices and Indices of a submesh + opaqueness
+  // Build an initial BLAS using that geometry data
+  // Query the calculated size if the BLAS were to be compacted
+  // Create the compacted BLAS by copying the initial BLAS into a smaller buffer
+  for (const auto& submesh: submeshes) {
+    // Similar to a combination of the PipelineVertexInputStateCreateInfo and PipelineInputAssemblyStateCreateInfo 
+    // structs used in Pipeline creation
+    const auto vertexFormat = Vertex::getAttributeDescriptions().begin()->format;
     auto trianglesData = vk::AccelerationStructureGeometryTrianglesDataKHR{
-      .vertexFormat = vk::Format::eR32G32B32Sfloat,
-      .vertexData = vertAddr,
-      .vertexStride = sizeof(Vertex),
-      .maxVertex = submesh.maxVertex,
-      .indexType = vk::IndexType::eUint32,
-      .indexData = idxAddr + submesh.indexOffset * sizeof(uint32_t)
+      .vertexFormat = vertexFormat, .vertexData = vertAddr,
+      .vertexStride = sizeof(Vertex), .maxVertex = submesh.maxVertex, // last triangle's last index
+      .indexType = vk::IndexType::eUint32, 
+      .indexData = idxAddr + submesh.indexOffset * sizeof(uint32_t)   // first triangle's first index
     };
-
     vk::AccelerationStructureGeometryDataKHR geometryData(trianglesData);
 
+    // Make the triangles readable for BLAS building, and if the geometry contains transparency
     vk::AccelerationStructureGeometryKHR blasGeometry{
-      .geometryType = vk::GeometryTypeKHR::eTriangles,
-      .geometry = geometryData,
+      .geometryType = vk::GeometryTypeKHR::eTriangles, .geometry = geometryData,
       .flags = submesh.alphaCut ? vk::GeometryFlagsKHR(0) : vk::GeometryFlagBitsKHR::eOpaque
     };
 
+    /*  
+      AccelerationStructureBuildGeometryInfoKHR {
+        const void *                                                           pNext
+        VULKAN_HPP_NAMESPACE::AccelerationStructureTypeKHR                     type,
+        VULKAN_HPP_NAMESPACE::BuildAccelerationStructureFlagsKHR               flags,
+        VULKAN_HPP_NAMESPACE::BuildAccelerationStructureModeKHR                mode,
+        VULKAN_HPP_NAMESPACE::AccelerationStructureKHR                         srcAccelerationStructure,
+        VULKAN_HPP_NAMESPACE::AccelerationStructureKHR                         dstAccelerationStructure,
+        uint32_t                                                               geometryCount,
+        const VULKAN_HPP_NAMESPACE::AccelerationStructureGeometryKHR *         pGeometries,
+        const VULKAN_HPP_NAMESPACE::AccelerationStructureGeometryKHR * const * ppGeometries,
+        VULKAN_HPP_NAMESPACE::DeviceOrHostAddressKHR                           scratchData,
+      };
+    */
+    // Build a BLAS from the geometry info
     vk::AccelerationStructureBuildGeometryInfoKHR blasBuildGeometryInfo{
-      .type = vk::AccelerationStructureTypeKHR::eBottomLevel,
-      .mode = vk::BuildAccelerationStructureModeKHR::eBuild,
-      .geometryCount = 1,
-      .pGeometries = &blasGeometry
+      .type =  vk::AccelerationStructureTypeKHR::eBottomLevel,
+      .flags = vk::BuildAccelerationStructureFlagBitsKHR::eAllowCompaction |
+               vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace, // larger AS DeviceSize, faster trace time
+      .mode =  vk::BuildAccelerationStructureModeKHR::eBuild,
+      .geometryCount = 1, .pGeometries = &blasGeometry
     };
 
+    // Vertices are in TriangleList (no index sharing), three indices for every triangle
     auto primitiveCount = static_cast<uint32_t>(submesh.indexCount / 3);
+    auto blasBuildSizes = device.getAccelerationStructureBuildSizesKHR(
+        vk::AccelerationStructureBuildTypeKHR::eDevice, blasBuildGeometryInfo, { primitiveCount });
 
-    vk::AccelerationStructureBuildSizesInfoKHR blasBuildSizes =
-      device.getAccelerationStructureBuildSizesKHR(
-        vk::AccelerationStructureBuildTypeKHR::eDevice, 
-        blasBuildGeometryInfo, 
-        { primitiveCount }
-      );
-
-    // Create a scratch buffer for the BLAS, this will hold temporary data
-    // during the build process
+    // Create a scratch buffer for the BLAS, this will hold temporary data during the build process
+    // Note the non-specific StorageBuffer flag. We just need the data somewhere, sort of like a void*
     std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> scratchBuffer = std::pair(nullptr, nullptr);
     CreateBuffer(
       blasBuildSizes.buildScratchSize,
-      vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+      vk::BufferUsageFlagBits::eStorageBuffer | 
+      vk::BufferUsageFlagBits::eShaderDeviceAddress,
       vk::MemoryPropertyFlagBits::eDeviceLocal,
       scratchBuffer.first, scratchBuffer.second
     );
 
     // Save the scratch buffer address in the build info structure
-    vk::BufferDeviceAddressInfo scratchAddressInfo{ .buffer = *scratchBuffer.first };
-    vk::DeviceAddress scratchAddr = device.getBufferAddressKHR(scratchAddressInfo);
+    auto scratchAddr = device.getBufferAddressKHR({ .buffer = *scratchBuffer.first });
     blasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;
 
-    // Create a buffer for the BLAS itself now that we now the required size
-    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> blasBuffer = std::pair(nullptr, nullptr);
-    blasBuffers.emplace_back(std::move(blasBuffer));
+    // Create a buffer for the BLAS itself now that we know the required size
+    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> initialBuffer = std::pair(nullptr, nullptr);
     CreateBuffer(
       blasBuildSizes.accelerationStructureSize,
       vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR |
       vk::BufferUsageFlagBits::eShaderDeviceAddress |
       vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
       vk::MemoryPropertyFlagBits::eDeviceLocal,
-      blasBuffers[i].first, blasBuffers[i].second
+      initialBuffer.first, initialBuffer.second
     );
 
-    // Create and store the BLAS handle
-    vk::AccelerationStructureCreateInfoKHR blasCreateInfo{
-        .buffer = blasBuffers[i].first,
-        .offset = 0,
+    // Store the initial BLAS handle. 
+    // A Handle is a resource identifier with minimal information about the resource.
+    // In this case, we only need to know the buffer's location, the offset, the size and the type of AS
+    vk::AccelerationStructureCreateInfoKHR blasCreateInfo {
+        .buffer = initialBuffer.first, .offset = 0,
         .size = blasBuildSizes.accelerationStructureSize,
         .type = vk::AccelerationStructureTypeKHR::eBottomLevel,
     };
+    auto initialHandle = device.createAccelerationStructureKHR(blasCreateInfo);
 
-    blasHandles.emplace_back(device.createAccelerationStructureKHR(blasCreateInfo));
-
-    // Save the BLAS handle in the build info structure
-    blasBuildGeometryInfo.dstAccelerationStructure = blasHandles[i];
+    // Pass the BLAS handle to the build info structure
+    blasBuildGeometryInfo.dstAccelerationStructure = initialHandle;
 
     // Prepare the build range for the BLAS
-    vk::AccelerationStructureBuildRangeInfoKHR blasRangeInfo{
-        .primitiveCount = primitiveCount,
-        .primitiveOffset = 0,
-        .firstVertex = submesh.firstVertex,
-        .transformOffset = 0
+    vk::AccelerationStructureBuildRangeInfoKHR blasRangeInfo {
+        .primitiveCount = primitiveCount, .primitiveOffset = 0,
+        .firstVertex = submesh.firstVertex, .transformOffset = 0
     };
 
-    // Build the BLAS
-    auto cmd = BeginSingleTimeCommands();
-    cmd.buildAccelerationStructuresKHR({ blasBuildGeometryInfo }, { &blasRangeInfo });
-    EndSingleTimeCommands(cmd);
+    // Build the initial BLAS
+    {
+      const auto commandBuffer = BeginSingleTimeCommands();
+      commandBuffer.buildAccelerationStructuresKHR({ blasBuildGeometryInfo }, { &blasRangeInfo });
+      EndSingleTimeCommands(commandBuffer);
+    }
 
+    // Query the compact size
+    {
+      const auto commandBuffer = BeginSingleTimeCommands();
+      commandBuffer.writeAccelerationStructuresPropertiesKHR(
+        { initialHandle }, vk::QueryType::eAccelerationStructureCompactedSizeKHR, queryPool, 0);
+      EndSingleTimeCommands(commandBuffer);
+    }
+    
+    // Store the compacted size
+    auto compactedSize = queryPool.getResult<vk::DeviceSize>(
+      0, 1, sizeof(vk::DeviceSize), vk::QueryResultFlagBits::eWait | vk::QueryResultFlagBits::e64);
+    
+    // Create a buffer for the BLAS itself now that we know the required size
+    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> blasBuffer = std::pair(nullptr, nullptr);
+    blasBuffers.emplace_back(std::move(blasBuffer));
+    CreateBuffer(
+      compactedSize.second,
+      vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR |
+      vk::BufferUsageFlagBits::eShaderDeviceAddress |
+      vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+      vk::MemoryPropertyFlagBits::eDeviceLocal,
+      blasBuffers.back().first, blasBuffers.back().second
+    );
+
+    // Create and store the persisted BLAS handle
+    vk::AccelerationStructureCreateInfoKHR compactCreateInfo {
+        .buffer = blasBuffers.back().first, .offset = 0,
+        .size = compactedSize.second,
+        .type = vk::AccelerationStructureTypeKHR::eBottomLevel,
+    };
+    blasHandles.emplace_back(device.createAccelerationStructureKHR(compactCreateInfo));
+
+    // Copying from the initialHandle to the persisted blasHandle
+    vk::CopyAccelerationStructureInfoKHR copyInfo {
+      .src = initialHandle, .dst = *blasHandles.back(),
+      .mode = vk::CopyAccelerationStructureModeKHR::eCompact
+    };
+
+    // Perform the data copy
+    {
+      const auto commandBuffer = BeginSingleTimeCommands();
+      commandBuffer.copyAccelerationStructureKHR(copyInfo);
+      EndSingleTimeCommands(commandBuffer);
+    }
+
+    // Store the BLAS as an instance, ready for TLAS building
     vk::AccelerationStructureDeviceAddressInfoKHR addrInfo {
-        .accelerationStructure = *blasHandles[i]
+        .accelerationStructure = *blasHandles.back()
     };
-    vk::DeviceAddress blasDeviceAddr = device.getAccelerationStructureAddressKHR(addrInfo);
+    auto blasDeviceAddr = device.getAccelerationStructureAddressKHR(addrInfo);
 
+    // Assign the transform and a mask to the instance. A mask is like channels for an instance's visibility to rays
     vk::AccelerationStructureInstanceKHR instance {
-        .transform = identity,
-        .mask = 0xFF,
+        .transform = identity, .mask = 0x1,
         .accelerationStructureReference = blasDeviceAddr
     };
 
-    instances.push_back(instance);
+    blasInstances.push_back(instance);
 
-    instances[i].instanceCustomIndex = static_cast<uint32_t>(i);
+    // store the index of this instance in blasInstances
+    blasInstances.back().instanceCustomIndex = static_cast<uint32_t>(blasInstances.size() - 1);
+    blasInstanceLUTs.push_back({ static_cast<uint32_t>(submesh.materialID), submesh.indexOffset });
 
-    instanceLUTs.push_back({ static_cast<uint32_t>(submesh.materialID), submesh.indexOffset });
+    queryPool.reset(0, 1);
   }
 
-  vk::DeviceSize instBufferSize = sizeof(instances[0]) * instances.size();
+  // A key difference to our normal buffer creation steps: no moving to DEVICE_LOCAL-only memory.
+  // In a dynamic scene, the BLAS will need to be updated for any dynamic instances e.g. an animated mesh. Because
+  // of this constant updating we need the buffer to maintain host visibility and coherency
+  vk::DeviceSize bufferSize = sizeof(blasInstances[0]) * blasInstances.size();
   CreateBuffer(
-    instBufferSize,
+    bufferSize,
     vk::BufferUsageFlagBits::eShaderDeviceAddress |
     vk::BufferUsageFlagBits::eTransferDst |
     vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
     vk::MemoryPropertyFlagBits::eHostVisible |
     vk::MemoryPropertyFlagBits::eHostCoherent,
-    instanceBuffer.first, instanceBuffer.second
+    blasInstanceBuffer.first, blasInstanceBuffer.second
   );
 
-  void* ptr = instanceBuffer.second.mapMemory(0, instBufferSize);
-  memcpy(ptr, instances.data(), instBufferSize);
-  instanceBuffer.second.unmapMemory();
+  // Map and Copy Buffer
+  void* data = blasInstanceBuffer.second.mapMemory(0, bufferSize);
+  memcpy(data, blasInstances.data(), bufferSize);
+  blasInstanceBuffer.second.unmapMemory();
 
-  vk::BufferDeviceAddressInfo instanceAddrInfo{ .buffer = instanceBuffer.first };
+  //==================================================== TOP LEVEL ===================================================//
+  // Same flow as the BLAS creation
+  // Same as how the BLAS requires the address + offset of the vertices and indices, the TLAS requires the address +
+  // offset of the BLAS instances
+  vk::BufferDeviceAddressInfo instanceAddrInfo{ .buffer = blasInstanceBuffer.first };
   vk::DeviceAddress instanceAddr = device.getBufferAddressKHR(instanceAddrInfo);
 
-  // Prepare the geometry (instance) data
-  auto instancesData = vk::AccelerationStructureGeometryInstancesDataKHR{
-      .arrayOfPointers = vk::False,
-      .data = instanceAddr
+  // Prepare the BLAS instances
+  vk::AccelerationStructureGeometryInstancesDataKHR blasInstancesData {
+      .arrayOfPointers = vk::False, .data = instanceAddr
+  };
+  vk::AccelerationStructureGeometryDataKHR geometryData(blasInstancesData);
+
+  vk::AccelerationStructureGeometryKHR tlasGeometry {
+      .geometryType = vk::GeometryTypeKHR::eInstances, .geometry = geometryData
   };
 
-  vk::AccelerationStructureGeometryDataKHR geometryData(instancesData);
-
-  vk::AccelerationStructureGeometryKHR tlasGeometry{
-      .geometryType = vk::GeometryTypeKHR::eInstances,
-      .geometry = geometryData
-  };
-
-  vk::AccelerationStructureBuildGeometryInfoKHR tlasBuildGeometryInfo{
+  // We only have one BLAS instances buffer, equivalent to 1 geometryCount
+  vk::AccelerationStructureBuildGeometryInfoKHR tlasBuildGeometryInfo {
       .type = vk::AccelerationStructureTypeKHR::eTopLevel,
+      .flags = vk::BuildAccelerationStructureFlagBitsKHR::eAllowCompaction |
+               vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace,
       .mode = vk::BuildAccelerationStructureModeKHR::eBuild,
-      .geometryCount = 1,
-      .pGeometries = &tlasGeometry
+      .geometryCount = 1, .pGeometries = &tlasGeometry
   };
 
   // Query the memory sizes that will be needed for this TLAS
-  auto primitiveCount = static_cast<uint32_t>(instances.size());
+  auto primitiveCount = static_cast<uint32_t>(blasInstances.size());
 
-  vk::AccelerationStructureBuildSizesInfoKHR tlasBuildSizes =
-    device.getAccelerationStructureBuildSizesKHR(
-      vk::AccelerationStructureBuildTypeKHR::eDevice,
-      tlasBuildGeometryInfo,
-      { primitiveCount }
-    );
+  auto tlasBuildSizes = device.getAccelerationStructureBuildSizesKHR(
+      vk::AccelerationStructureBuildTypeKHR::eDevice, tlasBuildGeometryInfo, { primitiveCount });
 
-  // Create a scratch buffer for the TLAS, this will hold temporary data
-  // during the build process
+  // Create a scratch buffer for the TLAS, this will hold temporary data during the build process
   CreateBuffer(
     tlasBuildSizes.buildScratchSize,
     vk::BufferUsageFlagBits::eStorageBuffer |
@@ -1559,13 +1631,57 @@ void App::CreateAccelerationStructures()
   );
 
   // Save the scratch buffer address in the build info structure
-  vk::BufferDeviceAddressInfo scratchAddressInfo{ .buffer = *tlasScratchBuffer.first };
-  vk::DeviceAddress scratchAddr = device.getBufferAddressKHR(scratchAddressInfo);
+  auto scratchAddr = device.getBufferAddressKHR({ .buffer = *tlasScratchBuffer.first });
   tlasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;
 
   // Create a buffer for the TLAS itself now that we now the required size
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> initialBuffer = std::pair(nullptr, nullptr);
   CreateBuffer(
     tlasBuildSizes.accelerationStructureSize,
+    vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR |
+    vk::BufferUsageFlagBits::eShaderDeviceAddress |
+    vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    initialBuffer.first, initialBuffer.second
+  );
+
+  // Create and store the TLAS handle
+  vk::AccelerationStructureCreateInfoKHR initialCreateInfo{
+      .buffer = initialBuffer.first, .offset = 0,
+      .size = tlasBuildSizes.accelerationStructureSize,
+      .type = vk::AccelerationStructureTypeKHR::eTopLevel,
+  };
+  auto initialHandle = device.createAccelerationStructureKHR(initialCreateInfo);
+
+  // Save the TLAS handle in the build info structure
+  tlasBuildGeometryInfo.dstAccelerationStructure = initialHandle;
+
+  // Prepare the build range for the TLAS
+  vk::AccelerationStructureBuildRangeInfoKHR tlasRangeInfo {
+      .primitiveCount = primitiveCount, .primitiveOffset = 0,
+      .firstVertex = 0, .transformOffset = 0
+  };
+
+  // Build the TLAS
+  {
+    const auto commandBuffer = BeginSingleTimeCommands();
+    commandBuffer.buildAccelerationStructuresKHR({ tlasBuildGeometryInfo }, { &tlasRangeInfo });
+    EndSingleTimeCommands(commandBuffer);
+  }
+
+  // Query the compacted size
+  {
+    const auto commandBuffer = BeginSingleTimeCommands();
+    commandBuffer.writeAccelerationStructuresPropertiesKHR(
+      { initialHandle }, vk::QueryType::eAccelerationStructureCompactedSizeKHR, queryPool, 0);
+    EndSingleTimeCommands(commandBuffer);
+  }
+  auto compactedSize = queryPool.getResult<vk::DeviceSize>(
+    0, 1, sizeof(vk::DeviceSize), vk::QueryResultFlagBits::eWait | vk::QueryResultFlagBits::e64);
+  
+  // Create a buffer for the BLAS itself now that we now the required size
+  CreateBuffer(
+    compactedSize.second,
     vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR |
     vk::BufferUsageFlagBits::eShaderDeviceAddress |
     vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
@@ -1573,36 +1689,31 @@ void App::CreateAccelerationStructures()
     tlasBuffer.first, tlasBuffer.second
   );
 
-  // Create and store the TLAS handle
-  vk::AccelerationStructureCreateInfoKHR tlasCreateInfo{
-      .buffer = tlasBuffer.first,
-      .offset = 0,
-      .size = tlasBuildSizes.accelerationStructureSize,
+  // Create and store the compact TLAS' handle
+  vk::AccelerationStructureCreateInfoKHR tlasCreateInfo {
+      .buffer = tlasBuffer.first, .offset = 0,
+      .size = compactedSize.second,
       .type = vk::AccelerationStructureTypeKHR::eTopLevel,
   };
+  tlasHandle = device.createAccelerationStructureKHR(tlasCreateInfo);
 
-  tlas = device.createAccelerationStructureKHR(tlasCreateInfo);
-
-  // Save the TLAS handle in the build info structure
-  tlasBuildGeometryInfo.dstAccelerationStructure = tlas;
-
-  // Prepare the build range for the TLAS
-  vk::AccelerationStructureBuildRangeInfoKHR tlasRangeInfo{
-      .primitiveCount = primitiveCount,
-      .primitiveOffset = 0,
-      .firstVertex = 0,
-      .transformOffset = 0
+  // Copy the TLAS from the initial to the compact buffer
+  vk::CopyAccelerationStructureInfoKHR copyInfo {
+    .src = *initialHandle, .dst = *tlasHandle,
+    .mode = vk::CopyAccelerationStructureModeKHR::eCompact
   };
 
-  // Build the TLAS
-  auto cmd = BeginSingleTimeCommands();
-  cmd.buildAccelerationStructuresKHR({ tlasBuildGeometryInfo }, { &tlasRangeInfo });
-  EndSingleTimeCommands(cmd);
+  // Perform the copy
+  {
+    const auto commandBuffer = BeginSingleTimeCommands();
+    commandBuffer.copyAccelerationStructureKHR(copyInfo);
+    EndSingleTimeCommands(commandBuffer);
+  }
 }
 
-void App::CreateInstanceLUTBuffer()
+void App::CreateBLASInstanceLUTBuffer()
 {
-  vk::DeviceSize bufferSize = sizeof(InstanceLUT) * instanceLUTs.size();
+  vk::DeviceSize bufferSize = sizeof(InstanceLUT) * blasInstanceLUTs.size();
 
   vk::raii::Buffer stagingBuffer({});
   vk::raii::DeviceMemory stagingBufferMemory({});
@@ -1618,7 +1729,7 @@ void App::CreateInstanceLUTBuffer()
 
   // Map and copy our loaded vertices data to the GPU host-visible memory
   void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-  memcpy(dataStaging, instanceLUTs.data(), (size_t)bufferSize);
+  memcpy(dataStaging, blasInstanceLUTs.data(), (size_t)bufferSize);
   // We don't need to access this buffer anymore, unmap
   stagingBufferMemory.unmapMemory();
 
@@ -1628,11 +1739,11 @@ void App::CreateInstanceLUTBuffer()
     bufferSize,
     vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
     vk::MemoryPropertyFlagBits::eDeviceLocal,
-    instanceLUTBuffer.first, instanceLUTBuffer.second
+    blasInstanceLUTBuffer.first, blasInstanceLUTBuffer.second
   );
 
   // Copy the host-visible buffer to the non-host-visible buffer
-  CopyBuffer(stagingBuffer, instanceLUTBuffer.first, bufferSize);
+  CopyBuffer(stagingBuffer, blasInstanceLUTBuffer.first, bufferSize);
 }
 
 // Create DescriptorPools that can allocate DescriptorSets. It's like a check making sure not too many descriptors of
@@ -1648,10 +1759,8 @@ void App::CreateDescriptorPools()
     std::array graphicsPoolSizes = {
       // Model View Projection matrices
       vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
-#ifdef REFERENCE
       // TLAS
       vk::DescriptorPoolSize(vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT),
-#endif
       // Index Buffer
       vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
       // UV Buffer
@@ -1754,10 +1863,9 @@ void App::CreateDescriptorSets()
         .pBufferInfo = &bufferInfo
       };
 
-#ifdef REFERENCE
       vk::WriteDescriptorSetAccelerationStructureKHR asInfo {
         .accelerationStructureCount = 1,
-        .pAccelerationStructures = &*tlas
+        .pAccelerationStructures = &*tlasHandle
       };
 
       vk::WriteDescriptorSet asWrite {
@@ -1768,7 +1876,6 @@ void App::CreateDescriptorSets()
         .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eAccelerationStructureKHR
       };
-#endif
 
       vk::DescriptorBufferInfo indexBufferInfo {
         .buffer = *indexBuffer.first,
@@ -1815,19 +1922,19 @@ void App::CreateDescriptorSets()
         .pBufferInfo = &nrmBufferInfo
       };
 
-      vk::DescriptorBufferInfo instanceLUTBufferInfo {
-        .buffer = *instanceLUTBuffer.first,
+      vk::DescriptorBufferInfo blasInstanceLUTBufferInfo {
+        .buffer = *blasInstanceLUTBuffer.first,
         .offset = 0,
-        .range = sizeof(InstanceLUT) * instanceLUTs.size()
+        .range = sizeof(InstanceLUT) * blasInstanceLUTs.size()
       };
 
-      vk::WriteDescriptorSet instanceLUTBufferWrite {
+      vk::WriteDescriptorSet blasInstanceLUTBufferWrite {
         .dstSet = globalDescriptorSets[i],
         .dstBinding = 5,
         .dstArrayElement = 0,
         .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
-        .pBufferInfo = &instanceLUTBufferInfo
+        .pBufferInfo = &blasInstanceLUTBufferInfo
       };
 
       // Samplable interface for image
@@ -1860,15 +1967,11 @@ void App::CreateDescriptorSets()
 
       std::array descriptorWrites = {
         bufferWrite, 
-#ifdef REFERENCE
         asWrite,
-#endif 
         indexBufferWrite, 
         uvBufferWrite,
         nrmBufferWrite,
-#ifdef REFERENCE
-        instanceLUTBufferWrite,
-#endif
+        blasInstanceLUTBufferWrite,
         samplerWrite,
         imageWrite
       };
@@ -2283,7 +2386,7 @@ void App::LoadTextures(const std::filesystem::path& parent_path)
   for (size_t i = 0; i < mats.size(); ++i) {
     futures.emplace_back(std::async(std::launch::async, [this, &parent_path, i]() {
         // Get the path of the texture relative to the glTF file
-        const char* uri = asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri;
+        const auto& uri = asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri;
         // Adjust the path to be relative to the executable, load the texture at that combined uri
         // The textureImage's and textureImageView's index corresponds to the material's index
         CreateTextureImage((parent_path / uri).generic_string().c_str(), i);
@@ -2664,6 +2767,12 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateVertexBuffer(cons
 // Use the Slang Compilation API to compile slang shaders to SPIR-V during and by the application
 void App::CompileShader(const char* src, const char* dst)
 {
+  // Early exit if source file does not exist
+  auto fsrc = fopen(src, "r");
+  if (fsrc == NULL) {
+    std::clog << "failed to open " << src << std::endl;
+    return;
+  }
   // We need to establish what this compilation session can and will do
   slang::SessionDesc sessionDesc = {};
   // Targeting SPIR-V v1.4 and writing it straight to a file
@@ -2717,8 +2826,11 @@ void App::CompileShader(const char* src, const char* dst)
   auto moduleName = std::filesystem::path(src).stem().string(); // just the filename, no path (Slang will look)
   auto module = 
     static_cast<Slang::ComPtr<slang::IModule>>(session->loadModule(moduleName.c_str(), diagnostics.writeRef()));
-  // Error messaging
-  if (diagnostics) std::cerr << (const char*)diagnostics->getBufferPointer() << std::endl;
+  // Error messaging + early exit on error
+  if (diagnostics) {
+    std::cerr << (const char*)diagnostics->getBufferPointer() << std::endl;
+    return;
+  }
 
   // Each of these entrypoints may exist, the IEntryPoint will simply contain nothing if it does not
   Slang::ComPtr<slang::IEntryPoint> vertexEntryPoint;
@@ -2746,7 +2858,11 @@ void App::CompileShader(const char* src, const char* dst)
       diagnostics.writeRef());
     if (diagnostics) std::cerr << diagnostics << std::endl;
 
-    if (SLANG_FAILED(result)) std::cerr << "failed to compose program" << std::endl;
+    // Early exit to avoid writing bad SPIR-V
+    if (SLANG_FAILED(result)) {
+      std::cerr << "failed to compose program" << std::endl;
+      return;
+    }
   }
 
   // Convert the composed program into target-compatible bytecode
@@ -2759,8 +2875,10 @@ void App::CompileShader(const char* src, const char* dst)
     if (SLANG_SUCCEEDED(result))
       // Write the bytecode to a file for later. You could also store the compiled code in memory, saving on IO later
       WriteFile(dst, spirvCode->getBufferPointer(), spirvCode->getBufferSize());
-    else
+    else {
       std::cerr << "failed to get target code" << std::endl;
+      return;
+    }
   }
 }
 
@@ -2771,12 +2889,12 @@ void App::ReloadShaders()
   device.waitIdle();
 
   // Check that the SPIR-V files exist before continuing
-  auto spirv_paths = {&spirv_path, &compute_spirv_path};
+  const auto spirv_paths = {&spirv_path};
   for (const auto& path : spirv_paths) {
     auto f = fopen(*path, "r");
     // if the SPIR-V does not exist, abort reloading
     if (f == NULL) {
-      std::clog << "failed to open " << path << std::endl;
+      std::clog << "failed to open " << *path << std::endl;
       return;
     }
     fclose(f);

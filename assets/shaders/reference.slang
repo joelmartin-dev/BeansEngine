@@ -215,8 +215,8 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     const float4 viewCoords = mul(ubo.invProj, float4(clipCoords, 1.0, 1.0)); // Transform to view space
     
     // More samples == faster convergence, slower execution (but minus new frame overhead)
-    const uint MAX_SAMPLES = 2;
-    const uint MAX_DEPTH = 6;
+    const uint MAX_SAMPLES = 5;
+    const uint MAX_DEPTH = 4;
     const float INITIAL_MISS_DISTANCE = 1000.0f;
 
     float3 summedPixelCol = float3(0.0);
@@ -235,9 +235,6 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             rayDesc.Direction = rayDirection;
             rayDesc.TMin = 0.0;
             rayDesc.TMax = missDistance;
-            
-            // attenuate missDistance
-            //missDistance /= (depth + 1.0);
 
             RayQuery<RAY_FLAG_NONE> rq;
             let rayFlags = RAY_FLAG_NONE;
@@ -260,6 +257,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
 
                 if (intersectionColor.a >= 0.5)
                     rq.CommitNonOpaqueTriangleHit();
+
             }
 
             if (rq.CommittedStatus() == COMMITTED_NOTHING) {
@@ -268,36 +266,35 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
                 
                 break;
             }
-
-            uint instanceID = rq.CommittedInstanceIndex();
-            uint primIndex = rq.CommittedPrimitiveIndex();
-
-            float2x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CommittedTriangleBarycentrics());
-            float2 uv = primAttribs[0].xy;
-            float3 norm = primAttribs[1].xyz;
-
-            float4x3 worldToObject = rq.CommittedWorldToObject4x3();
-
-            uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
-            float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CommittedRayT() / 10.0);
-
+            
+            // Get next direction
             const float3 worldHitPos = rayOrigin + rayDirection * rq.CommittedRayT();
-            const float3 L = 1.0;//directIllumination(worldHitPos);
-
-            accumCol *= L * intersectionColor.rgb;
-
+            
             // Go to the world position of hit
             rayOrigin += rayDirection * rq.CommittedRayT();
             
             const float3 bounceRandom = randomDirection(seed);
             
+            uint instanceID = rq.CommittedInstanceIndex();
+            uint primIndex = rq.CommittedPrimitiveIndex();
+
+            const float2x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CommittedTriangleBarycentrics());
+            const float2 uv = primAttribs[0].xy;
+            const float3 norm = primAttribs[1].xyz;
+            const float4x3 worldToObject = rq.CommittedWorldToObject4x3();
+            
             rayDirection = normalize(mul(worldToObject, norm).xyz + bounceRandom);
             
             // Avoid self-intersections by starting slightly above the surface
             rayOrigin += rayDirection * 0.001;
-            
-            // Check direct illumination at point (still random, biased towards light)
-            if (depth + 1 >= MAX_DEPTH) {
+
+            uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
+            float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CommittedRayT() / 10.0);
+
+            accumCol *= intersectionColor.rgb;
+
+            // Check the direct illumination at point (still random, biased towards light)
+            if ( depth + 1 >= MAX_DEPTH) {
                 const float3 bounceRandom = randomDirection(seed);
                 rayDirection = normalize(pc.lightDir + bounceRandom);
         
@@ -326,7 +323,6 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     }
 
     summedPixelCol /= (float)MAX_SAMPLES;
-
 
     if (pc.frame == 0) {
         outImage[pixelCoords] = float4(summedPixelCol, 1.0);

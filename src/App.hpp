@@ -59,14 +59,11 @@ constexpr uint32_t LIGHT_COUNT = 8;
 // Default asset paths
 static char model_path[256] = "assets/sponza/Sponza.gltf";
 #ifndef REFERENCE
-static char slang_path[256] = "assets/shaders/shader.slang";
+static char slang_path[256] = "assets/shaders/raster.slang";
 #else
 static char slang_path[256] = "assets/shaders/reference.slang";
 #endif
 static char spirv_path[256] = "assets/shaders/shader.spv";
-
-static char compute_slang_path[256] = "assets/shaders/radiance_cascades.slang";
-static char compute_spirv_path[256] = "assets/shaders/compute.spv";
 
 /*===================================================== Terminology ==================================================//
        Surface: an abstraction of an image, something a framebuffer can present to
@@ -269,18 +266,18 @@ struct App {
   std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> blasBuffers;
   std::vector<vk::raii::AccelerationStructureKHR> blasHandles;
 
-  std::vector<vk::AccelerationStructureInstanceKHR> instances;
-  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> instanceBuffer = std::pair(nullptr, nullptr);
+  std::vector<vk::AccelerationStructureInstanceKHR> blasInstances;
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> blasInstanceBuffer = std::pair(nullptr, nullptr);
 
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> tlasBuffer = std::pair(nullptr, nullptr);
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> tlasScratchBuffer = std::pair(nullptr, nullptr);
-  vk::raii::AccelerationStructureKHR tlas = nullptr;
+  vk::raii::AccelerationStructureKHR tlasHandle = nullptr;
 
   std::vector<SubMesh> submeshes;
 
   // CreateInstanceLUT
-  std::vector<InstanceLUT> instanceLUTs;
-  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> instanceLUTBuffer = std::pair(nullptr, nullptr);
+  std::vector<InstanceLUT> blasInstanceLUTs;
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> blasInstanceLUTBuffer = std::pair(nullptr, nullptr);
 
   // CreateComputeTexture
   std::pair<vk::raii::Image, vk::raii::DeviceMemory> pathTracingTexture = std::pair(nullptr, nullptr);
@@ -350,7 +347,7 @@ struct App {
   void CreateUVBuffer();
   void CreateNrmBuffer();
   void CreateAccelerationStructures();
-  void CreateInstanceLUTBuffer();
+  void CreateBLASInstanceLUTBuffer();
   void CreatePathTracingTexture();
   void CreateDescriptorPools();
   void CreateDescriptorSets();
