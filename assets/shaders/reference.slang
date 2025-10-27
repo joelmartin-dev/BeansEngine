@@ -56,25 +56,28 @@ VSOutput vertMain(VSInput input) {
 // the indices of the scene
 [[vk::binding(2, 0)]] StructuredBuffer<uint> indexBuffer;
 
+// the vertex colours of the scene
+[[vk::binding(3, 0)]] StructuredBuffer<float3> colourBuffer;
+
 // the uvs of each vertex in the scene
-[[vk::binding(3, 0)]] StructuredBuffer<float2> uvBuffer;
+[[vk::binding(4, 0)]] StructuredBuffer<float2> uvBuffer;
 
 // the normals of each vertex in the scene
-[[vk::binding(4, 0)]] StructuredBuffer<float4> nrmBuffer;
+[[vk::binding(5, 0)]] StructuredBuffer<float4> nrmBuffer;
 
 // Each submesh's unique attributes
 struct InstanceLUT {
     uint materialID; // submesh's material (corresponds to texture array index)
     uint indexBufferOffset; // lookup indices > indexBufferOffset for other attributes (uvs, normals)
 };
-[[vk::binding(5, 0)]] StructuredBuffer<InstanceLUT> instanceLUTBuffer;
+[[vk::binding(6, 0)]] StructuredBuffer<InstanceLUT> instanceLUTBuffer;
 
 // Sampler of the written-to image
-[vk::binding(6, 0)] Sampler2D sampler;
+[[vk::binding(7, 0)]] Sampler2D sampler;
 
 // Write access to StorageImage
 [vk_image_format("rgba32f")]
-[[vk::binding(7, 0)]] RWTexture2D<float4> outImage;
+[[vk::binding(8, 0)]] RWTexture2D<float4> outImage;
 
 // Sampler for texture array
 [[vk::binding(0,1)]] SamplerState textureSampler;
@@ -98,7 +101,7 @@ float4 fragMain(VSOutput vertIn) : SV_TARGET {
 }
 
 // Get the attributes at a point on a triangle primitive's surface, interpolating its vertices' attributes
-float2x3 getPrimAttribs(uint instanceID, uint primIndex, float2 barycentrics) {
+float3x3 getPrimAttribs(uint instanceID, uint primIndex, float2 barycentrics) {
     // The starting index of this primitive within an instance
     uint indexOffset = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].indexBufferOffset;
 
@@ -106,6 +109,10 @@ float2x3 getPrimAttribs(uint instanceID, uint primIndex, float2 barycentrics) {
     uint i0 = indexBuffer[indexOffset + (primIndex * 3 + 0)];
     uint i1 = indexBuffer[indexOffset + (primIndex * 3 + 1)];
     uint i2 = indexBuffer[indexOffset + (primIndex * 3 + 2)];
+
+    float3 col0 = colourBuffer[i0].xyz;
+    float3 col1 = colourBuffer[i1].xyz;
+    float3 col2 = colourBuffer[i2].xyz;
 
     // Pad the UVs with second y to make correct row length for float2x3 
     float3 uv0 = uvBuffer[i0].xyy;
@@ -123,7 +130,11 @@ float2x3 getPrimAttribs(uint instanceID, uint primIndex, float2 barycentrics) {
     float w2 = barycentrics.y;
 
     // the uvs and normals at hit location on triangle
-    return float2x3(w0 * uv0 + w1 * uv1 + w2 * uv2, w0 * nrm0 + w1 * nrm1 + w2 * nrm2);
+    return float3x3(
+        w0 * col0 + w1 * col1 + w2 * col2,
+        w0 * uv0 + w1 * uv1 + w2 * uv2, 
+        w0 * nrm0 + w1 * nrm1 + w2 * nrm2
+    );
 }
 
 // Steps the RNG and returns a floating-point value between 0 and 1 inclusive.
@@ -215,7 +226,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     const float4 viewCoords = mul(ubo.invProj, float4(clipCoords, 1.0, 1.0)); // Transform to view space
     
     // More samples == faster convergence, slower execution (but minus new frame overhead)
-    const uint MAX_SAMPLES = 5;
+    const uint MAX_SAMPLES = 4;
     const uint MAX_DEPTH = 4;
     const float INITIAL_MISS_DISTANCE = 1000.0f;
 
@@ -245,9 +256,8 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
                 uint instanceID = rq.CandidateInstanceIndex();
                 uint primIndex = rq.CandidatePrimitiveIndex();
 
-                float2x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CandidateTriangleBarycentrics());
-                float2 uv = primAttribs[0].xy;
-                float3 norm = primAttribs[1].xyz;
+                float3x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CandidateTriangleBarycentrics());
+                float2 uv = primAttribs[1].xy;
 
                 uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
 
@@ -255,9 +265,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
                 textures[NonUniformResourceIndex(materialID)].GetDimensions(1, width, height, levelCount);
                 float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CandidateTriangleRayT() / (float) levelCount);
 
-                if (intersectionColor.a >= 0.5)
-                    rq.CommitNonOpaqueTriangleHit();
-
+                if (intersectionColor.a >= 0.5) rq.CommitNonOpaqueTriangleHit();
             }
 
             if (rq.CommittedStatus() == COMMITTED_NOTHING) {
@@ -278,9 +286,10 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             uint instanceID = rq.CommittedInstanceIndex();
             uint primIndex = rq.CommittedPrimitiveIndex();
 
-            const float2x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CommittedTriangleBarycentrics());
-            const float2 uv = primAttribs[0].xy;
-            const float3 norm = primAttribs[1].xyz;
+            const float3x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CommittedTriangleBarycentrics());
+            const float3 col = primAttribs[0].xyz;
+            const float2 uv = primAttribs[1].xy;
+            const float3 norm = primAttribs[2].xyz;
             const float4x3 worldToObject = rq.CommittedWorldToObject4x3();
             
             rayDirection = normalize(mul(worldToObject, norm).xyz + bounceRandom);
@@ -289,9 +298,13 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             rayOrigin += rayDirection * 0.001;
 
             uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
-            float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CommittedRayT() / 10.0);
+            uint _width, _height, levelCount;
+            textures[NonUniformResourceIndex(materialID)].GetDimensions(1, _width, _height, levelCount);
+            float4 intersectionColor = 
+                textures[NonUniformResourceIndex(materialID)].SampleLevel(
+                    textureSampler, uv, rq.CommittedRayT() / (float) levelCount);
 
-            accumCol *= intersectionColor.rgb;
+            accumCol *= intersectionColor.rgb * col;
 
             // Check the direct illumination at point (still random, biased towards light)
             if ( depth + 1 >= MAX_DEPTH) {

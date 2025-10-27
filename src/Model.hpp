@@ -3,6 +3,7 @@
 #include <vector>
 #include <vulkan/vulkan_raii.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include "Vertex.hpp"
 
 // stores the unique data of each primitive in a gltf
 struct Material {
@@ -33,4 +34,28 @@ struct RenderTarget {
 
   std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> graphicsPipeline = std::pair(nullptr, nullptr);
 };
+
+struct Quad {
+  const std::vector<Vertex> vertices = {
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}},
+    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}},
+    {{0.5f, -0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}},
+    {{0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}}
+  };
+
+  const std::vector<uint32_t> indices = {0, 1, 2, 2, 3, 0};
+};
+
+struct Triangle {
+  // These coordinates will always create a triangle that completely covers the screen.
+  // Double the width and double the height of the viewport
+  const std::vector<Vertex> vertices = {
+    {{-1.0f, -1.0f, -0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
+    {{-1.0f, 3.0f, -0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 2.0f}},
+    {{3.0f, -1.0f, -0.0f}, {0.0f, 1.0f, 0.0f}, {2.0f, 0.0f}},
+  };
+
+  const std::vector<uint32_t> indices = {0, 1, 2};
+};
+
 #endif

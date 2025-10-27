@@ -12,11 +12,23 @@ struct MVP {
   glm::aligned_mat4 invProj = glm::aligned_mat4();
 };
 
-struct PushConstant {
+struct PathTracePushConstant {
   uint32_t frame;
   float time;
   float intensity;
   glm::aligned_vec3 lightDir;
+};
+
+struct RasterPushConstant {
+  uint32_t materialIndex;
+};
+
+struct RadianceCascadesPushConstant {
+  uint32_t level;
+};
+
+struct ReSTIRPushConstant {
+
 };
 
 struct SubMesh {

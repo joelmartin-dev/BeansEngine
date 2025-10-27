@@ -1,6 +1,7 @@
 # Makefile, based on makefiletutorial.com
 
 TARGET_EXEC := main
+DEBUG_EXEC := debug
 
 BUILD_DIR := bin
 SRC_DIR := src
@@ -34,12 +35,13 @@ WARNING_FLAGS := $(addprefix -W,$(WARNINGS))
 OPTIM_LEVEL := -O0
 
 DEBUG := -g
-DEBUG_CPP := _DEBUG
+DEBUGF := _DEBUG
 
-REFERENCE := REFERENCE
+REFERENCE := NREFERENCE
 RESTIR := NRESTIR
+CASCADES := NRADIANCE_CASCADES
 
-DEFINES := $(REFERENCE) $(RESTIR) $(DEBUG_CPP) KHRONOS_STATIC GLM_ENABLE_EXPERIMENTAL VULKAN_HPP_NO_STRUCT_CONSTRUCTORS IMGUI_IMPL_VULKAN_USE_VOLK
+DEFINES := $(REFERENCE) $(RESTIR) $(CASCADES) $(DEBUGF) KHRONOS_STATIC GLM_ENABLE_EXPERIMENTAL VULKAN_HPP_NO_STRUCT_CONSTRUCTORS IMGUI_IMPL_VULKAN_USE_VOLK
 D_FLAGS := $(addprefix -D,$(DEFINES))
 
 # C Preprocessor flags
@@ -58,7 +60,15 @@ LD_FLAGS := -L$(LIB_DIR) -lglfw3 -lvolk -lktx_read -lslang -lslang-rt
 # $< is the first prerequisite
 # $? is all prerequisites newer than target
 
+default:
+	make clean
+	make $(BUILD_DIR)/$(TARGET_EXEC) -j
+
 $(BUILD_DIR)/$(TARGET_EXEC): $(OBJS)
+	mkdir -p $(dir $@)
+	$(CXX) $(OBJS) -o $@ $(LD_FLAGS)
+
+$(BUILD_DIR)/$(DEBUG_EXEC): $(OBJS)
 	mkdir -p $(dir $@)
 	$(CXX) $(OBJS) -o $@ $(LD_FLAGS)
 
@@ -70,13 +80,25 @@ $(OBJ_DIR)/%.cpp.o: %.cpp
 	mkdir -p $(dir $@)
 	$(CXX) $(CPP_FLAGS) $(CXX_FLAGS) -c $< -o $@
 
-.PHONY: printf clean run
+
+.PHONY: main debug printf clean clean_obj clean_build run rund
+
+main: DEBUGF=NDEBUG $(BUILD_DIR)/$(TARGET_EXEC)
+
+debug: DEBUGF=_DEBUG $(BUILD_DIR)/$(DEBUG_EXEC)
 
 run:
 	./$(BUILD_DIR)/$(TARGET_EXEC)
 
-clean:
+rund:
+	./$(BUILD_DIR)/$(DEBUG_EXEC)
+
+clean: clean_obj clean_build
+
+clean_obj:
 	rm -rf $(OBJ_DIR)
+
+clean_build:
 	rm -rf $(BUILD_DIR)
 
 clean_shaders:

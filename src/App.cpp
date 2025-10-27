@@ -225,14 +225,6 @@ void App::InitWindow()
         break;
       }
   });
-
-  // when user moves mouse
-  glfwSetCursorPosCallback(pWindow, [](GLFWwindow* _pWindow, double xpos, double ypos) {
-      // Application uses two input modes: raw motion and cursor position
-      // We only want to check cursor position when raw motion is enabled (requires cursor to be disabled)
-      if (glfwGetInputMode(_pWindow, GLFW_CURSOR) == GLFW_CURSOR_DISABLED)
-        static_cast<App*>(glfwGetWindowUserPointer(_pWindow))->camera.CursorHandler(xpos, ypos);
-  });
 }
 
 // initialise Vulkan backend and struct members
@@ -269,10 +261,12 @@ void App::InitVulkan()
   CreateUniformBuffers();
   CreateVertexBuffers();
   CreateIndexBuffers();
+  CreateColourBuffer();
   CreateUVBuffer();
   CreateNrmBuffer();
   CreateAccelerationStructures();
   CreateBLASInstanceLUTBuffer();
+  CreateIndirectCommands();
 
   CreatePathTracingTexture();
   
@@ -673,6 +667,7 @@ void App::PickPhysicalDevice()
       bool supportsRequiredFeatures = 
         // allows anisotropic sampling to some degree
         features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&
+        features.template get<vk::PhysicalDeviceFeatures2>().features.multiDrawIndirect &&
         // simplified API for Vulkan synchronization objects e.g. semaphores, fences
         features.template get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
         // allows for implicit render passes
@@ -753,7 +748,7 @@ void App::CreateLogicalDevice()
                      vk::PhysicalDeviceAccelerationStructureFeaturesKHR, 
                      vk::PhysicalDeviceRayQueryFeaturesKHR>
   featureChain = {
-    {.features = {.samplerAnisotropy = true } },                       // vk::PhysicalDeviceFeatures2
+    {.features = { .multiDrawIndirect = true, .samplerAnisotropy = true } },  // vk::PhysicalDeviceFeatures2
     { 
       .shaderSampledImageArrayNonUniformIndexing = true, 
       .descriptorBindingSampledImageUpdateAfterBind = true,
@@ -764,10 +759,10 @@ void App::CreateLogicalDevice()
       .timelineSemaphore = true,
       .bufferDeviceAddress = true,
     },    // vk::PhysicalDeviceVulkan12Features
-    {.synchronization2 = true, .dynamicRendering = true },             // vk::PhysicalDeviceVulkan13Features
-    {.extendedDynamicState = true },                                   // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
-    {.accelerationStructure = true },                                  // vk::PhysicalDeviceAccelerationStructureFeaturesKHR
-    {.rayQuery = true },                                                // vk::PhysicalDeviceRayQueryFeaturesKHR
+    {.synchronization2 = true, .dynamicRendering = true },  // vk::PhysicalDeviceVulkan13Features
+    {.extendedDynamicState = true },                        // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
+    {.accelerationStructure = true },                       // vk::PhysicalDeviceAccelerationStructureFeaturesKHR
+    {.rayQuery = true },                                    // vk::PhysicalDeviceRayQueryFeaturesKHR
   };
   
   //=============================================== Devices and Queues ===============================================//
@@ -950,7 +945,7 @@ void App::CreateCommandPool()
 // Allocate the command buffers from the pool and device
 void App::CreateCommandBuffers()
 {
-  commandBuffers.clear();
+  drawCommandBuffers.clear();
 
   vk::CommandBufferAllocateInfo allocInfo {
     .commandPool = commandPool, // the pool to allocate from
@@ -958,7 +953,7 @@ void App::CreateCommandBuffers()
     .commandBufferCount = MAX_FRAMES_IN_FLIGHT // how many buffers to allocate for
   };
 
-  commandBuffers = vk::raii::CommandBuffers(device, allocInfo);
+  drawCommandBuffers = vk::raii::CommandBuffers(device, allocInfo);
   computeCommandBuffers = vk::raii::CommandBuffers(device, allocInfo);
 }
 
@@ -1012,6 +1007,7 @@ void App::CreateDescriptorSetLayouts()
     // Descriptor bindings are like slots in descriptor sets
     std::array globalBindings = {
       // Binding for the Model View Projection matrix from the Camera, used exclusively by the vertex shader
+      // Model-View-Projection Buffer
       vk::DescriptorSetLayoutBinding(
         0,                                    // Binding
         vk::DescriptorType::eUniformBuffer,   // Descriptor Type
@@ -1020,6 +1016,7 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
+      // TLAS
       vk::DescriptorSetLayoutBinding(
         1,                                    // Binding
         vk::DescriptorType::eAccelerationStructureKHR,   // Descriptor Type
@@ -1027,6 +1024,7 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
+      // Index Buffer
       vk::DescriptorSetLayoutBinding(
         2,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
@@ -1034,6 +1032,7 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
+      // Vertex Colour Buffer
       vk::DescriptorSetLayoutBinding(
         3,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
@@ -1041,6 +1040,7 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
+      // UV Buffer
       vk::DescriptorSetLayoutBinding(
         4,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
@@ -1048,6 +1048,7 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
+      // Normals Buffer
       vk::DescriptorSetLayoutBinding(
         5,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
@@ -1055,15 +1056,25 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
+      // BLAS Lookup Table Buffer
       vk::DescriptorSetLayoutBinding(
-        6,
+        6,                                    // Binding
+        vk::DescriptorType::eStorageBuffer,   // Descriptor Type
+        1,                                    // Descriptors Count
+        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
+        nullptr                               // pImmutableSamplers
+      ),
+      // Storage Image read-only Sampler
+      vk::DescriptorSetLayoutBinding(
+        7,
         vk::DescriptorType::eCombinedImageSampler,
         1,
         vk::ShaderStageFlagBits::eFragment,
         nullptr
       ),
+      // Storage Image Read-Write
       vk::DescriptorSetLayoutBinding(
-        7,
+        8,
         vk::DescriptorType::eStorageImage,
         1,
         vk::ShaderStageFlagBits::eCompute,
@@ -1088,6 +1099,7 @@ void App::CreateDescriptorSetLayouts()
         0,
         vk::DescriptorType::eSampler,
         1,
+        vk::ShaderStageFlagBits::eFragment |
         vk::ShaderStageFlagBits::eCompute,
         nullptr
       ),
@@ -1095,6 +1107,7 @@ void App::CreateDescriptorSetLayouts()
         1,
         vk::DescriptorType::eSampledImage,
         textureCount,
+        vk::ShaderStageFlagBits::eFragment |
         vk::ShaderStageFlagBits::eCompute,
         nullptr
       ),
@@ -1224,60 +1237,60 @@ void App::CreatePathTracingTexture()
 // Create the vertex buffers for the scene AND the fullscreen triangle (for postprocessing effects)
 void App::CreateVertexBuffers()
 {
-  vertexBuffer = CreateVertexBuffer(vertices);
-
-  // These coordinates will always create a triangle that completely covers the screen.
-  // Double the width and double the height of the viewport
-  const std::vector<Vertex> triangle = {
-    {{-1.0f, -1.0f, -0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-    {{-1.0f, 3.0f, -0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 2.0f}},
-    {{3.0f, -1.0f, -0.0f}, {0.0f, 1.0f, 0.0f}, {2.0f, 0.0f}},
-  };
-  triangleBuffer = CreateVertexBuffer(triangle);
+  vertexBuffer   = CreateVertexBuffer(vertices);
+  triangleVertexBuffer = CreateVertexBuffer(Triangle().vertices);
 }
 
 // We just need the indices stored on the GPU. We will instruct the GPU on how to interpret the data later.
 void App::CreateIndexBuffers()
 {
   // SCENE INDEX BUFFER
-  {
-    // The exact same as CreateVertexBuffers, but the second buffer has IndexBuffer usage
-    // indices are all the same type
-    vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
-    vk::raii::Buffer stagingBuffer({});
-    vk::raii::DeviceMemory stagingBufferMemory({});
+  indexBuffer = CreateIndexBuffer(
+    indices,
+    vk::BufferUsageFlagBits::eShaderDeviceAddress |
+    vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
+    vk::BufferUsageFlagBits::eStorageBuffer
+  );
+  triangleIndexBuffer = CreateIndexBuffer(Triangle().indices, {});
+}
 
-    // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
-    // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
-    CreateBuffer(
-      bufferSize,
-      vk::BufferUsageFlagBits::eTransferSrc,
-      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-      stagingBuffer, stagingBufferMemory
-    );
+void App::CreateColourBuffer()
+{
+  std::vector<glm::vec3> colours;
+  colours.reserve(vertices.size());
+  for (auto& v : vertices) colours.push_back(v.colour);
+  
+  vk::DeviceSize bufferSize = sizeof(colours[0]) * colours.size();
 
-    // Map and copy our loaded vertices data to the GPU host-visible memory
-    void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-    memcpy(dataStaging, indices.data(), (size_t)bufferSize);
-    // We don't need to access this buffer anymore, unmap
-    stagingBufferMemory.unmapMemory();
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
 
-    // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
-    // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
-    CreateBuffer(
-      bufferSize,
-      vk::BufferUsageFlagBits::eIndexBuffer | 
-      vk::BufferUsageFlagBits::eTransferDst | 
-      vk::BufferUsageFlagBits::eShaderDeviceAddress |
-      vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
-      vk::BufferUsageFlagBits::eStorageBuffer,
-      vk::MemoryPropertyFlagBits::eDeviceLocal,
-      indexBuffer.first, indexBuffer.second
-    );
+  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
+  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eTransferSrc,
+    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+    stagingBuffer, stagingBufferMemory
+  );
 
-    // Copy the host-visible buffer to the non-host-visible buffer
-    CopyBuffer(stagingBuffer, indexBuffer.first, bufferSize);
-  }
+  // Map and copy our loaded vertices data to the GPU host-visible memory
+  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(dataStaging, colours.data(), (size_t)bufferSize);
+  // We don't need to access this buffer anymore, unmap
+  stagingBufferMemory.unmapMemory();
+
+  // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
+  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    colourBuffer.first, colourBuffer.second
+  );
+
+  // Copy the host-visible buffer to the non-host-visible buffer
+  CopyBuffer(stagingBuffer, colourBuffer.first, bufferSize);
 }
 
 void App::CreateUVBuffer()
@@ -1746,6 +1759,57 @@ void App::CreateBLASInstanceLUTBuffer()
   CopyBuffer(stagingBuffer, blasInstanceLUTBuffer.first, bufferSize);
 }
 
+void App::CreateIndirectCommands()
+{
+  indirectCommands.resize(submeshes.size());
+
+  for (size_t i = 0; i < submeshes.size(); i++) {
+    auto& submesh = submeshes[i];
+    vk::DrawIndexedIndirectCommand cmd {
+      .indexCount = submesh.indexCount,
+      .instanceCount = 1,
+      .firstIndex = submesh.indexOffset,
+      .vertexOffset = static_cast<int32_t>(submesh.firstVertex),
+      .firstInstance = static_cast<uint32_t>(i),
+    };
+    indirectCommands[i] = cmd;
+  }
+
+  vk::DeviceSize bufferSize = sizeof(indirectCommands[0]) * indirectCommands.size();
+
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
+
+  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
+  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eTransferSrc,
+    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+    stagingBuffer, stagingBufferMemory
+  );
+
+  // Map and copy our loaded vertices data to the GPU host-visible memory
+  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(dataStaging, blasInstanceLUTs.data(), (size_t)bufferSize);
+  // We don't need to access this buffer anymore, unmap
+  stagingBufferMemory.unmapMemory();
+
+  // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
+  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eIndirectBuffer |
+    vk::BufferUsageFlagBits::eStorageBuffer | 
+    vk::BufferUsageFlagBits::eTransferDst,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    indirectCommandsBuffer.first, indirectCommandsBuffer.second
+  );
+
+  // Copy the host-visible buffer to the non-host-visible buffer
+  CopyBuffer(stagingBuffer, indirectCommandsBuffer.first, bufferSize);
+}
+
 // Create DescriptorPools that can allocate DescriptorSets. It's like a check making sure not too many descriptors of
 // some type are allocated, as it does not take layouts into account
 void App::CreateDescriptorPools()
@@ -1762,6 +1826,8 @@ void App::CreateDescriptorPools()
       // TLAS
       vk::DescriptorPoolSize(vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT),
       // Index Buffer
+      vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
+      // Vertex Colour Buffer
       vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
       // UV Buffer
       vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
@@ -1856,9 +1922,7 @@ void App::CreateDescriptorSets()
 
       vk::WriteDescriptorSet bufferWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 0,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
+        .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eUniformBuffer,
         .pBufferInfo = &bufferInfo
       };
@@ -1871,9 +1935,7 @@ void App::CreateDescriptorSets()
       vk::WriteDescriptorSet asWrite {
         .pNext = &asInfo,
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 1,
-        .dstArrayElement = 0, 
-        .descriptorCount = 1,
+        .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eAccelerationStructureKHR
       };
 
@@ -1885,11 +1947,22 @@ void App::CreateDescriptorSets()
 
       vk::WriteDescriptorSet indexBufferWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 2,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
+        .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .pBufferInfo = &indexBufferInfo
+      };
+
+      vk::DescriptorBufferInfo colourBufferInfo {
+        .buffer = *colourBuffer.first,
+        .offset = 0,
+        .range = sizeof(glm::vec3) * vertices.size()
+      };
+
+      vk::WriteDescriptorSet colourBufferWrite {
+        .dstSet = globalDescriptorSets[i],
+        .dstBinding = 3, .dstArrayElement = 0, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eStorageBuffer,
+        .pBufferInfo = &colourBufferInfo
       };
 
       vk::DescriptorBufferInfo uvBufferInfo {
@@ -1900,9 +1973,7 @@ void App::CreateDescriptorSets()
 
       vk::WriteDescriptorSet uvBufferWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 3,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
+        .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .pBufferInfo = &uvBufferInfo
       };
@@ -1915,9 +1986,7 @@ void App::CreateDescriptorSets()
 
       vk::WriteDescriptorSet nrmBufferWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 4,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
+        .dstBinding = 5, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .pBufferInfo = &nrmBufferInfo
       };
@@ -1930,9 +1999,7 @@ void App::CreateDescriptorSets()
 
       vk::WriteDescriptorSet blasInstanceLUTBufferWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 5,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
+        .dstBinding = 6, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .pBufferInfo = &blasInstanceLUTBufferInfo
       };
@@ -1947,7 +2014,7 @@ void App::CreateDescriptorSets()
       // Image as CombinedImageSampler
       vk::WriteDescriptorSet samplerWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 6, .dstArrayElement = 0, .descriptorCount = 1,
+        .dstBinding = 7, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &samplerInfo
       };
 
@@ -1960,7 +2027,7 @@ void App::CreateDescriptorSets()
       // Image as StorageImage
       vk::WriteDescriptorSet imageWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 7, .dstArrayElement = 0, .descriptorCount = 1,
+        .dstBinding = 8, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfo
       };
 
@@ -1968,6 +2035,7 @@ void App::CreateDescriptorSets()
       std::array descriptorWrites = {
         bufferWrite, 
         asWrite,
+        colourBufferWrite,
         indexBufferWrite, 
         uvBufferWrite,
         nrmBufferWrite,
@@ -2114,7 +2182,7 @@ void App::DrawFrame()
         .pNext = &graphicsTimelineInfo, // the wait and signal values for the timelineSemaphore
         .waitSemaphoreCount = 1, .pWaitSemaphores = &*timelineSemaphore,
         .pWaitDstStageMask = &waitStage,
-        .commandBufferCount = 1, .pCommandBuffers = &*commandBuffers[currentFrame], // the command buffer to submit
+        .commandBufferCount = 1, .pCommandBuffers = &*drawCommandBuffers[currentFrame], // the command buffer to submit
         .signalSemaphoreCount = 1, .pSignalSemaphores = &*timelineSemaphore
     };
 
@@ -2261,12 +2329,20 @@ void App::CreateGraphicsPipeline()
   vk::PushConstantRange pushConstantRange {
     .stageFlags = vk::ShaderStageFlagBits::eFragment,
     .offset = 0,
-    .size = sizeof(PushConstant)
+#if defined(REFERENCE) && !defined(RESTIR) && !defined(RADIANCE_CASCADES)
+    .size = sizeof(PathTracePushConstant)
+#elif !defined(REFERENCE) && defined(RESTIR) && !defined(RADIANCE_CASCADES)
+    .size = sizeof(ReSTIRPushConstant)
+#elif !defined(REFERENCE) && !defined(RESTIR) && defined(RADIANCE_CASCADES)
+    .size = sizeof(RadianceCascadesPushConstant)
+#else
+    .size = sizeof(RasterPushConstant)
+#endif
   };
 
   // Which DescriptorSetLayouts will be used by this pipeline
   vk::PipelineLayoutCreateInfo pipelineLayoutInfo { 
-    .setLayoutCount = 2, .pSetLayouts = descriptorSetLayouts.data(),
+    .setLayoutCount = descriptorSetLayouts.size(), .pSetLayouts = descriptorSetLayouts.data(),
     .pushConstantRangeCount = 1, .pPushConstantRanges = &pushConstantRange
   };
   graphicsPipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
@@ -2317,12 +2393,20 @@ void App::CreateComputePipeline()
   vk::PushConstantRange pushConstantRange {
     .stageFlags = vk::ShaderStageFlagBits::eCompute,
     .offset = 0,
-    .size = sizeof(PushConstant)
+#if defined(REFERENCE) && !defined(RESTIR) && !defined(RADIANCE_CASCADES)
+    .size = sizeof(PathTracePushConstant)
+#elif !defined(REFERENCE) && defined(RESTIR) && !defined(RADIANCE_CASCADES)
+    .size = sizeof(ReSTIRPushConstant)
+#elif !defined(REFERENCE) && !defined(RESTIR) && defined(RADIANCE_CASCADES)
+    .size = sizeof(RadianceCascadesPushConstant)
+#else
+    .size = sizeof(RasterPushConstant)
+#endif
   };
 
   // Which DescriptorSetLayouts will be used by this pipeline
   vk::PipelineLayoutCreateInfo pipelineLayoutInfo { 
-    .setLayoutCount = 2, .pSetLayouts = descriptorSetLayouts.data(),
+    .setLayoutCount = descriptorSetLayouts.size(), .pSetLayouts = descriptorSetLayouts.data(),
     .pushConstantRangeCount = 1, .pPushConstantRanges = &pushConstantRange
   };
   computePipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
@@ -2355,18 +2439,14 @@ void App::LoadAsset(const char* path)
     throw std::runtime_error(std::string("failed to load buffers for ").append(path)); cgltf_free(asset);
   }
 
-  // Initialise relevant class members as arrays of size materials_count
-  mats.clear();
-  mats.resize(asset->materials_count);
-
   // Reset and rebuild arrays of textures and texture views for indexed access
   baseTextureImages.clear();
-  baseTextureImages.reserve(static_cast<size_t>(asset->materials_count));
+  baseTextureImages.reserve(static_cast<size_t>(asset->images_count));
 
   baseTextureImageViews.clear();
-  baseTextureImageViews.reserve(static_cast<size_t>(asset->materials_count));
+  baseTextureImageViews.reserve(static_cast<size_t>(asset->images_count));
 
-  for (size_t i = 0; i < asset->materials_count; i++) {
+  for (size_t i = 0; i < asset->images_count; i++) {
     baseTextureImages.emplace_back(std::pair(nullptr, nullptr));
     baseTextureImageViews.emplace_back(nullptr);
   }
@@ -2380,13 +2460,13 @@ void App::LoadTextures(const std::filesystem::path& parent_path)
   // some point which we can wait for later
   std::vector<std::future<void>> futures;
   // use reserve when you want to do a single memory allocation and use emplace_back
-  futures.reserve(mats.size());
+  futures.reserve(asset->images_count);
 
   // Load the albedo texture of each material
-  for (size_t i = 0; i < mats.size(); ++i) {
+  for (size_t i = 0; i < asset->images_count; ++i) {
     futures.emplace_back(std::async(std::launch::async, [this, &parent_path, i]() {
         // Get the path of the texture relative to the glTF file
-        const auto& uri = asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri;
+        const auto& uri = asset->images[i].uri;
         // Adjust the path to be relative to the executable, load the texture at that combined uri
         // The textureImage's and textureImageView's index corresponds to the material's index
         CreateTextureImage((parent_path / uri).generic_string().c_str(), i);
@@ -2611,14 +2691,22 @@ void App::LoadGeometry()
       auto matIdxs = std::views::iota(cgltf_size{ 0 }, asset->materials_count);
       // Get the mats index of the primitive's identical material by comparing the uris
       // We derived the order of mats from the order of asset->materials, so they are identical
-      auto matIt = std::ranges::find_if(matIdxs, [&](cgltf_size i) {
-        return strcmp(
-                 p->material->pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri,
-          asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri
-        ) == 0;
-      });
-      if (matIt == matIdxs.end()) throw std::runtime_error("failed to find material!");
-      mats[*matIt].id = *matIt;
+      uint32_t matIdx = 0;
+      
+      if (p->material->has_pbr_metallic_roughness) {
+        if (p->material->pbr_metallic_roughness.base_color_texture.texture != NULL) {
+          auto matIt = std::ranges::find_if(matIdxs, [&](cgltf_size i) {
+            if (asset->materials[i].has_pbr_metallic_roughness)
+              if (asset->materials[i].pbr_metallic_roughness.base_color_texture.texture != NULL)
+                return strcmp(
+                  p->material->pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri, 
+                  asset->materials[i].pbr_metallic_roughness.base_color_texture.texture->basisu_image->uri) == 0;
+            return false;
+          });
+          if (matIt == matIdxs.end()) throw std::runtime_error("failed to find material!");
+          matIdx = *matIt;
+        }
+      }
 
       // v_offset will help in evaluating the absolute value of this primitives indices so they match up with the
       // correct vertices in the vertex buffer
@@ -2688,6 +2776,9 @@ void App::LoadGeometry()
       // Unpack vertex normals into glm::vec3 vector
       auto norms = GetAccessorData<glm::vec3>(normAccessor);
 
+      glm::vec3 col = glm::vec3(1.0f);
+      for (int f = 0; f < 3; f++) col[f] = p->material->pbr_metallic_roughness.base_color_factor[f];
+
       // Get the model's scale
       glm::vec3 scale(1.0f);
       if (asset->nodes[0].has_scale) {
@@ -2700,15 +2791,15 @@ void App::LoadGeometry()
       vertices.resize(vertices.size() + posAccessor->count);
       for (size_t i = 0; i < posAccessor->count; i++) {
         vertices[v_offset + i].pos = positions[i] * scale; // positions adjusted for model scale
-        vertices[v_offset + i].texCoord = uvs[i];
+        vertices[v_offset + i].colour = col;
         vertices[v_offset + i].norm = norms[i];
-        vertices[v_offset + i].colour = norms[i];
+        vertices[v_offset + i].texCoord = uvs[i];
       }
 
       submeshes.push_back({
         .indexOffset = startOffset,
         .indexCount = indexOffset - startOffset,
-        .materialID = static_cast<int>(*matIt),
+        .materialID = static_cast<int>(matIdx),
         .firstVertex = 0u,
         .maxVertex = static_cast<uint32_t>(vertices.size()),
         .alphaCut = p->material->alpha_mode > cgltf_alpha_mode_opaque,
@@ -2762,6 +2853,46 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateVertexBuffer(cons
   CopyBuffer(stagingBuffer, copyBuffer.first, bufferSize);
 
   return copyBuffer;
+}
+
+std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateIndexBuffer(
+  const std::vector<uint32_t>& indices, vk::BufferUsageFlags flags)
+{
+    // The exact same as CreateVertexBuffers, but the second buffer has IndexBuffer usage
+    // indices are all the same type
+    vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+    vk::raii::Buffer stagingBuffer({});
+    vk::raii::DeviceMemory stagingBufferMemory({});
+
+    // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
+    // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
+    CreateBuffer(
+      bufferSize,
+      vk::BufferUsageFlagBits::eTransferSrc,
+      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+      stagingBuffer, stagingBufferMemory
+    );
+
+    // Map and copy our loaded vertices data to the GPU host-visible memory
+    void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+    memcpy(dataStaging, indices.data(), (size_t)bufferSize);
+    // We don't need to access this buffer anymore, unmap
+    stagingBufferMemory.unmapMemory();
+
+    // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
+    // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
+    std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> copyBuffer = std::pair(nullptr, nullptr);
+    CreateBuffer(
+      bufferSize,
+      vk::BufferUsageFlagBits::eIndexBuffer | 
+      vk::BufferUsageFlagBits::eTransferDst | flags,
+      vk::MemoryPropertyFlagBits::eDeviceLocal,
+      copyBuffer.first, copyBuffer.second
+    );
+
+    // Copy the host-visible buffer to the non-host-visible buffer
+    CopyBuffer(stagingBuffer, copyBuffer.first, bufferSize);
+    return copyBuffer;
 }
 
 // Use the Slang Compilation API to compile slang shaders to SPIR-V during and by the application
@@ -2935,25 +3066,42 @@ void App::RecordComputeCommandBuffer()
   computeCommandBuffers[currentFrame].bindDescriptorSets(
     vk::PipelineBindPoint::eCompute, *computePipeline.first, 1, *materialDescriptorSets[0], nullptr);
 
-  PushConstant pushConstant {
+#if defined(REFERENCE) && !defined(RESTIR) && !defined(RADIANCE_CASCADES)
+  PathTracePushConstant pushConstant {
     .frame = frame,
     .time = runtime,
     .intensity = sunIntensity,
     .lightDir = glm::normalize(sunDir)
   };
-  computeCommandBuffers[currentFrame].pushConstants<PushConstant>(
+  computeCommandBuffers[currentFrame].pushConstants<PathTracePushConstant>(
     *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
-
-  // For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
-  computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / 8 + 1, swapChainExtent.height / 8 + 1, 1);  
+  computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / WORKGROUP_SIZE[0] + 1, swapChainExtent.height / WORKGROUP_SIZE[1] + 1, 1);
+#elif !defined(REFERENCE) && defined(RESTIR) && !defined(RADIANCE_CASCADES)
+  ReSTIRPushConstant pushConstant {
+  };
+  computeCommandBuffers[currentFrame].pushConstants<ReSTIRPushConstant>(
+    *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
+  computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / WORKGROUP_SIZE[0] + 1, swapChainExtent.height / WORKGROUP_SIZE[1] + 1, 1);
+#elif !defined(REFERENCE) && !defined(RESTIR) && defined(RADIANCE_CASCADES)
+  for (uint32_t level = 0; level < MAX_CASCADES; level++) {
+    RadianceCascadesPushConstant pushConstant {
+      .level = level
+    };
+    computeCommandBuffers[currentFrame].pushConstants<RadianceCascadesPushConstant>(
+      *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
+    computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / (level + 1) / WORKGROUP_SIZE[0] + 1, 
+                                                swapChainExtent.height / (level + 1) / WORKGROUP_SIZE[1] + 1, 1);
+  }
+  #endif
+// For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
   computeCommandBuffers[currentFrame].end();
 }
 
 // The graphics command buffer
 void App::RecordCommandBuffer(uint32_t imageIndex)
 {
-  commandBuffers[currentFrame].reset();
-  commandBuffers[currentFrame].begin({});
+  drawCommandBuffers[currentFrame].reset();
+  drawCommandBuffers[currentFrame].begin({});
 
   // Transition the swap chain image so its optimal for writing to the colour attachment of the framebuffer
   TransitionImageLayout(
@@ -2992,7 +3140,7 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
     .imageMemoryBarrierCount = 1,
     .pImageMemoryBarriers = &depthBarrier
   };
-  commandBuffers[currentFrame].pipelineBarrier2(depthDependencyInfo);
+  drawCommandBuffers[currentFrame].pipelineBarrier2(depthDependencyInfo);
   vk::ClearDepthStencilValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
 
   vk::RenderingAttachmentInfo depthAttachmentInfo {
@@ -3021,65 +3169,66 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
     .pDepthAttachment = &depthAttachmentInfo
   };
 
-  commandBuffers[currentFrame].beginRendering(renderingInfo);
+  drawCommandBuffers[currentFrame].beginRendering(renderingInfo);
 
-  commandBuffers[currentFrame].setViewport(0, vk::Viewport(
+  drawCommandBuffers[currentFrame].setViewport(0, vk::Viewport(
       0.0f, 0.0f,
       static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height),
       0.0f, 1.0f
    ));
-  commandBuffers[currentFrame].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
+  drawCommandBuffers[currentFrame].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
 
+#if !defined(REFERENCE) && !defined(RESTIR) && !defined(RADIANCE_CASCADES)
   // STATIC MODELS
-  // {
-  //   commandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline.second);
-  //   commandBuffers[currentFrame].bindVertexBuffers(0, *vertexBuffer.first, { 0 });
-  //   commandBuffers[currentFrame].bindIndexBuffer(*indexBuffer.first, 0, vk::IndexType::eUint32);
-  //   commandBuffers[currentFrame].bindDescriptorSets(
-  //     vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 0, *globalDescriptorSets[currentFrame], nullptr);
-  //   commandBuffers[currentFrame].bindDescriptorSets(
-  //     vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
+  {
+    drawCommandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline.second);
+    drawCommandBuffers[currentFrame].bindVertexBuffers(0, *vertexBuffer.first, { 0 });
+    drawCommandBuffers[currentFrame].bindIndexBuffer(*indexBuffer.first, 0, vk::IndexType::eUint32);
+    drawCommandBuffers[currentFrame].bindDescriptorSets(
+      vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 0, *globalDescriptorSets[currentFrame], nullptr);
+    drawCommandBuffers[currentFrame].bindDescriptorSets(
+      vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
 
-  //   for (auto& submesh: submeshes) {
-  //     PushConstant pushConstant {
-  //       .materialIndex = static_cast<uint32_t>(submesh.materialID),
-  //       .frame = frame++,
-  //       .res = glm::aligned_u32vec2(swapChainExtent.width, swapChainExtent.height),
-  //       .refresh = refresh
-  //     };
-  //     commandBuffers[currentFrame].pushConstants<PushConstant>(
-  //       *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
-  //     commandBuffers[currentFrame].drawIndexed(submesh.indexCount, 1, submesh.indexOffset, 0, 0);
-  //   }
-  // }
-
+    for (auto& submesh: submeshes) {
+      RasterPushConstant pushConstant {
+        .materialIndex = static_cast<uint32_t>(submesh.materialID),
+      };
+      drawCommandBuffers[currentFrame].pushConstants<RasterPushConstant>(
+        *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
+      drawCommandBuffers[currentFrame].drawIndexed(submesh.indexCount, 1, submesh.indexOffset, 0, 0);
+    }
+  }
+#else
   // COMPUTE RESULTS
   // render these after model as we want them in front without needing the depth buffer
   {
-    commandBuffers[currentFrame].bindPipeline(
+    drawCommandBuffers[currentFrame].bindPipeline(
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.second);
-    commandBuffers[currentFrame].bindVertexBuffers(0, *triangleBuffer.first, { 0 });
-    commandBuffers[currentFrame].bindDescriptorSets(
+    drawCommandBuffers[currentFrame].bindVertexBuffers(0, *triangleVertexBuffer.first, { 0 });
+    drawCommandBuffers[currentFrame].bindIndexBuffer(*triangleIndexBuffer.first, 0, vk::IndexType::eUint32);
+    drawCommandBuffers[currentFrame].bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 0, *globalDescriptorSets[currentFrame], nullptr);
-    commandBuffers[currentFrame].bindDescriptorSets(
+    drawCommandBuffers[currentFrame].bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
 
-    PushConstant pushConstant {
+#if defined(REFERENCE) && !defined(RESTIR) && !defined(RADIANCE_CASCADES)
+    PathTracePushConstant pushConstant {
       .frame = frame,
       .time = runtime
     };
-    commandBuffers[currentFrame].pushConstants<PushConstant>(
+    drawCommandBuffers[currentFrame].pushConstants<PathTracePushConstant>(
       *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
-    commandBuffers[currentFrame].draw(3, 1, 0, 0);
+#endif
+    drawCommandBuffers[currentFrame].drawIndexed(3, 1, 0, 0, 0);
   }
-
+#endif
 #ifdef _DEBUG
   // Record all the ImGui commands at the end so they appear on top
-  ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), static_cast<VkCommandBuffer>(*commandBuffers[currentFrame]));
+  ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), static_cast<VkCommandBuffer>(*drawCommandBuffers[currentFrame]));
 #endif
 
   // All done dealing with rendering
-  commandBuffers[currentFrame].endRendering();
+  drawCommandBuffers[currentFrame].endRendering();
 
   // Transition the swap chain image, ready for presenting
   TransitionImageLayout(
@@ -3093,7 +3242,7 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
   );
 
   // All done recording
-  commandBuffers[currentFrame].end();
+  drawCommandBuffers[currentFrame].end();
 }
 
 // Specify access changes for the swap chain images during command buffer recording
@@ -3133,7 +3282,7 @@ void App::TransitionImageLayout(
     .pImageMemoryBarriers = &barrier
   };
 
-  commandBuffers[currentFrame].pipelineBarrier2(dependencyInfo);
+  drawCommandBuffers[currentFrame].pipelineBarrier2(dependencyInfo);
 }
 
 // Retrieve a usable depth format, not especially important it just needs to work
@@ -3237,7 +3386,7 @@ void App::CreateImage(
 // Allocate and start recording a one-time command buffer
 vk::raii::CommandBuffer App::BeginSingleTimeCommands() const
 {
-  // Same allocInfo as computeCommandBuffers and commandBuffers
+  // Same allocInfo as computeCommandBuffers and drawCommandBuffers
   vk::CommandBufferAllocateInfo allocInfo {
     .commandPool = commandPool,
     .level = vk::CommandBufferLevel::ePrimary,

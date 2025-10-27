@@ -50,6 +50,9 @@ const std::vector validationLayers = { // not array; vector allows implicit typi
 // Let's the CPU start working on the next frame before the GPU asks (higher values == latency, CPU too far ahead)
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
+constexpr uint32_t MAX_CASCADES = 4;
+constexpr uint32_t WORKGROUP_SIZE[] = {8, 8};
+
 // Screen resolution defaults
 constexpr uint32_t WIDTH = 1440;
 constexpr uint32_t HEIGHT = 900;
@@ -58,10 +61,14 @@ constexpr uint32_t LIGHT_COUNT = 8;
 
 // Default asset paths
 static char model_path[256] = "assets/sponza/Sponza.gltf";
-#ifndef REFERENCE
-static char slang_path[256] = "assets/shaders/raster.slang";
-#else
+#ifdef REFERENCE
 static char slang_path[256] = "assets/shaders/reference.slang";
+#elif RESTIR
+static char slang_path[256] = "assets/shaders/restir.slang";
+#elif RADIANCE_CASCADES
+static char slang_path[256] = "assets/shaders/radiance_cascades.slang";
+#else
+static char slang_path[256] = "assets/shaders/raster.slang";
 #endif
 static char spirv_path[256] = "assets/shaders/shader.spv";
 
@@ -176,9 +183,9 @@ struct App {
   vk::raii::CommandPool commandPool = nullptr;
   
   // CreateCommandBuffers
-  std::vector<vk::raii::CommandBuffer> commandBuffers;
+  std::vector<vk::raii::CommandBuffer> drawCommandBuffers;
   std::vector<vk::raii::CommandBuffer> computeCommandBuffers;
-  
+
   // CreateSyncObjects
   std::vector<vk::raii::Fence> inFlightFences;
   uint32_t currentFrame = 0;
@@ -224,9 +231,9 @@ struct App {
     .dstAlphaBlendFactor = vk::BlendFactor::eZero,
     .alphaBlendOp = vk::BlendOp::eAdd,
     .colorWriteMask = vk::ColorComponentFlagBits::eR |
-                      vk::ColorComponentFlagBits::eG |
-                      vk::ColorComponentFlagBits::eB |
-                      vk::ColorComponentFlagBits::eA
+    vk::ColorComponentFlagBits::eG |
+    vk::ColorComponentFlagBits::eB |
+    vk::ColorComponentFlagBits::eA
   };
   const vk::PipelineColorBlendStateCreateInfo colorBlendInfo {
     .logicOpEnable = vk::False, .logicOp = vk::LogicOp::eCopy,
@@ -242,47 +249,57 @@ struct App {
   std::vector<Vertex> vertices;
   std::vector<uint32_t> indices;
   std::vector<Mesh> meshes;
-  std::vector<Material> mats;
   std::mutex m;
   std::vector<std::pair<vk::raii::Image, vk::raii::DeviceMemory>> baseTextureImages;
   std::vector<vk::raii::ImageView> baseTextureImageViews;
   vk::raii::Sampler baseTextureSampler = nullptr;
-
-
+  
+  
   // CreateVertexBuffer
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> vertexBuffer = std::pair(nullptr, nullptr);
-  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> triangleBuffer = std::pair(nullptr, nullptr);
+  Triangle tri; Quad quad;
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> triangleVertexBuffer = std::pair(nullptr, nullptr);
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> quadVertexBuffer = std::pair(nullptr, nullptr);
   
-  // CreateIndexBuffers (stored inside Material and Quad)
+  // CreateIndexBuffers
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> indexBuffer = std::pair(nullptr, nullptr);
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> triangleIndexBuffer = std::pair(nullptr, nullptr);
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> quadIndexBuffer = std::pair(nullptr, nullptr);
+  
+  // CreateColourBuffers
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> colourBuffer = std::pair(nullptr, nullptr);
 
   // CreateUVBuffers
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> uvBuffer = std::pair(nullptr, nullptr);
-
-  // CreateUVBuffers
+  
+  // CreateNrmBuffers
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> nrmBuffer = std::pair(nullptr, nullptr);
-
+  
   // CreateAccelerationStructures
   std::vector<std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>> blasBuffers;
   std::vector<vk::raii::AccelerationStructureKHR> blasHandles;
-
+  
   std::vector<vk::AccelerationStructureInstanceKHR> blasInstances;
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> blasInstanceBuffer = std::pair(nullptr, nullptr);
-
+  
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> tlasBuffer = std::pair(nullptr, nullptr);
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> tlasScratchBuffer = std::pair(nullptr, nullptr);
   vk::raii::AccelerationStructureKHR tlasHandle = nullptr;
-
+  
   std::vector<SubMesh> submeshes;
-
+  
   // CreateInstanceLUT
   std::vector<InstanceLUT> blasInstanceLUTs;
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> blasInstanceLUTBuffer = std::pair(nullptr, nullptr);
-
+  
+  // CreateIndirectCommands
+  std::vector<vk::DrawIndexedIndirectCommand> indirectCommands;
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> indirectCommandsBuffer = std::pair(nullptr, nullptr);
+  
   // CreateComputeTexture
   std::pair<vk::raii::Image, vk::raii::DeviceMemory> pathTracingTexture = std::pair(nullptr, nullptr);
   vk::raii::ImageView pathTracingTextureView = nullptr;
-
+  
   // CreateDescriptorPools
   vk::raii::DescriptorPool graphicsDescriptorPool = nullptr;
   vk::raii::DescriptorPool imguiDescriptorPool = nullptr;
@@ -344,10 +361,12 @@ struct App {
   void CreateUniformBuffers();
   void CreateVertexBuffers();
   void CreateIndexBuffers();
+  void CreateColourBuffer();
   void CreateUVBuffer();
   void CreateNrmBuffer();
   void CreateAccelerationStructures();
   void CreateBLASInstanceLUTBuffer();
+  void CreateIndirectCommands();
   void CreatePathTracingTexture();
   void CreateDescriptorPools();
   void CreateDescriptorSets();
@@ -379,7 +398,11 @@ struct App {
   void LoadGeometry();
 
   // CreateVertexBuffers
-  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>  CreateVertexBuffer(const std::vector<Vertex>& verts);
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateVertexBuffer(const std::vector<Vertex>& verts);
+
+  // CreateIndexBuffers
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateIndexBuffer(
+    const std::vector<uint32_t>& indices, vk::BufferUsageFlags flags);
 
   // Shader Management
   void CompileShader(const char* src, const char* dst);

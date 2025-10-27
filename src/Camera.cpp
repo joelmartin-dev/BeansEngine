@@ -62,20 +62,6 @@ void Camera::Update(double delta)
 
   position += (forward * velocity.z + right * velocity.x + glm::dvec3(0.0, 1.0, 0.0) * velocity.y) * static_cast<double>(moveSpeed) * delta * static_cast<double>(mod);
 
-  // CursorHandler needs manual invoking to stop continuous movement
-  if (mouseMode) CursorHandler(oldXpos, oldYpos);
-}
-
-void Camera::CursorHandler(double xpos, double ypos)
-{
-  double deltaXpos = oldXpos - xpos;
-  double deltaYpos = oldYpos - ypos;
-
-  oldXpos = xpos;
-  oldYpos = ypos;
-
-  deltaPitch = deltaYpos;
-  deltaYaw = -deltaXpos;
 }
 
 void Camera::KeyHandler(GLFWwindow* pWindow, int key, int scancode, int action, int mods)
@@ -122,10 +108,6 @@ void Camera::KeyHandler(GLFWwindow* pWindow, int key, int scancode, int action, 
         break;
       case GLFW_KEY_LEFT_SHIFT:
         shiftMod = true;
-        break;
-      case GLFW_KEY_F:
-        glfwSetInputMode(pWindow, GLFW_CURSOR, glfwGetInputMode(pWindow, GLFW_CURSOR) == GLFW_CURSOR_NORMAL ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
-        mouseMode = glfwGetInputMode(pWindow, GLFW_CURSOR) == GLFW_CURSOR_NORMAL;
         break;
       default:
         break;

@@ -25,10 +25,6 @@ struct Camera
   double deltaFOV { 0.0 };
   float fovSpeed { 50.0f };
 
-  double oldXpos { 0.0 };
-  double oldYpos { 0.0 };
-  bool mouseMode = false;
-
   float viewportWidth { 0.0f };
   float viewportHeight { 0.0f };
 
@@ -45,7 +41,6 @@ struct Camera
 
   void Update(double delta);
 
-  void CursorHandler(double xpos, double ypos);
   void KeyHandler(GLFWwindow* pWindow, int key, int scancode, int action, int mods);
 };
 
