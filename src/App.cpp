@@ -14,6 +14,7 @@
 //======= Maths for Graphics =======//
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
 
 // Some C header-only libraries define a macro used to ensure its implementation code (function definitions, etc.) is 
 // only included once to avoid redefinitions of function prototypes
@@ -261,13 +262,13 @@ void App::InitVulkan()
   CreateUniformBuffers();
   CreateVertexBuffers();
   CreateIndexBuffers();
-  CreateColourBuffer();
-  CreateUVBuffer();
-  CreateNrmBuffer();
+  CreateColourBuffers();
+  CreateUVBuffers();
+  CreateNrmBuffers();
   CreateAccelerationStructures();
   CreateBLASInstanceLUTBuffer();
   CreateIndirectCommands();
-
+  
   CreatePathTracingTexture();
   
   //========== Associate external data with defined members =========//
@@ -1037,7 +1038,8 @@ void App::CreateDescriptorSetLayouts()
         3,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
         1,                                    // Descriptors Count
-        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
+        vk::ShaderStageFlagBits::eCompute |
+        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
       // UV Buffer
@@ -1045,7 +1047,8 @@ void App::CreateDescriptorSetLayouts()
         4,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
         1,                                    // Descriptors Count
-        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
+        vk::ShaderStageFlagBits::eCompute |
+        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
       // Normals Buffer
@@ -1254,125 +1257,20 @@ void App::CreateIndexBuffers()
   triangleIndexBuffer = CreateIndexBuffer(Triangle().indices, {});
 }
 
-void App::CreateColourBuffer()
+void App::CreateColourBuffers()
 {
-  std::vector<glm::vec3> colours;
-  colours.reserve(vertices.size());
-  for (auto& v : vertices) colours.push_back(v.colour);
-  
-  vk::DeviceSize bufferSize = sizeof(colours[0]) * colours.size();
-
-  vk::raii::Buffer stagingBuffer({});
-  vk::raii::DeviceMemory stagingBufferMemory({});
-
-  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
-  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
-  CreateBuffer(
-    bufferSize,
-    vk::BufferUsageFlagBits::eTransferSrc,
-    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-    stagingBuffer, stagingBufferMemory
-  );
-
-  // Map and copy our loaded vertices data to the GPU host-visible memory
-  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-  memcpy(dataStaging, colours.data(), (size_t)bufferSize);
-  // We don't need to access this buffer anymore, unmap
-  stagingBufferMemory.unmapMemory();
-
-  // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
-  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
-  CreateBuffer(
-    bufferSize,
-    vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    vk::MemoryPropertyFlagBits::eDeviceLocal,
-    colourBuffer.first, colourBuffer.second
-  );
-
-  // Copy the host-visible buffer to the non-host-visible buffer
-  CopyBuffer(stagingBuffer, colourBuffer.first, bufferSize);
+  colourBuffer = CreateColourBuffer(vertices);
 }
 
-void App::CreateUVBuffer()
+void App::CreateUVBuffers()
 {
-  // Extract the texCoords
-  std::vector<glm::vec2> uvs;
-  uvs.reserve(vertices.size());
-  for (auto& v : vertices) uvs.push_back(v.texCoord);
-  
-  vk::DeviceSize bufferSize = sizeof(uvs[0]) * uvs.size();
-
-  vk::raii::Buffer stagingBuffer({});
-  vk::raii::DeviceMemory stagingBufferMemory({});
-
-  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
-  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
-  CreateBuffer(
-    bufferSize,
-    vk::BufferUsageFlagBits::eTransferSrc,
-    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-    stagingBuffer, stagingBufferMemory
-  );
-
-  // Map and copy our loaded vertices data to the GPU host-visible memory
-  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-  memcpy(dataStaging, uvs.data(), (size_t)bufferSize);
-  // We don't need to access this buffer anymore, unmap
-  stagingBufferMemory.unmapMemory();
-
-  // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
-  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
-  CreateBuffer(
-    bufferSize,
-    vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    vk::MemoryPropertyFlagBits::eDeviceLocal,
-    uvBuffer.first, uvBuffer.second
-  );
-
-  // Copy the host-visible buffer to the non-host-visible buffer
-  CopyBuffer(stagingBuffer, uvBuffer.first, bufferSize);
+  uvBuffer = CreateUVBuffer(vertices);
 }
 
-void App::CreateNrmBuffer()
+void App::CreateNrmBuffers()
 {
-  // Extract the normals (with 1 padding float to align data for GPU)
-  std::vector<glm::aligned_vec4> nrms;
-  nrms.reserve(vertices.size());
-  for (auto& v : vertices) nrms.push_back(glm::aligned_vec4(v.norm, 1.0));
-  
-  vk::DeviceSize bufferSize = sizeof(nrms[0]) * nrms.size();
-
-  vk::raii::Buffer stagingBuffer({});
-  vk::raii::DeviceMemory stagingBufferMemory({});
-
-  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
-  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
-  CreateBuffer(
-    bufferSize,
-    vk::BufferUsageFlagBits::eTransferSrc,
-    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-    stagingBuffer, stagingBufferMemory
-  );
-
-  // Map and copy our loaded vertices data to the GPU host-visible memory
-  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-  memcpy(dataStaging, nrms.data(), (size_t)bufferSize);
-  // We don't need to access this buffer anymore, unmap
-  stagingBufferMemory.unmapMemory();
-
-  // Create a Normals Buffer in DEVICE_LOCAL memory not necessarily visible to host
-  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
-  CreateBuffer(
-    bufferSize,
-    vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
-    vk::MemoryPropertyFlagBits::eDeviceLocal,
-    nrmBuffer.first, nrmBuffer.second
-  );
-
-  // Copy the host-visible buffer to the non-host-visible buffer
-  CopyBuffer(stagingBuffer, nrmBuffer.first, bufferSize);
+  nrmBuffer = CreateNrmBuffer(vertices);
 }
-
 
 /*================================================== BLAS and TLAS ===================================================//
   There are two Acceleration Structure types: Bottom Level and Top Level. A scene's geometry is split up into BLAS
@@ -1955,7 +1853,7 @@ void App::CreateDescriptorSets()
       vk::DescriptorBufferInfo colourBufferInfo {
         .buffer = *colourBuffer.first,
         .offset = 0,
-        .range = sizeof(glm::vec3) * vertices.size()
+        .range = sizeof(glm::aligned_vec4) * vertices.size()
       };
 
       vk::WriteDescriptorSet colourBufferWrite {
@@ -1968,7 +1866,7 @@ void App::CreateDescriptorSets()
       vk::DescriptorBufferInfo uvBufferInfo {
         .buffer = *uvBuffer.first,
         .offset = 0,
-        .range = sizeof(glm::vec2) * vertices.size()
+        .range = sizeof(glm::aligned_vec2) * vertices.size()
       };
 
       vk::WriteDescriptorSet uvBufferWrite {
@@ -2673,12 +2571,43 @@ std::vector<T> GetAccessorData(const cgltf_accessor* accessor) // implementation
 void App::LoadGeometry()
 {
   vertices.clear();
-  
-  meshes.clear();
-  meshes.resize(asset->meshes_count); // We know how many meshes there are
 
   uint32_t indexOffset = 0;
 
+#if !defined(REFERENCE) && !defined(RESTIR) && defined(RADIANCE_CASCADES)
+  // Place a quad somewhere
+  vertices = Quad().vertices;
+  indices = Quad().indices;
+  float scale = 1.0f;
+  float angle = glm::pi<float>() / 4.0f;
+  glm::vec3 translation = glm::vec3(0.0f, 0.0f, 0.0f);
+  for (auto& v: vertices) {
+    auto transformationMatrix = glm::identity<glm::mat4>();
+    transformationMatrix = glm::scale(transformationMatrix, glm::vec3(scale));
+    transformationMatrix = glm::rotate(transformationMatrix, angle, glm::vec3(0.0f, 0.0f, 1.0f));
+    transformationMatrix = glm::translate(transformationMatrix, translation);
+
+    for (auto i = 0; i < 4; i++)
+      for (auto j = 0; j < 4; j++)
+        std::clog << transformationMatrix[i][j] << ((j < 3) ? ", " : "\n");
+      
+    
+      
+    v.pos = glm::vec4(v.pos, 1.0) * transformationMatrix;
+    std::clog << v.pos.x << ", " << v.pos.y << ", " << v.pos.z << ", " << std::endl;
+    std::clog << std::endl;
+  }
+
+  submeshes.push_back({
+    .indexOffset = indexOffset,
+    .indexCount = static_cast<uint32_t>(indices.size()),
+    .materialID = 0u,
+    .firstVertex = 0u,
+    .maxVertex = static_cast<uint32_t>(vertices.size()),
+    .alphaCut = false,
+    .reflective = false
+  });
+#elif defined(REFERENCE) || defined(RESTIR) || defined(RASTER)
   for (cgltf_size meshIt = 0; meshIt < asset->meshes_count; meshIt++) {
     auto m = &asset->meshes[meshIt];
 
@@ -2777,7 +2706,7 @@ void App::LoadGeometry()
       auto norms = GetAccessorData<glm::vec3>(normAccessor);
 
       glm::vec3 col = glm::vec3(1.0f);
-      for (int f = 0; f < 3; f++) col[f] = p->material->pbr_metallic_roughness.base_color_factor[f];
+      // for (int f = 0; f < 3; f++) col[f] = p->material->pbr_metallic_roughness.base_color_factor[f];
 
       // Get the model's scale
       glm::vec3 scale(1.0f);
@@ -2800,13 +2729,14 @@ void App::LoadGeometry()
         .indexOffset = startOffset,
         .indexCount = indexOffset - startOffset,
         .materialID = static_cast<int>(matIdx),
-        .firstVertex = 0u,
+        .firstVertex = 0,
         .maxVertex = static_cast<uint32_t>(vertices.size()),
         .alphaCut = p->material->alpha_mode > cgltf_alpha_mode_opaque,
         .reflective = p->material->has_specular == 1
       });
     }
   }
+#endif
 
   // We're done with asset, free it now
   cgltf_free(asset);
@@ -2895,6 +2825,134 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateIndexBuffer(
     return copyBuffer;
 }
 
+std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateColourBuffer(const std::vector<Vertex>& verts)
+{
+  std::vector<glm::aligned_vec4> colours;
+  colours.reserve(verts.size());
+  for (auto& v : verts) colours.push_back({v.colour, 1.0f});
+  
+  vk::DeviceSize bufferSize = sizeof(colours[0]) * colours.size();
+
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
+
+  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
+  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eTransferSrc,
+    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+    stagingBuffer, stagingBufferMemory
+  );
+
+  // Map and copy our loaded vertices data to the GPU host-visible memory
+  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(dataStaging, colours.data(), (size_t)bufferSize);
+  // We don't need to access this buffer anymore, unmap
+  stagingBufferMemory.unmapMemory();
+
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> copyBuffer = std::pair(nullptr, nullptr);
+
+  // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
+  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    copyBuffer.first, copyBuffer.second
+  );
+
+  // Copy the host-visible buffer to the non-host-visible buffer
+  CopyBuffer(stagingBuffer, copyBuffer.first, bufferSize);
+  return copyBuffer;
+}
+
+std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateUVBuffer(const std::vector<Vertex>& verts)
+{
+  // Extract the texCoords
+  std::vector<glm::aligned_vec2> uvs;
+  uvs.reserve(verts.size());
+  for (auto& v : verts) uvs.push_back(v.texCoord);
+  
+  vk::DeviceSize bufferSize = sizeof(uvs[0]) * uvs.size();
+
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
+
+  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
+  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eTransferSrc,
+    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+    stagingBuffer, stagingBufferMemory
+  );
+
+  // Map and copy our loaded vertices data to the GPU host-visible memory
+  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(dataStaging, uvs.data(), (size_t)bufferSize);
+  // We don't need to access this buffer anymore, unmap
+  stagingBufferMemory.unmapMemory();
+
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> copyBuffer = std::pair(nullptr, nullptr);
+  // Create an Index Buffer in DEVICE_LOCAL memory not necessarily visible to host
+  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    copyBuffer.first, copyBuffer.second
+  );
+
+  // Copy the host-visible buffer to the non-host-visible buffer
+  CopyBuffer(stagingBuffer, copyBuffer.first, bufferSize);
+  return copyBuffer;
+}
+
+std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateNrmBuffer(const std::vector<Vertex>& verts)
+{
+  // Extract the normals
+  std::vector<glm::aligned_vec4> nrms;
+  nrms.reserve(verts.size());
+  for (auto& v : verts) nrms.push_back({v.norm, 1.0f});
+  
+  vk::DeviceSize bufferSize = sizeof(nrms[0]) * nrms.size();
+
+  vk::raii::Buffer stagingBuffer({});
+  vk::raii::DeviceMemory stagingBufferMemory({});
+
+  // We create a CPU-editable buffer, insert the data, then copy that buffer into one that does not require CPU access
+  // Notice the buffer usage flag TransferSrc. This lets the GPU know we will be copying this buffer at some point
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eTransferSrc,
+    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+    stagingBuffer, stagingBufferMemory
+  );
+
+  // Map and copy our loaded vertices data to the GPU host-visible memory
+  void* dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(dataStaging, nrms.data(), (size_t)bufferSize);
+  // We don't need to access this buffer anymore, unmap
+  stagingBufferMemory.unmapMemory();
+
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> copyBuffer = std::pair(nullptr, nullptr);
+
+  // Create a Normals Buffer in DEVICE_LOCAL memory not necessarily visible to host
+  // Notice the buffer usage flag TransferDst. We will be copying to this buffer.
+  CreateBuffer(
+    bufferSize,
+    vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+    vk::MemoryPropertyFlagBits::eDeviceLocal,
+    copyBuffer.first, copyBuffer.second
+  );
+
+  // Copy the host-visible buffer to the non-host-visible buffer
+  CopyBuffer(stagingBuffer, copyBuffer.first, bufferSize);
+  return copyBuffer;
+}
+
+
 // Use the Slang Compilation API to compile slang shaders to SPIR-V during and by the application
 void App::CompileShader(const char* src, const char* dst)
 {
@@ -2958,10 +3016,7 @@ void App::CompileShader(const char* src, const char* dst)
   auto module = 
     static_cast<Slang::ComPtr<slang::IModule>>(session->loadModule(moduleName.c_str(), diagnostics.writeRef()));
   // Error messaging + early exit on error
-  if (diagnostics) {
-    std::cerr << (const char*)diagnostics->getBufferPointer() << std::endl;
-    return;
-  }
+  if (diagnostics) std::cerr << (const char*)diagnostics->getBufferPointer() << std::endl;
 
   // Each of these entrypoints may exist, the IEntryPoint will simply contain nothing if it does not
   Slang::ComPtr<slang::IEntryPoint> vertexEntryPoint;
@@ -2996,14 +3051,29 @@ void App::CompileShader(const char* src, const char* dst)
     }
   }
 
-  // Convert the composed program into target-compatible bytecode
+  // Grab everything from the shader-imported modules
+  Slang::ComPtr<slang::IComponentType> linkedProgram;
+  {
+    SlangResult result = composedProgram->link(
+      linkedProgram.writeRef(),
+      diagnostics.writeRef());
+    if (diagnostics) std::cerr << diagnostics << std::endl;
+
+    // Early exit to avoid writing bad SPIR-V
+    if (SLANG_FAILED(result)) {
+      std::cerr << "failed to compose program" << std::endl;
+      return;
+    }
+  }
+
+  // Convert the linked program into target-compatible bytecode
   {
     Slang::ComPtr<slang::IBlob> spirvCode; // chunk of bytecode
-    auto result = composedProgram->getTargetCode(0, spirvCode.writeRef(), diagnostics.writeRef());
+    auto result = linkedProgram->getTargetCode(0, spirvCode.writeRef(), diagnostics.writeRef());
     
     if (diagnostics) std::cerr << static_cast<const char*>(diagnostics->getBufferPointer()) << std::endl;
     
-    if (SLANG_SUCCEEDED(result))
+    if (!SLANG_FAILED(result))
       // Write the bytecode to a file for later. You could also store the compiled code in memory, saving on IO later
       WriteFile(dst, spirvCode->getBufferPointer(), spirvCode->getBufferSize());
     else {
@@ -3034,6 +3104,11 @@ void App::ReloadShaders()
   frame = 0;
   // After the initial creation, this acts more like RecreatePipelines
   CreatePipelines();
+  CreatePathTracingTexture();
+  globalDescriptorSets.clear();
+  materialDescriptorSets.clear();
+  computeDescriptorSets.clear();
+  CreateDescriptorSets();
 }
 
 // For an explanation of memory mapping, see the comment "HOW DOES MEMORY WORK?" above CreateUniformBuffers
@@ -3075,13 +3150,11 @@ void App::RecordComputeCommandBuffer()
   };
   computeCommandBuffers[currentFrame].pushConstants<PathTracePushConstant>(
     *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
-  computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / WORKGROUP_SIZE[0] + 1, swapChainExtent.height / WORKGROUP_SIZE[1] + 1, 1);
 #elif !defined(REFERENCE) && defined(RESTIR) && !defined(RADIANCE_CASCADES)
   ReSTIRPushConstant pushConstant {
   };
   computeCommandBuffers[currentFrame].pushConstants<ReSTIRPushConstant>(
     *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
-  computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / WORKGROUP_SIZE[0] + 1, swapChainExtent.height / WORKGROUP_SIZE[1] + 1, 1);
 #elif !defined(REFERENCE) && !defined(RESTIR) && defined(RADIANCE_CASCADES)
   for (uint32_t level = 0; level < MAX_CASCADES; level++) {
     RadianceCascadesPushConstant pushConstant {
@@ -3089,11 +3162,11 @@ void App::RecordComputeCommandBuffer()
     };
     computeCommandBuffers[currentFrame].pushConstants<RadianceCascadesPushConstant>(
       *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
-    computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / (level + 1) / WORKGROUP_SIZE[0] + 1, 
-                                                swapChainExtent.height / (level + 1) / WORKGROUP_SIZE[1] + 1, 1);
   }
-  #endif
-// For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
+#endif
+  // For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
+  computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / WORKGROUP_SIZE[0] + 1, 
+                                              swapChainExtent.height / WORKGROUP_SIZE[1] + 1, 1);
   computeCommandBuffers[currentFrame].end();
 }
 
@@ -3178,7 +3251,7 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
    ));
   drawCommandBuffers[currentFrame].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
 
-#if !defined(REFERENCE) && !defined(RESTIR) && !defined(RADIANCE_CASCADES)
+#if !defined(REFERENCE) && !defined(RESTIR)
   // STATIC MODELS
   {
     drawCommandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline.second);
@@ -3189,13 +3262,22 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
     drawCommandBuffers[currentFrame].bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
 
-    for (auto& submesh: submeshes) {
+    for (size_t i = 0; i < submeshes.size(); i++) {
+#ifndef RADIANCE_CASCADES
       RasterPushConstant pushConstant {
-        .materialIndex = static_cast<uint32_t>(submesh.materialID),
+        .materialIndex = static_cast<uint32_t>(submeshes[i].materialID),
+        .instanceID = static_cast<uint32_t>(i)
       };
       drawCommandBuffers[currentFrame].pushConstants<RasterPushConstant>(
         *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
-      drawCommandBuffers[currentFrame].drawIndexed(submesh.indexCount, 1, submesh.indexOffset, 0, 0);
+#else
+      RadianceCascadesPushConstant pushConstant {
+        .level = 0
+      };
+      drawCommandBuffers[currentFrame].pushConstants<RadianceCascadesPushConstant>(
+        *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
+#endif
+      drawCommandBuffers[currentFrame].drawIndexed(submeshes[i].indexCount, 1, submeshes[i].indexOffset, 0, 0);
     }
   }
 #else
@@ -3210,15 +3292,6 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 0, *globalDescriptorSets[currentFrame], nullptr);
     drawCommandBuffers[currentFrame].bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
-
-#if defined(REFERENCE) && !defined(RESTIR) && !defined(RADIANCE_CASCADES)
-    PathTracePushConstant pushConstant {
-      .frame = frame,
-      .time = runtime
-    };
-    drawCommandBuffers[currentFrame].pushConstants<PathTracePushConstant>(
-      *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
-#endif
     drawCommandBuffers[currentFrame].drawIndexed(3, 1, 0, 0, 0);
   }
 #endif

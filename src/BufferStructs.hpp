@@ -21,6 +21,7 @@ struct PathTracePushConstant {
 
 struct RasterPushConstant {
   uint32_t materialIndex;
+  uint32_t instanceID;
 };
 
 struct RadianceCascadesPushConstant {

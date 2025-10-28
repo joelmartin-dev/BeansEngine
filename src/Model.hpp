@@ -37,22 +37,22 @@ struct RenderTarget {
 
 struct Quad {
   const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}},
-    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}},
-    {{0.5f, -0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}},
-    {{0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}}
+    {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},},
+    {{-0.5f, 0.5f, 0.0f}, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, -0.5f, 0.0f}, {0.0, 1.0f}, {0.0f, 1.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.0f}, {1.0f, 1.0f}, {1.0f, 1.0f, 0.0f}}
   };
 
-  const std::vector<uint32_t> indices = {0, 1, 2, 2, 3, 0};
+  const std::vector<uint32_t> indices = {0, 1, 2, 2, 1, 3};
 };
 
 struct Triangle {
   // These coordinates will always create a triangle that completely covers the screen.
   // Double the width and double the height of the viewport
   const std::vector<Vertex> vertices = {
-    {{-1.0f, -1.0f, -0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-    {{-1.0f, 3.0f, -0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 2.0f}},
-    {{3.0f, -1.0f, -0.0f}, {0.0f, 1.0f, 0.0f}, {2.0f, 0.0f}},
+    {{-1.0f, -1.0f, -0.0f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+    {{-1.0f, 3.0f, -0.0f}, {0.0f, 2.0f}, {1.0f, 1.0f, 1.0f}},
+    {{3.0f, -1.0f, -0.0f}, {2.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
   };
 
   const std::vector<uint32_t> indices = {0, 1, 2};

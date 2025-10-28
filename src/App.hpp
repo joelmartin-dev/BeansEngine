@@ -61,6 +61,7 @@ constexpr uint32_t LIGHT_COUNT = 8;
 
 // Default asset paths
 static char model_path[256] = "assets/sponza/Sponza.gltf";
+static char common_path[] = "assets/shaders/common.slang";
 #ifdef REFERENCE
 static char slang_path[256] = "assets/shaders/reference.slang";
 #elif RESTIR
@@ -248,7 +249,6 @@ struct App {
   cgltf_data* asset = nullptr;
   std::vector<Vertex> vertices;
   std::vector<uint32_t> indices;
-  std::vector<Mesh> meshes;
   std::mutex m;
   std::vector<std::pair<vk::raii::Image, vk::raii::DeviceMemory>> baseTextureImages;
   std::vector<vk::raii::ImageView> baseTextureImageViews;
@@ -361,30 +361,30 @@ struct App {
   void CreateUniformBuffers();
   void CreateVertexBuffers();
   void CreateIndexBuffers();
-  void CreateColourBuffer();
-  void CreateUVBuffer();
-  void CreateNrmBuffer();
+  void CreateColourBuffers();
+  void CreateUVBuffers();
+  void CreateNrmBuffers();
   void CreateAccelerationStructures();
   void CreateBLASInstanceLUTBuffer();
   void CreateIndirectCommands();
   void CreatePathTracingTexture();
   void CreateDescriptorPools();
   void CreateDescriptorSets();
-
+  
   // InitImGui
-
+  
   // MainLoop
   void DrawFrame();
   void RecreateSwapChain();
-
+  
   // Cleanup
   void CleanupSwapChain();
-
+  
   // Pipelines
   [[nodiscard]] vk::raii::ShaderModule CreateShaderModule(const std::vector<char>& code) const;
   void CreateGraphicsPipeline();
   void CreateComputePipeline();
-
+  
   // LoadGLTF (Asset loading)
   void LoadAsset(const char* path);
   void LoadTextures(const std::filesystem::path& parent_path);
@@ -396,18 +396,27 @@ struct App {
   );
   void CreateTextureSampler();
   void LoadGeometry();
-
+  
   // CreateVertexBuffers
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateVertexBuffer(const std::vector<Vertex>& verts);
-
+  
   // CreateIndexBuffers
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateIndexBuffer(
     const std::vector<uint32_t>& indices, vk::BufferUsageFlags flags);
-
+    
+  // CreateColourBuffers
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateColourBuffer(const std::vector<Vertex>& verts);
+  
+  // CreateUVBuffers
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateUVBuffer(const std::vector<Vertex>& verts);
+  
+  // CreateNrmBuffers
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateNrmBuffer(const std::vector<Vertex>& verts);
+    
   // Shader Management
   void CompileShader(const char* src, const char* dst);
   void ReloadShaders();
-
+  
   // DrawFrame
   //void UpdateUniformBuffer(uint32_t imageIndex);
   void UpdateModelViewProjection(uint32_t imageIndex);
@@ -422,7 +431,7 @@ struct App {
     vk::PipelineStageFlags2 srcStageMask,
     vk::PipelineStageFlags2 dstStageMask
   );
-  
+    
   // Helper Functions
   [[nodiscard]] vk::Format FindDepthFormat() const;
   vk::Format FindSupportedFormat(

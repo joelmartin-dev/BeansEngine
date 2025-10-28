@@ -4,12 +4,13 @@
 #include <array>
 #include <vulkan/vulkan.hpp>
 #include <glm/gtx/hash.hpp>
+#include <glm/gtx/type_aligned.hpp> 
 
 struct Vertex {
   // Attributes
   glm::vec3 pos = {};
-  glm::vec3 colour = {};
   glm::vec2 texCoord = {};
+  glm::vec3 colour = {};
   glm::vec3 norm = {};
 
   // How the struct is passed
@@ -26,8 +27,8 @@ struct Vertex {
       // Binding is 0, as we decided in getBindingDescription
       // Formats are aliases for in-shader data types, e.g. R32Sfloat is float, R64Sfloat is double
       vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
-      vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, colour)),
-      vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord)),
+      vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord)),
+      vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, colour)),
       vk::VertexInputAttributeDescription(3, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, norm))
     };
   }

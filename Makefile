@@ -37,11 +37,9 @@ OPTIM_LEVEL := -O0
 DEBUG := -g
 DEBUGF := _DEBUG
 
-REFERENCE := NREFERENCE
-RESTIR := NRESTIR
-CASCADES := NRADIANCE_CASCADES
+MODE := RASTER
 
-DEFINES := $(REFERENCE) $(RESTIR) $(CASCADES) $(DEBUGF) KHRONOS_STATIC GLM_ENABLE_EXPERIMENTAL VULKAN_HPP_NO_STRUCT_CONSTRUCTORS IMGUI_IMPL_VULKAN_USE_VOLK
+DEFINES := $(MODE) $(DEBUGF) KHRONOS_STATIC GLM_ENABLE_EXPERIMENTAL VULKAN_HPP_NO_STRUCT_CONSTRUCTORS IMGUI_IMPL_VULKAN_USE_VOLK
 D_FLAGS := $(addprefix -D,$(DEFINES))
 
 # C Preprocessor flags
@@ -62,7 +60,7 @@ LD_FLAGS := -L$(LIB_DIR) -lglfw3 -lvolk -lktx_read -lslang -lslang-rt
 
 default:
 	make clean
-	make $(BUILD_DIR)/$(TARGET_EXEC) -j
+	bear -- make $(BUILD_DIR)/$(TARGET_EXEC) -j
 
 $(BUILD_DIR)/$(TARGET_EXEC): $(OBJS)
 	mkdir -p $(dir $@)
@@ -96,7 +94,7 @@ rund:
 clean: clean_obj clean_build
 
 clean_obj:
-	rm -rf $(OBJ_DIR)
+	rm -rf $(OBJ_DIR)/src
 
 clean_build:
 	rm -rf $(BUILD_DIR)
