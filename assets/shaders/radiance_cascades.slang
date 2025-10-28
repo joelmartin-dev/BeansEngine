@@ -4,11 +4,11 @@ import "common";
 // [shader("vertex")]
 // VSOutput vertMain(VSInput input) {
 //     VSOutput output;
-//     output.pos = mul(ubo.proj, mul(ubo.view, mul(ubo.model, float4(input.inPosition, 1.0))));
+//     output.pos = mul(camera.proj, mul(camera.view, mul(camera.model, float4(input.inPosition, 1.0))));
 //     output.fragColor = input.inColor;
 //     output.fragTexCoord = input.inTexCoord;
 //     output.fragNormal = input.inNormal;
-//     output.worldPos = mul(ubo.model, float4(input.inPosition, 1.0)).xyz;
+//     output.worldPos = mul(camera.model, float4(input.inPosition, 1.0)).xyz;
 //     return output;
 // }
 
@@ -16,7 +16,7 @@ import "common";
 [shader("vertex")]
 VSOutput vertMain(VSInput input) {
     VSOutput output;
-    output.pos = mul(ubo.proj, mul(ubo.view, mul(ubo.model, float4(input.inPosition, 1.0))));
+    output.pos = mul(camera.proj, mul(camera.view, mul(camera.model, float4(input.inPosition, 1.0))));
     output.fragColor = input.inColor;
     output.fragTexCoord = input.inTexCoord;
     output.fragNormal = input.inNormal;

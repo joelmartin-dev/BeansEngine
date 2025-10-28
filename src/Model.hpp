@@ -35,17 +35,6 @@ struct RenderTarget {
   std::pair<vk::raii::PipelineLayout, vk::raii::Pipeline> graphicsPipeline = std::pair(nullptr, nullptr);
 };
 
-struct Quad {
-  const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},},
-    {{-0.5f, 0.5f, 0.0f}, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, -0.5f, 0.0f}, {0.0, 1.0f}, {0.0f, 1.0f, 0.0f}},
-    {{0.5f, 0.5f, 0.0f}, {1.0f, 1.0f}, {1.0f, 1.0f, 0.0f}}
-  };
-
-  const std::vector<uint32_t> indices = {0, 1, 2, 2, 1, 3};
-};
-
 struct Triangle {
   // These coordinates will always create a triangle that completely covers the screen.
   // Double the width and double the height of the viewport
@@ -58,4 +47,35 @@ struct Triangle {
   const std::vector<uint32_t> indices = {0, 1, 2};
 };
 
+struct Quad {
+  const std::vector<Vertex> vertices = {
+    {{-0.5f, -0.5f, 0.0f}, {0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},},
+    {{-0.5f, 0.5f, 0.0f}, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, -0.5f, 0.0f}, {0.0, 1.0f}, {0.0f, 1.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.0f}, {1.0f, 1.0f}, {1.0f, 1.0f, 0.0f}}
+  };
+
+  const std::vector<uint32_t> indices = {0, 1, 2, 2, 1, 3};
+};
+
+struct Cube {
+  const std::vector<Vertex> vertices = {
+    {{-1.0, -1.0, -1.0}, {}, {1.0f, 1.0f, 1.0f}, {}, 1},
+    {{1.0, -1.0, -1.0}, {}, {1.0f, 1.0f, 1.0f}, {}, 1},
+    {{1.0, 1.0, -1.0}, {}, {1.0f, 1.0f, 1.0f}, {}, 1},
+    {{-1.0, 1.0, -1.0}, {}, {1.0f, 1.0f, 1.0f}, {}, 1},
+    {{-1.0, -1.0, 1.0}, {}, {1.0f, 1.0f, 1.0f}, {}, 1},
+    {{1.0, -1.0, 1.0}, {}, {1.0f, 1.0f, 1.0f}, {}, 1},
+    {{1.0, 1.0, 1.0}, {}, {1.0f, 1.0f, 1.0f}, {}, 1},
+    {{-1.0, 1.0, 1.0}, {}, {1.0f, 1.0f, 1.0f}, {}, 1},
+  };
+  const std::vector<uint32_t> indices = {
+    0, 1, 3, 3, 1, 2,
+    1, 5, 2, 2, 5, 6,
+    5, 4, 6, 6, 4, 7,
+    4, 0, 7, 7, 0, 3,
+    3, 2, 7, 7, 2, 6,
+    4, 5, 0, 0, 5, 1
+  };
+};
 #endif

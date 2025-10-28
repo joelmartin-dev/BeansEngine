@@ -10,6 +10,7 @@
 #include <ranges>     // C++ syntax replacement for common control flow structure e.g. std::for instead of for()
 #include <stdexcept>  // for exceptions e.g. runtime_error
 #include <vector>     // dynamic arrays
+#include <random>
 
 //======= Maths for Graphics =======//
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -269,7 +270,7 @@ void App::InitVulkan()
   CreateBLASInstanceLUTBuffer();
   CreateIndirectCommands();
   
-  CreatePathTracingTexture();
+  CreateRenderTexture();
   
   //========== Associate external data with defined members =========//
   CreateDescriptorPools();
@@ -556,7 +557,7 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(
   void*
 )
 {
-  //if ((severity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) == severity)// | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo) == severity)
+  if ((severity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) == severity)// | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo) == severity)
     std::cerr << "validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
 
   return vk::False;
@@ -1017,9 +1018,18 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
-      // TLAS
+      // Cube Transform Buffer
       vk::DescriptorSetLayoutBinding(
         1,                                    // Binding
+        vk::DescriptorType::eUniformBuffer,   // Descriptor Type
+        1,                                    // Descriptors Count
+        vk::ShaderStageFlagBits::eVertex | 
+        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
+        nullptr                               // pImmutableSamplers
+      ),
+      // TLAS
+      vk::DescriptorSetLayoutBinding(
+        2,                                    // Binding
         vk::DescriptorType::eAccelerationStructureKHR,   // Descriptor Type
         1,                                    // Descriptors Count
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
@@ -1027,22 +1037,13 @@ void App::CreateDescriptorSetLayouts()
       ),
       // Index Buffer
       vk::DescriptorSetLayoutBinding(
-        2,                                    // Binding
+        3,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
         1,                                    // Descriptors Count
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
       // Vertex Colour Buffer
-      vk::DescriptorSetLayoutBinding(
-        3,                                    // Binding
-        vk::DescriptorType::eStorageBuffer,   // Descriptor Type
-        1,                                    // Descriptors Count
-        vk::ShaderStageFlagBits::eCompute |
-        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
-        nullptr                               // pImmutableSamplers
-      ),
-      // UV Buffer
       vk::DescriptorSetLayoutBinding(
         4,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
@@ -1051,15 +1052,16 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eFragment,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
-      // Normals Buffer
+      // UV Buffer
       vk::DescriptorSetLayoutBinding(
         5,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
         1,                                    // Descriptors Count
-        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
+        vk::ShaderStageFlagBits::eCompute |
+        vk::ShaderStageFlagBits::eFragment,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
-      // BLAS Lookup Table Buffer
+      // Normals Buffer
       vk::DescriptorSetLayoutBinding(
         6,                                    // Binding
         vk::DescriptorType::eStorageBuffer,   // Descriptor Type
@@ -1067,9 +1069,17 @@ void App::CreateDescriptorSetLayouts()
         vk::ShaderStageFlagBits::eCompute,   // Stage Flags
         nullptr                               // pImmutableSamplers
       ),
+      // BLAS Lookup Table Buffer
+      vk::DescriptorSetLayoutBinding(
+        7,                                    // Binding
+        vk::DescriptorType::eStorageBuffer,   // Descriptor Type
+        1,                                    // Descriptors Count
+        vk::ShaderStageFlagBits::eCompute,   // Stage Flags
+        nullptr                               // pImmutableSamplers
+      ),
       // Storage Image read-only Sampler
       vk::DescriptorSetLayoutBinding(
-        7,
+        8,
         vk::DescriptorType::eCombinedImageSampler,
         1,
         vk::ShaderStageFlagBits::eFragment,
@@ -1077,7 +1087,7 @@ void App::CreateDescriptorSetLayouts()
       ),
       // Storage Image Read-Write
       vk::DescriptorSetLayoutBinding(
-        8,
+        9,
         vk::DescriptorType::eStorageImage,
         1,
         vk::ShaderStageFlagBits::eCompute,
@@ -1214,23 +1224,25 @@ void App::CreateUniformBuffers()
 }
 
 // For Path-Tracing Reference, create a read-write Image of the same resolution as the initial framebuffers
-void App::CreatePathTracingTexture()
+void App::CreateRenderTexture()
 {
+  renderTextureExtent.width = swapChainExtent.width / 16 + 1;
+  renderTextureExtent.height = swapChainExtent.height / 16 + 1;
   // Create the Image on the GPU
   CreateImage(
-    swapChainExtent.width, swapChainExtent.height, 1,
+    renderTextureExtent.width, renderTextureExtent.height, 1,
     vk::Format::eR32G32B32A32Sfloat, vk::ImageTiling::eOptimal,
     vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
     vk::MemoryPropertyFlagBits::eDeviceLocal,
-    pathTracingTexture.first, pathTracingTexture.second
+    renderTexture.first, renderTexture.second
   );
 
   // We want the image in the General layout for read-write operations
-  TransitionImageLayout(pathTracingTexture.first, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral, 1);
+  TransitionImageLayout(renderTexture.first, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral, 1);
   
   // Create a view for the Image
-  pathTracingTextureView = CreateImageView(
-    pathTracingTexture.first,
+  renderTextureView = CreateImageView(
+    renderTexture.first,
     vk::Format::eR32G32B32A32Sfloat,
     vk::ImageAspectFlagBits::eColor,
     1
@@ -1721,6 +1733,8 @@ void App::CreateDescriptorPools()
     std::array graphicsPoolSizes = {
       // Model View Projection matrices
       vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
+      // Cube transform matrices
+      vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),
       // TLAS
       vk::DescriptorPoolSize(vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT),
       // Index Buffer
@@ -1812,17 +1826,31 @@ void App::CreateDescriptorSets()
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
       // MVP Buffer
-      vk::DescriptorBufferInfo bufferInfo{
+      vk::DescriptorBufferInfo mvpBufferInfo{
         .buffer = *mvpBuffers[i].first,
         .offset = 0,
         .range = sizeof(MVP)
       };
 
-      vk::WriteDescriptorSet bufferWrite {
+      vk::WriteDescriptorSet mvpBufferWrite {
         .dstSet = globalDescriptorSets[i],
         .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eUniformBuffer,
-        .pBufferInfo = &bufferInfo
+        .pBufferInfo = &mvpBufferInfo
+      };
+
+      // Camera transforms Buffer
+      vk::DescriptorBufferInfo cubeBufferInfo{
+        .buffer = *mvpBuffers[i].first,
+        .offset = 0,
+        .range = sizeof(CubeTransforms)
+      };
+
+      vk::WriteDescriptorSet cubeBufferWrite {
+        .dstSet = globalDescriptorSets[i],
+        .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eUniformBuffer,
+        .pBufferInfo = &cubeBufferInfo
       };
 
       vk::WriteDescriptorSetAccelerationStructureKHR asInfo {
@@ -1833,7 +1861,7 @@ void App::CreateDescriptorSets()
       vk::WriteDescriptorSet asWrite {
         .pNext = &asInfo,
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1,
+        .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eAccelerationStructureKHR
       };
 
@@ -1845,7 +1873,7 @@ void App::CreateDescriptorSets()
 
       vk::WriteDescriptorSet indexBufferWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1,
+        .dstBinding = 3, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .pBufferInfo = &indexBufferInfo
       };
@@ -1858,7 +1886,7 @@ void App::CreateDescriptorSets()
 
       vk::WriteDescriptorSet colourBufferWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 3, .dstArrayElement = 0, .descriptorCount = 1,
+        .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .pBufferInfo = &colourBufferInfo
       };
@@ -1871,7 +1899,7 @@ void App::CreateDescriptorSets()
 
       vk::WriteDescriptorSet uvBufferWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1,
+        .dstBinding = 5, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .pBufferInfo = &uvBufferInfo
       };
@@ -1884,7 +1912,7 @@ void App::CreateDescriptorSets()
 
       vk::WriteDescriptorSet nrmBufferWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 5, .dstArrayElement = 0, .descriptorCount = 1,
+        .dstBinding = 6, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .pBufferInfo = &nrmBufferInfo
       };
@@ -1897,7 +1925,7 @@ void App::CreateDescriptorSets()
 
       vk::WriteDescriptorSet blasInstanceLUTBufferWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 6, .dstArrayElement = 0, .descriptorCount = 1,
+        .dstBinding = 7, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageBuffer,
         .pBufferInfo = &blasInstanceLUTBufferInfo
       };
@@ -1905,33 +1933,34 @@ void App::CreateDescriptorSets()
       // Samplable interface for image
       vk::DescriptorImageInfo samplerInfo {
         .sampler = baseTextureSampler,
-        .imageView = static_cast<vk::ImageView>(pathTracingTextureView),
+        .imageView = static_cast<vk::ImageView>(renderTextureView),
         .imageLayout = vk::ImageLayout::eGeneral,
       };
       
       // Image as CombinedImageSampler
       vk::WriteDescriptorSet samplerWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 7, .dstArrayElement = 0, .descriptorCount = 1,
+        .dstBinding = 8, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &samplerInfo
       };
 
       // Writable interface for image
       vk::DescriptorImageInfo imageInfo {
-        .imageView = static_cast<vk::ImageView>(pathTracingTextureView),
+        .imageView = static_cast<vk::ImageView>(renderTextureView),
         .imageLayout = vk::ImageLayout::eGeneral,
       };
 
       // Image as StorageImage
       vk::WriteDescriptorSet imageWrite {
         .dstSet = globalDescriptorSets[i],
-        .dstBinding = 8, .dstArrayElement = 0, .descriptorCount = 1,
+        .dstBinding = 9, .dstArrayElement = 0, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfo
       };
 
 
       std::array descriptorWrites = {
-        bufferWrite, 
+        mvpBufferWrite,
+        cubeBufferWrite, 
         asWrite,
         colourBufferWrite,
         indexBufferWrite, 
@@ -2146,7 +2175,6 @@ void App::RecreateSwapChain()
   camera.viewportWidth = static_cast<float>(swapChainExtent.width);
   camera.viewportHeight = static_cast<float>(swapChainExtent.height);
 
-  CreatePathTracingTexture();
   ReloadShaders();
 }
 
@@ -2574,28 +2602,29 @@ void App::LoadGeometry()
 
   uint32_t indexOffset = 0;
 
-#if !defined(REFERENCE) && !defined(RESTIR) && defined(RADIANCE_CASCADES)
-  // Place a quad somewhere
-  vertices = Quad().vertices;
-  indices = Quad().indices;
-  float scale = 1.0f;
-  float angle = glm::pi<float>() / 4.0f;
+  std::default_random_engine rndEngine(static_cast<unsigned>(time(nullptr)));
+  std::uniform_real_distribution rndDist(0.0f, 1.0f);
+
+  // Place a cube somewhere
+  vertices = Cube().vertices;
+  indices = Cube().indices;
+  float scale = rndDist(rndEngine) * 0.3 + 0.7;
+  float theta = rndDist(rndEngine) * 2.0f * glm::pi<float>();
+  glm::vec3 axis = glm::normalize(glm::vec3(
+    (rndDist(rndEngine) - 0.5) * 2.0,
+    (rndDist(rndEngine) - 0.5) * 2.0,
+    (rndDist(rndEngine) - 0.5) * 2.0
+  ));
   glm::vec3 translation = glm::vec3(0.0f, 0.0f, 0.0f);
   for (auto& v: vertices) {
+    // Build transformation matrix
     auto transformationMatrix = glm::identity<glm::mat4>();
     transformationMatrix = glm::scale(transformationMatrix, glm::vec3(scale));
-    transformationMatrix = glm::rotate(transformationMatrix, angle, glm::vec3(0.0f, 0.0f, 1.0f));
+    transformationMatrix = glm::rotate(transformationMatrix, theta, axis);
     transformationMatrix = glm::translate(transformationMatrix, translation);
 
-    for (auto i = 0; i < 4; i++)
-      for (auto j = 0; j < 4; j++)
-        std::clog << transformationMatrix[i][j] << ((j < 3) ? ", " : "\n");
-      
-    
-      
+    // Apply transformation
     v.pos = glm::vec4(v.pos, 1.0) * transformationMatrix;
-    std::clog << v.pos.x << ", " << v.pos.y << ", " << v.pos.z << ", " << std::endl;
-    std::clog << std::endl;
   }
 
   submeshes.push_back({
@@ -2607,7 +2636,7 @@ void App::LoadGeometry()
     .alphaCut = false,
     .reflective = false
   });
-#elif defined(REFERENCE) || defined(RESTIR) || defined(RASTER)
+#if defined(REFERENCE) || defined(RESTIR) || defined(RASTER)
   for (cgltf_size meshIt = 0; meshIt < asset->meshes_count; meshIt++) {
     auto m = &asset->meshes[meshIt];
 
@@ -2706,7 +2735,7 @@ void App::LoadGeometry()
       auto norms = GetAccessorData<glm::vec3>(normAccessor);
 
       glm::vec3 col = glm::vec3(1.0f);
-      // for (int f = 0; f < 3; f++) col[f] = p->material->pbr_metallic_roughness.base_color_factor[f];
+      for (int f = 0; f < 3; f++) col[f] = p->material->pbr_metallic_roughness.base_color_factor[f];
 
       // Get the model's scale
       glm::vec3 scale(1.0f);
@@ -3104,7 +3133,7 @@ void App::ReloadShaders()
   frame = 0;
   // After the initial creation, this acts more like RecreatePipelines
   CreatePipelines();
-  CreatePathTracingTexture();
+  CreateRenderTexture();
   globalDescriptorSets.clear();
   materialDescriptorSets.clear();
   computeDescriptorSets.clear();
@@ -3165,8 +3194,8 @@ void App::RecordComputeCommandBuffer()
   }
 #endif
   // For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
-  computeCommandBuffers[currentFrame].dispatch(swapChainExtent.width / WORKGROUP_SIZE[0] + 1, 
-                                              swapChainExtent.height / WORKGROUP_SIZE[1] + 1, 1);
+  computeCommandBuffers[currentFrame].dispatch(renderTextureExtent.width / WORKGROUP_SIZE[0] + 1, 
+                                              renderTextureExtent.height / WORKGROUP_SIZE[1] + 1, 1);
   computeCommandBuffers[currentFrame].end();
 }
 

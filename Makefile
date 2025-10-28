@@ -1,7 +1,9 @@
 # Makefile, based on makefiletutorial.com
 
 TARGET_EXEC := main
-DEBUG_EXEC := debug
+REFERENCE_EXEC := reference
+RESTIR_EXEC := restir
+RADIANCE_EXEC := radiance
 
 BUILD_DIR := bin
 SRC_DIR := src
@@ -37,7 +39,7 @@ OPTIM_LEVEL := -O0
 DEBUG := -g
 DEBUGF := _DEBUG
 
-MODE := RASTER
+MODE = RASTER
 
 DEFINES := $(MODE) $(DEBUGF) KHRONOS_STATIC GLM_ENABLE_EXPERIMENTAL VULKAN_HPP_NO_STRUCT_CONSTRUCTORS IMGUI_IMPL_VULKAN_USE_VOLK
 D_FLAGS := $(addprefix -D,$(DEFINES))
@@ -58,11 +60,42 @@ LD_FLAGS := -L$(LIB_DIR) -lglfw3 -lvolk -lktx_read -lslang -lslang-rt
 # $< is the first prerequisite
 # $? is all prerequisites newer than target
 
+.PHONY: default all reference restir radiance main debug printf clean clean_obj clean_build run rund
+
 default:
-	make clean
+	make clean_obj
 	bear -- make $(BUILD_DIR)/$(TARGET_EXEC) -j
 
+variants:
+	make reference
+	make restir
+	make radiance
+
+reference:
+	make clean_obj
+	make $(BUILD_DIR)/$(REFERENCE_EXEC) MODE=REFERENCE -j
+
+restir:
+	make clean_obj
+	make $(BUILD_DIR)/$(RESTIR_EXEC) MODE=RESTIR -j
+
+radiance:
+	make clean_obj
+	make $(BUILD_DIR)/$(RADIANCE_EXEC) MODE=RADIANCE -j
+
 $(BUILD_DIR)/$(TARGET_EXEC): $(OBJS)
+	mkdir -p $(dir $@)
+	$(CXX) $(OBJS) -o $@ $(LD_FLAGS)
+
+$(BUILD_DIR)/$(REFERENCE_EXEC): $(OBJS)
+	mkdir -p $(dir $@)
+	$(CXX) $(OBJS) -o $@ $(LD_FLAGS)
+
+$(BUILD_DIR)/$(RESTIR_EXEC): $(OBJS)
+	mkdir -p $(dir $@)
+	$(CXX) $(OBJS) -o $@ $(LD_FLAGS)
+
+$(BUILD_DIR)/$(RADIANCE_EXEC): $(OBJS)
 	mkdir -p $(dir $@)
 	$(CXX) $(OBJS) -o $@ $(LD_FLAGS)
 
@@ -78,12 +111,6 @@ $(OBJ_DIR)/%.cpp.o: %.cpp
 	mkdir -p $(dir $@)
 	$(CXX) $(CPP_FLAGS) $(CXX_FLAGS) -c $< -o $@
 
-
-.PHONY: main debug printf clean clean_obj clean_build run rund
-
-main: DEBUGF=NDEBUG $(BUILD_DIR)/$(TARGET_EXEC)
-
-debug: DEBUGF=_DEBUG $(BUILD_DIR)/$(DEBUG_EXEC)
 
 run:
 	./$(BUILD_DIR)/$(TARGET_EXEC)

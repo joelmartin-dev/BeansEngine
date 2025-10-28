@@ -12,6 +12,14 @@ struct MVP {
   glm::aligned_mat4 invProj = glm::aligned_mat4();
 };
 
+struct CubeTransforms {
+  glm::aligned_mat4 model = glm::aligned_mat4();
+  glm::aligned_mat4 view = glm::aligned_mat4();
+  glm::aligned_mat4 invView = glm::aligned_mat4();
+  glm::aligned_mat4 proj = glm::aligned_mat4();
+  glm::aligned_mat4 invProj = glm::aligned_mat4();
+};
+
 struct PathTracePushConstant {
   uint32_t frame;
   float time;

@@ -6,11 +6,11 @@ public struct VSInput {
     public float2 inTexCoord;
     public float3 inColor;
     public float3 inNormal;
+    public uint cubeID;
 };
 
 // Internal struct for passing attributes to fragment shader
-public struct VSOutput
-{
+public struct VSOutput {
     public float4 pos : SV_Position;
     public float2 fragTexCoord;
     public float3 fragColor;
@@ -19,43 +19,53 @@ public struct VSOutput
 };
 
 // 3D Transformation Matrices + Inversions
-public struct UniformBuffer {
+public struct CameraTransforms {
     public float4x4 model;
     public float4x4 view;
     public float4x4 invView;
     public float4x4 proj;
     public float4x4 invProj;
 };
-[[vk::binding(0, 0)]] public ConstantBuffer<UniformBuffer> ubo;
+[[vk::binding(0, 0)]] public ConstantBuffer<CameraTransforms> camera;
+
+// 3D Transformation Matrices + Inversions
+public struct CubeTransforms {
+    public float4x4 model;
+    public float4x4 view;
+    public float4x4 invView;
+    public float4x4 proj;
+    public float4x4 invProj;
+};
+[[vk::binding(1, 0)]] public ConstantBuffer<CameraTransforms> cube;
 
 // the scene's tlas
-[[vk::binding(1, 0)]] public RaytracingAccelerationStructure accelerationStructure;
+[[vk::binding(2, 0)]] public RaytracingAccelerationStructure accelerationStructure;
 
 // the indices of the scene
-[[vk::binding(2, 0)]] public StructuredBuffer<uint> indexBuffer;
+[[vk::binding(3, 0)]] public StructuredBuffer<uint> indexBuffer;
 
 // the vertex colours of the scene
-[[vk::binding(3, 0)]] public StructuredBuffer<float3> colourBuffer;
+[[vk::binding(4, 0)]] public StructuredBuffer<float3> colourBuffer;
 
 // the uvs of each vertex in the scene
-[[vk::binding(4, 0)]] public StructuredBuffer<float2> uvBuffer;
+[[vk::binding(5, 0)]] public StructuredBuffer<float2> uvBuffer;
 
 // the normals of each vertex in the scene
-[[vk::binding(5, 0)]] public StructuredBuffer<float4> nrmBuffer;
+[[vk::binding(6, 0)]] public StructuredBuffer<float4> nrmBuffer;
 
 // Each submesh's unique attributes
 public struct InstanceLUT {
     public uint materialID; // submesh's material (corresponds to texture array index)
     public uint indexBufferOffset; // lookup indices > indexBufferOffset for other attributes (uvs, normals)
 };
-[[vk::binding(6, 0)]] public StructuredBuffer<InstanceLUT> instanceLUTBuffer;
+[[vk::binding(7, 0)]] public StructuredBuffer<InstanceLUT> instanceLUTBuffer;
 
 // Sampler of the written-to image
-[[vk::binding(7, 0)]] public Sampler2D sampler;
+[[vk::binding(8, 0)]] public Sampler2D sampler;
 
 // Write access to StorageImage
 [vk_image_format("rgba32f")]
-[[vk::binding(8, 0)]] public RWTexture2D<float4> outImage;
+[[vk::binding(9, 0)]] public RWTexture2D<float4> outImage;
 
 // Sampler for texture array
 [[vk::binding(0, 1)]] public SamplerState textureSampler;

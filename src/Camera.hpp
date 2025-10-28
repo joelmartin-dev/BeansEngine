@@ -10,7 +10,7 @@
 struct Camera
 {
   glm::dvec3 velocity = glm::vec3(0.0);
-  glm::dvec3 position = glm::vec3(0.0, 0.3, 0.0);
+  glm::dvec3 position = glm::vec3(-5.0, 0.3, 0.0);
   double pitch { 0.0 };
   double deltaPitch { 0.0 };
   double yaw { 0.0 };

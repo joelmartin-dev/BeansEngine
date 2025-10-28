@@ -296,9 +296,10 @@ struct App {
   std::vector<vk::DrawIndexedIndirectCommand> indirectCommands;
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> indirectCommandsBuffer = std::pair(nullptr, nullptr);
   
-  // CreateComputeTexture
-  std::pair<vk::raii::Image, vk::raii::DeviceMemory> pathTracingTexture = std::pair(nullptr, nullptr);
-  vk::raii::ImageView pathTracingTextureView = nullptr;
+  // CreateRenderTexture
+  vk::Extent2D renderTextureExtent;
+  std::pair<vk::raii::Image, vk::raii::DeviceMemory> renderTexture = std::pair(nullptr, nullptr);
+  vk::raii::ImageView renderTextureView = nullptr;
   
   // CreateDescriptorPools
   vk::raii::DescriptorPool graphicsDescriptorPool = nullptr;
@@ -367,7 +368,7 @@ struct App {
   void CreateAccelerationStructures();
   void CreateBLASInstanceLUTBuffer();
   void CreateIndirectCommands();
-  void CreatePathTracingTexture();
+  void CreateRenderTexture();
   void CreateDescriptorPools();
   void CreateDescriptorSets();
   

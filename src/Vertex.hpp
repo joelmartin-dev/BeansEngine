@@ -12,6 +12,7 @@ struct Vertex {
   glm::vec2 texCoord = {};
   glm::vec3 colour = {};
   glm::vec3 norm = {};
+  uint32_t cubeID = 0;
 
   // How the struct is passed
   static vk::VertexInputBindingDescription getBindingDescription()
@@ -20,7 +21,7 @@ struct Vertex {
   }
 
   // How the struct's data is laid out
-  static std::array<vk::VertexInputAttributeDescription, 4> getAttributeDescriptions()
+  static std::array<vk::VertexInputAttributeDescription, 5> getAttributeDescriptions()
   {
     return {
       // location, binding, format, offset
@@ -29,14 +30,15 @@ struct Vertex {
       vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
       vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord)),
       vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, colour)),
-      vk::VertexInputAttributeDescription(3, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, norm))
+      vk::VertexInputAttributeDescription(3, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, norm)),
+      vk::VertexInputAttributeDescription(4, 0, vk::Format::eR32Uint, offsetof(Vertex, cubeID))
     };
   }
 
   // equal_to function, needed for use of Vertex as Key in unordered containers e.g. unordered_map(Key, T, hash(Key), equal_to(Key))
   bool operator==(const Vertex& other) const
   {
-    return pos == other.pos && colour == other.colour && texCoord == other.texCoord && norm == other.norm;
+    return pos == other.pos && colour == other.colour && texCoord == other.texCoord && norm == other.norm && cubeID == other.cubeID;
   }
 };
 

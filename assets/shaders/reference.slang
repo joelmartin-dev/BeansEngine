@@ -4,11 +4,11 @@ import common;
 // [shader("vertex")]
 // VSOutput vertMain(VSInput input) {
 //     VSOutput output;
-//     output.pos = mul(ubo.proj, mul(ubo.view, mul(ubo.model, float4(input.inPosition, 1.0))));
+//     output.pos = mul(camera.proj, mul(camera.view, mul(camera.model, float4(input.inPosition, 1.0))));
 //     output.fragColor = input.inColor;
 //     output.fragTexCoord = input.inTexCoord;
 //     output.fragNormal = input.inNormal;
-//     output.worldPos = mul(ubo.model, float4(input.inPosition, 1.0)).xyz;
+//     output.worldPos = mul(camera.model, float4(input.inPosition, 1.0)).xyz;
 //     return output;
 // }
 
@@ -36,7 +36,6 @@ struct PushConstant {
 // Sample the StorageImage using fullscreen triangle
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET {
-//    return float4(colourBuffer[uint(vertIn.pos.x / 2.0f * vertIn.pos.y / 2.0f) % colourBuffer.getCount()], 1.0f);
     return sampler.Sample(vertIn.fragTexCoord);
 }
 
@@ -61,19 +60,19 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     const float2 subpixelJitter = float2(rand(seed), rand(seed));
     const float2 pixelCenter = (float2)pixelCoords + subpixelJitter;          // Jittered pixel position
     const float2 clipCoords = pixelCenter / (float2)imgSize.xy * 2.0 - 1.0;   // Convert to NDC [-1,1]
-    const float4 viewCoords = mul(ubo.invProj, float4(clipCoords, 1.0, 1.0)); // Transform to view space
+    const float4 viewCoords = mul(camera.invProj, float4(clipCoords, 1.0, 1.0)); // Transform to view space
     
     // More samples == faster convergence, slower execution (but minus new frame overhead)
-    const uint MAX_SAMPLES = 1;
+    const uint MAX_SAMPLES = 256;
     const uint MAX_DEPTH = 4;
     const float INITIAL_MISS_DISTANCE = 1000.0f;
 
     float3 summedPixelCol = float3(0.0);
 
     for (uint sampleID = 0; sampleID < MAX_SAMPLES; sampleID++) {
-        float3 rayOrigin = mul(ubo.invView, float4(0.0, 0.0, 0.0, 1.0)).xyz; // Camera position in world space
+        float3 rayOrigin = mul(camera.invView, float4(0.0, 0.0, 0.0, 1.0)).xyz; // Camera position in world space
 
-        float3 rayDirection = mul(ubo.invView, float4(normalize(viewCoords.xyz), 0.0)).xyz; // Ray direction in world space
+        float3 rayDirection = mul(camera.invView, float4(normalize(viewCoords.xyz), 0.0)).xyz; // Ray direction in world space
 
         float3 accumCol = float3(1.0);
 
@@ -119,7 +118,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             
             // Go to the world position of hit
             rayOrigin += rayDirection * rq.CommittedRayT();
-            
+
             const float3 bounceRandom = randomDirection(seed);
             
             uint instanceID = rq.CommittedInstanceIndex();
@@ -146,7 +145,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             accumCol *= intersectionColor.rgb * col;
 
             // Check the direct illumination at point (still random, biased towards light)
-            if ( depth + 1 >= MAX_DEPTH) {
+            if (depth + 1 >= MAX_DEPTH) {
                 const float3 bounceRandom = randomDirection(seed);
                 rayDirection = normalize(pc.lightDir + bounceRandom);
         
@@ -177,11 +176,11 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     summedPixelCol /= (float)MAX_SAMPLES;
 
     if (pc.frame == 0) {
-        outImage[pixelCoords] = float4(summedPixelCol, 1.0);
+        outImage[pixelCoords] = float4(abs(summedPixelCol), 1.0);
     }
     else {
-        float a = max(1.0 / (float) (pc.frame + 1), 0.001);
+        float a = max(1.0 / ((float) (pc.frame + 1) / 2.0f), 0.000);
         float3 old_colour = outImage[pixelCoords].rgb;
-        outImage[pixelCoords] = float4(lerp(old_colour, summedPixelCol, a), 1.0);
+        outImage[pixelCoords] = float4(lerp(old_colour, abs(summedPixelCol), a), 1.0);
     }
 }
