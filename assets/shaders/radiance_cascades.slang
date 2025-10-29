@@ -1,4 +1,4 @@
-import "common";
+import common;
 
 // // Apply Transformations
 // [shader("vertex")]
@@ -67,11 +67,8 @@ float4 cascadeN(int cascade, float2 texCoord) {
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET
 {
-    return float4(vertIn.fragTexCoord, 0.0f, 1.0f);
-    // uint width, height;
-    // sampler.GetDimensions(width, height);
-    // float2 screenUV = float2(vertIn.pos.xy) / float2(width, height);
-    // return cascadeN(0, screenUV);
+    float4 textureColour = textures[0].Sample(textureSampler, vertIn.fragTexCoord);
+    return textureColour;
 }
 
 [shader("compute")]

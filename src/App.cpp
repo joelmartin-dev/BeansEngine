@@ -1242,8 +1242,8 @@ void App::CreateUniformBuffers()
 // For Path-Tracing Reference, create a read-write Image of the same resolution as the initial framebuffers
 void App::CreateRenderTexture()
 {
-  renderTextureExtent.width = swapChainExtent.width / 16 + 1;
-  renderTextureExtent.height = swapChainExtent.height / 16 + 1;
+  renderTextureExtent.width = swapChainExtent.width / RES_DIV + 1;
+  renderTextureExtent.height = swapChainExtent.height / RES_DIV + 1;
   // Create the Image on the GPU
   CreateImage(
     renderTextureExtent.width, renderTextureExtent.height, 1,

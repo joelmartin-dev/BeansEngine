@@ -34,9 +34,7 @@ int main(int argc, char** argv)
 #ifdef _WIN32
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-  int argc;
-  LPWSTR* argv = CommandLineToArgvW(pCmdLine, &argc);
-  main(argc, argv);
+  main(__argc, __argv);
   return 0;
 }
 #endif

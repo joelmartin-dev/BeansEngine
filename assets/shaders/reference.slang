@@ -1,17 +1,5 @@
 import common;
 
-// Apply Transformations
-// [shader("vertex")]
-// VSOutput vertMain(VSInput input) {
-//     VSOutput output;
-//     output.pos = mul(camera.proj, mul(camera.view, mul(camera.model, float4(input.inPosition, 1.0))));
-//     output.fragColor = input.inColor;
-//     output.fragTexCoord = input.inTexCoord;
-//     output.fragNormal = input.inNormal;
-//     output.worldPos = mul(camera.model, float4(input.inPosition, 1.0)).xyz;
-//     return output;
-// }
-
 // Maintain screenspace positions
 [shader("vertex")]
 VSOutput vertMain(VSInput input) {
@@ -63,12 +51,11 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     const float4 viewCoords = mul(camera.invProj, float4(clipCoords, 1.0, 1.0)); // Transform to view space
     
     // More samples == faster convergence, slower execution (but minus new frame overhead)
-    const uint MAX_SAMPLES = 256;
+    const uint MAX_SAMPLES = 2;
     const uint MAX_DEPTH = 4;
     const float INITIAL_MISS_DISTANCE = 1000.0f;
 
     float3 summedPixelCol = float3(0.0);
-
     for (uint sampleID = 0; sampleID < MAX_SAMPLES; sampleID++) {
         float3 rayOrigin = mul(camera.invView, float4(0.0, 0.0, 0.0, 1.0)).xyz; // Camera position in world space
 
@@ -77,13 +64,13 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
         float3 accumCol = float3(1.0);
 
         float missDistance = INITIAL_MISS_DISTANCE;
+        RayDesc rayDesc;
+        rayDesc.TMin = 0.0;
+        rayDesc.TMax = missDistance;
 
         for (uint depth = 0; depth < MAX_DEPTH; depth++) {
-            RayDesc rayDesc;
             rayDesc.Origin = rayOrigin;
             rayDesc.Direction = rayDirection;
-            rayDesc.TMin = 0.0;
-            rayDesc.TMax = missDistance;
 
             RayQuery<RAY_FLAG_NONE> rq;
             let rayFlags = RAY_FLAG_NONE;
@@ -91,19 +78,21 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             rq.TraceRayInline(accelerationStructure, rayFlags, 0xFF, rayDesc);
 
             while (rq.Proceed()) {
-                uint instanceID = rq.CandidateInstanceIndex();
-                uint primIndex = rq.CandidatePrimitiveIndex();
+                const uint instanceID = rq.CandidateInstanceIndex();
+                const uint primIndex = rq.CandidatePrimitiveIndex();
 
-                float3x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CandidateTriangleBarycentrics());
-                float2 uv = primAttribs[1].xy;
+                const float3x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CandidateTriangleBarycentrics());
+                const float2 uv = primAttribs[1].xy;
 
-                uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
+                const uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
 
-                uint width, height, levelCount;
-                textures[NonUniformResourceIndex(materialID)].GetDimensions(0, width, height, levelCount);
-                float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CandidateTriangleRayT() / (float) levelCount);
+                uint _width, _height, levelCount;
+                textures[NonUniformResourceIndex(materialID)].GetDimensions(1, _width, _height, levelCount);
+                const float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CandidateTriangleRayT() / (float) levelCount);
 
-                if (intersectionColor.a >= 0.5) rq.CommitNonOpaqueTriangleHit();
+                if (intersectionColor.a >= 0.5)
+                    rq.CommitNonOpaqueTriangleHit();
+
             }
 
             if (rq.CommittedStatus() == COMMITTED_NOTHING) {
@@ -118,7 +107,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             
             // Go to the world position of hit
             rayOrigin += rayDirection * rq.CommittedRayT();
-
+            
             const float3 bounceRandom = randomDirection(seed);
             
             uint instanceID = rq.CommittedInstanceIndex();
@@ -129,30 +118,33 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             const float2 uv = primAttribs[1].xy;
             const float3 norm = primAttribs[2].xyz;
             const float4x3 worldToObject = rq.CommittedWorldToObject4x3();
+
+            float3 rawReflected = norm + bounceRandom;
+            float3 reflected = mul(worldToObject, rawReflected).xyz;
             
-            rayDirection = normalize(mul(worldToObject, norm).xyz + bounceRandom);
+            if (length(reflected) > 1e-1) {
+                rayDirection = normalize(reflected);
+            } else {
+                // Guaranteed non-nan direction
+                rayDirection = pc.lightDir;
+            }
             
             // Avoid self-intersections by starting slightly above the surface
             rayOrigin += rayDirection * 0.001;
-            
+
             uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
             uint _width, _height, levelCount;
             textures[NonUniformResourceIndex(materialID)].GetDimensions(1, _width, _height, levelCount);
-            float4 intersectionColor = 
-            textures[NonUniformResourceIndex(materialID)].SampleLevel(
-                textureSampler, uv, rq.CommittedRayT() / (float) levelCount);
-                
-            accumCol *= intersectionColor.rgb * col;
+            float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CommittedRayT() / (float) levelCount);
+
+            accumCol *= intersectionColor.rgb;
 
             // Check the direct illumination at point (still random, biased towards light)
-            if (depth + 1 >= MAX_DEPTH) {
-                const float3 bounceRandom = randomDirection(seed);
+            if ( depth + 1 >= MAX_DEPTH) {
                 rayDirection = normalize(pc.lightDir + bounceRandom);
         
                 rayDesc.Direction = rayDirection;
                 rayDesc.Origin = rayOrigin;
-                rayDesc.TMin = 0.0;
-                rayDesc.TMax = INITIAL_MISS_DISTANCE;
         
                 RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> sq;
                 let rayFlags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH;
@@ -176,11 +168,11 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     summedPixelCol /= (float)MAX_SAMPLES;
 
     if (pc.frame == 0) {
-        outImage[pixelCoords] = float4(abs(summedPixelCol), 1.0);
+        outImage[pixelCoords] = float4(summedPixelCol, 1.0);
     }
     else {
-        float a = max(1.0 / ((float) (pc.frame + 1) / 2.0f), 0.000);
+        float a = max(1.0 / (float) (pc.frame + 1), 0.001);
         float3 old_colour = outImage[pixelCoords].rgb;
-        outImage[pixelCoords] = float4(lerp(old_colour, abs(summedPixelCol), a), 1.0);
+        outImage[pixelCoords] = float4(lerp(old_colour, summedPixelCol, a), 1.0);
     }
 }

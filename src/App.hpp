@@ -54,6 +54,10 @@ constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 constexpr uint32_t MAX_CASCADES = 4;
 constexpr uint32_t WORKGROUP_SIZE[] = {8, 8};
 
+#ifndef RES_DIV
+  #define RES_DIV 1
+#endif
+
 // Screen resolution defaults
 constexpr uint32_t WIDTH = 1440;
 constexpr uint32_t HEIGHT = 900;

@@ -146,7 +146,8 @@ public float3 skyColour(float3 bounceDir, float3 sunDir, float sunIntensity)
     }
     // pointing down
     else {
-        return lerp(halfColour, bottomColour, abs(bounceDir.y));
+        const float3 groundInfluence = lerp(halfColour, bottomColour, bounceDir.y);
+        return groundInfluence;
     }
 }
 
