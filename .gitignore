@@ -6,6 +6,8 @@
 .clangd
 
 *.json
+*.txt
+*.ini
 
 obj/
 build/

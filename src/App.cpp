@@ -75,7 +75,7 @@
 
       - Exception Handling:
           Throw crucial errors, enable validation layers for the debugMessenger for API internal errors, use
-          std::clog for any warnings/info.
+          std::cout for any warnings/info.
 
       - Usage of Lambda Functions [](){} (C++11 feature):
           Lambda functions are used whenever a function requires another function as an argument, or when a
@@ -148,6 +148,7 @@ void App::Run()
 #ifdef _DEBUG
   InitImGui();
 #endif
+  SetUpMeasuring();
   MainLoop();
   Cleanup();
 }
@@ -157,7 +158,7 @@ void App::InitWindow()
 {
 #ifndef _WIN32
   if (!useWayland){
-    std::clog << "falling back to x11" << std::endl;
+    std::cout << "falling back to x11" << std::endl;
     glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
   } 
     
@@ -276,7 +277,7 @@ void App::InitVulkan()
   CreateDescriptorPools();
   CreateDescriptorSets();
   auto timer_end = std::chrono::system_clock::now();
-  std::clog << std::chrono::duration_cast<std::chrono::milliseconds>(timer_end - timer_start) << std::endl;
+  std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(timer_end - timer_start) << std::endl;
 }
 
 // Setup ImGui for use with an already instantiated GLFW Vulkan application
@@ -319,6 +320,14 @@ void App::InitImGui()
   initInfo.PipelineRenderingCreateInfo = imguiPipelineInfo;
 
   if (ImGui_ImplVulkan_Init(&initInfo) != true) throw std::runtime_error("failed to initialise ImGuiImplVulkan!");
+}
+
+void App::SetUpMeasuring()
+{
+  f.open(measurement_file_name);
+  old_clog = std::clog.rdbuf();
+  file_buf = f.rdbuf();
+  std::clog.rdbuf(file_buf);
 }
 
 // Runtime logic
@@ -427,8 +436,11 @@ void App::MainLoop()
       oldSunDir = sunDir;
     }
 
-    auto drawStart = std::chrono::system_clock::now(); // timing specifically how long all of the graphics stuff takes
+    auto drawStart = std::chrono::system_clock::now();
     DrawFrame();
+    std::clog << 
+      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now() - drawStart).count() << 
+      '\n';
     
     // Updating variables for next frame (everything is delta-dependent, so effects won't take impact until next frame)
     glfwGetCursorPos(pWindow, &xpos, &ypos);
@@ -457,6 +469,10 @@ void App::MainLoop()
 // Libraries tend to include helper functions that do this for you
 void App::Cleanup()
 {
+  std::clog.flush();
+  f.close();
+  std::clog.rdbuf(old_clog);
+
 #ifdef _DEBUG
   // ImGui helpers
   ImGui_ImplVulkan_Shutdown();
@@ -2988,7 +3004,7 @@ void App::CompileShader(const char* src, const char* dst)
   // Early exit if source file does not exist
   auto fsrc = fopen(src, "r");
   if (fsrc == NULL) {
-    std::clog << "failed to open " << src << std::endl;
+    std::cout << "failed to open " << src << std::endl;
     return;
   }
   // We need to establish what this compilation session can and will do
@@ -3124,7 +3140,7 @@ void App::ReloadShaders()
     auto f = fopen(*path, "r");
     // if the SPIR-V does not exist, abort reloading
     if (f == NULL) {
-      std::clog << "failed to open " << *path << std::endl;
+      std::cout << "failed to open " << *path << std::endl;
       return;
     }
     fclose(f);

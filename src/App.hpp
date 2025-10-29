@@ -5,6 +5,7 @@
 #include <vector> // Dynamic arrays
 #include <filesystem> // Platform-agnostic filepaths
 #include <mutex> // Synchronisation object
+#include <fstream>
 
 //============================================ Vulkan Types and Functions ================================================//
 // saves us from linking vulkan library, needs to be included BEFORE vulkan.h
@@ -323,6 +324,12 @@ struct App {
   float runtime;
   uint32_t frame = 0;
 
+  //======= SetupMeasuring ======//
+  std::ofstream f;
+  std::string measurement_file_name;
+  std::streambuf *old_clog;
+  std::streambuf *file_buf;
+
   // Extra objects
   //RenderTarget gIOutput;
   Scene scene;
@@ -339,6 +346,7 @@ struct App {
   void InitWindow();
   void InitVulkan();
   void InitImGui();
+  void SetUpMeasuring();
   void MainLoop();
   void Cleanup();
 

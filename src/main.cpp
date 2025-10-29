@@ -1,6 +1,6 @@
-#include <cstdlib>
 #include <iostream>
-#include <stdexcept>
+#include <exception>
+#include <filesystem>
 
 #ifdef _WIN32
 #pragma comment(linker, "/SUBSYSTEM:CONSOLE")
@@ -17,6 +17,8 @@ int main(int argc, char** argv)
   else app.useWayland = true;
 #endif
 
+  app.measurement_file_name = std::filesystem::path(argv[0]).stem().string().append(".txt");
+
   try
   {
     app.Run();
@@ -24,16 +26,17 @@ int main(int argc, char** argv)
   catch (const std::exception& e)
   {
     std::cerr << "Error: " << e.what() << std::endl;
-    return EXIT_FAILURE;
+    return 1;
   }
-  return EXIT_SUCCESS;
+  return 0;
 }
 
 #ifdef _WIN32
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-  
-  main(0, new char*[0]);
+  int argc;
+  LPWSTR* argv = CommandLineToArgvW(pCmdLine, &argc);
+  main(argc, argv);
   return 0;
 }
 #endif
