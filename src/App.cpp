@@ -269,7 +269,7 @@ void App::InitVulkan()
   CreateNrmBuffers();
   CreateAccelerationStructures();
   CreateBLASInstanceLUTBuffer();
-  CreateIndirectCommands();
+  //CreateIndirectCommands();
   
   CreateRenderTexture();
   
@@ -1243,8 +1243,14 @@ void App::CreateUniformBuffers()
 // For Path-Tracing Reference, create a read-write Image of the same resolution as the initial framebuffers
 void App::CreateRenderTexture()
 {
-  renderTextureExtent.width = swapChainExtent.width / RES_DIV + 1;
+#ifndef RADIANCE_CASCADES
+  renderTextureExtent.width  = swapChainExtent.width  / RES_DIV + 1;
   renderTextureExtent.height = swapChainExtent.height / RES_DIV + 1;
+#else
+  renderTextureExtent.width  = CASCADE_0_PROBES[0] * static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * MAX_CASCADES;
+  renderTextureExtent.height = CASCADE_0_PROBES[1] * static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * MAX_CASCADES;
+#endif
+
   // Create the Image on the GPU
   CreateImage(
     renderTextureExtent.width, renderTextureExtent.height, 1,
@@ -3150,7 +3156,9 @@ void App::ReloadShaders()
   frame = 0;
   // After the initial creation, this acts more like RecreatePipelines
   CreatePipelines();
+#ifndef RADIANCE_CASCADES
   CreateRenderTexture();
+#endif
   globalDescriptorSets.clear();
   materialDescriptorSets.clear();
   computeDescriptorSets.clear();
@@ -3326,7 +3334,7 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
       drawCommandBuffers[currentFrame].drawIndexed(submeshes[i].indexCount, 1, submeshes[i].indexOffset, 0, 0);
     }
   }
-#else
+#endif
   // COMPUTE RESULTS
   // render these after model as we want them in front without needing the depth buffer
   {
@@ -3340,7 +3348,6 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
     drawCommandBuffers[currentFrame].drawIndexed(3, 1, 0, 0, 0);
   }
-#endif
 #ifdef _DEBUG
   // Record all the ImGui commands at the end so they appear on top
   ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), static_cast<VkCommandBuffer>(*drawCommandBuffers[currentFrame]));
