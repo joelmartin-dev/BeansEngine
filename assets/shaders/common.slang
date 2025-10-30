@@ -60,13 +60,6 @@ public struct InstanceLUT {
 };
 [[vk::binding(7, 0)]] public StructuredBuffer<InstanceLUT> instanceLUTBuffer;
 
-// Sampler of the written-to image
-[[vk::binding(8, 0)]] public Sampler2D sampler;
-
-// Write access to StorageImage
-[vk_image_format("rgba32f")]
-[[vk::binding(9, 0)]] public RWTexture2D<float4> outImage;
-
 // Sampler for texture array
 [[vk::binding(0, 1)]] public SamplerState textureSampler;
 
@@ -115,9 +108,9 @@ public float3x3 getPrimAttribs(uint instanceID, uint primIndex, float2 barycentr
 public float rand(inout uint seed) {
     // Condensed version of pcg_output_rxs_m_xs_32_32, with simple conversion to floating-point [0,1].
     // Step seed
-    seed = seed * 747796405 + 1;
+    seed = seed * 747796405u + 1;
     // Generate pseudorandom uint from seed
-    uint word = ((seed >> ((seed >> 28) + 4)) ^ seed) * 277803737;
+    uint word = ((seed >> ((seed >> 28u) + 4u)) ^ seed) * 277803737u;
     word = (word >> 22) ^ word;
     return float(word) / 4294967295.0f;
 }

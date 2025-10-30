@@ -306,6 +306,7 @@ struct App {
   
   // CreateRenderTexture
   vk::Extent2D renderTextureExtent;
+  vk::raii::Sampler renderTextureSampler = nullptr;
   std::pair<vk::raii::Image, vk::raii::DeviceMemory> renderTexture = std::pair(nullptr, nullptr);
   vk::raii::ImageView renderTextureView = nullptr;
   
@@ -353,7 +354,8 @@ struct App {
   void InitWindow();
   void InitVulkan();
   void InitImGui();
-  void SetUpMeasuring();
+  void SetupMeasuring();
+  void SetupSignalCatch();
   void MainLoop();
   void Cleanup();
 
@@ -429,6 +431,9 @@ struct App {
   // CreateNrmBuffers
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateNrmBuffer(const std::vector<Vertex>& verts);
     
+  // CreateRenderTexture
+  void CreateRenderTextureSampler();
+
   // Shader Management
   void CompileShader(const char* src, const char* dst);
   void ReloadShaders();
@@ -458,7 +463,7 @@ struct App {
   uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
 
   void CreateImage(
-    uint32_t width, uint32_t height, uint32_t mipLevels, 
+    uint32_t width, uint32_t height, uint32_t depth, uint32_t mipLevels, 
     vk::Format format,
     vk::ImageTiling tiling, vk::ImageUsageFlags usage,
     vk::MemoryPropertyFlags properties,
@@ -466,9 +471,8 @@ struct App {
   );
 
   [[nodiscard]] vk::raii::ImageView CreateImageView(
-    const vk::Image& image,
-    vk::Format format,
-    vk::ImageAspectFlags aspectFlags,
+    const vk::Image& image, vk::ImageViewType viewType,
+    vk::Format format, vk::ImageAspectFlags aspectFlags,
     uint32_t mipLevels
   ) const;
   

@@ -58,7 +58,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     const float4 viewCoords = mul(camera.invProj, float4(clipCoords, 1.0, 1.0)); // Transform to view space
     
     // More samples == faster convergence, slower execution (but minus new frame overhead)
-    const uint MAX_SAMPLES = 8;
+    const uint MAX_SAMPLES = 64;
     const uint MAX_DEPTH = 4;
     const float INITIAL_MISS_DISTANCE = 1000.0f;
 

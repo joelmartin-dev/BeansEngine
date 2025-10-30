@@ -4,10 +4,13 @@
 .cache/
 *.save
 .clangd
+.venv
 
 *.json
 *.txt
 *.ini
+*.csv
+*.svg
 
 obj/
 build/

@@ -16,7 +16,7 @@ import common;
 [shader("vertex")]
 VSOutput vertMain(VSInput input) {
     VSOutput output;
-    output.pos = mul(camera.proj, mul(camera.view, mul(camera.model, float4(input.inPosition, 1.0))));
+    output.pos = (input.cubeID == 1) ? mul(camera.proj, mul(camera.view, mul(camera.model, float4(input.inPosition, 1.0)))) : float4(input.inPosition, 1.0);
     output.fragColor = input.inColor;
     output.fragTexCoord = input.inTexCoord;
     output.fragNormal = input.inNormal;
@@ -64,16 +64,35 @@ float4 cascadeN(int cascade, float2 texCoord) {
     return float4(float3(0.0), 1.0);
 }
 
+// Sampler of the written-to image
+[[vk::binding(8, 0)]] public Sampler3D sampler;
+
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET
 {
-    float4 textureColour = textures[0].Sample(textureSampler, vertIn.fragTexCoord);
+    float4 textureColour = sampler.Sample(float3(vertIn.fragTexCoord, 0.0));
     return textureColour;
 }
+
+// Write access to StorageImage
+[vk_image_format("rgba32f")]
+[[vk::binding(9, 0)]] public RWTexture3D<float4> outImage;
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void compMain(uint3 threadIdx: SV_DispatchThreadID)
 {
-
+    uint width, height, depth;
+    outImage.GetDimensions(width, height, depth);
+    uint3 pixel = threadIdx;
+    if (pixel.x >= width / 4 || pixel.y >= height) return;
+    uint3 adjustedPixel = pixel / 4;
+    float2 screenUV = (float2)adjustedPixel.xy / float2(width / (4), height);
+    outImage[pixel] = float4(screenUV, 0.0f, 1.0f);
+    // return;
+    // uint rayCount = (pc.level + 1) * 4;
+    // // round before convert, otherwise possible floating-point error
+    // uint size = uint(round(sqrt(rayCount)));
+    // float2 rayDir = float2(cospi(1. / float(threadIdx.x % rayCount)), sinpi(1. / float(threadIdx.x % rayCount)));
+    // outImage[pixel] = float4(rayDir, 0.0f, 1.0f);
 }

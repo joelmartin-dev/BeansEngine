@@ -3,7 +3,7 @@
 TARGET_EXEC := main
 REFERENCE_EXEC := reference
 RESTIR_EXEC := restir
-RADIANCE_EXEC := radiance
+RADIANCE_EXEC := radiance_cascades
 
 BUILD_DIR := bin
 SRC_DIR := src
@@ -74,15 +74,15 @@ variants:
 
 reference:
 	make clean_obj
-	make $(BUILD_DIR)/$(REFERENCE_EXEC) MODE=REFERENCE -j
+	bear -- make $(BUILD_DIR)/$(REFERENCE_EXEC) MODE=REFERENCE -j
 
 restir:
 	make clean_obj
-	make $(BUILD_DIR)/$(RESTIR_EXEC) MODE=RESTIR -j
+	bear -- make $(BUILD_DIR)/$(RESTIR_EXEC) MODE=RESTIR -j
 
 radiance:
 	make clean_obj
-	make $(BUILD_DIR)/$(RADIANCE_EXEC) MODE=RADIANCE_CASCADES -j
+	bear -- make $(BUILD_DIR)/$(RADIANCE_EXEC) MODE=RADIANCE_CASCADES -j
 
 $(BUILD_DIR)/$(TARGET_EXEC): $(OBJS)
 	mkdir -p $(dir $@)

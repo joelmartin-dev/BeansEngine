@@ -2,6 +2,7 @@
 
 //================================================ Standard Libraries ================================================//
 #include <iostream>   // writing/reading to/from terminal
+#include <csignal>    // signal catching
 #include <fstream>    // writing/reading to.from files
 #include <chrono>     // for timekeeping
 #include <cstdint>    // for typealiases e.g. uint16_t for unsigned short int
@@ -148,7 +149,8 @@ void App::Run()
 #ifdef _DEBUG
   InitImGui();
 #endif
-  SetUpMeasuring();
+  SetupMeasuring();
+  SetupSignalCatch();
   MainLoop();
   Cleanup();
 }
@@ -322,12 +324,26 @@ void App::InitImGui()
   if (ImGui_ImplVulkan_Init(&initInfo) != true) throw std::runtime_error("failed to initialise ImGuiImplVulkan!");
 }
 
-void App::SetUpMeasuring()
+void App::SetupMeasuring()
 {
   f.open(measurement_file_name);
   old_clog = std::clog.rdbuf();
   file_buf = f.rdbuf();
   std::clog.rdbuf(file_buf);
+  std::clog.flush();
+}
+
+static std::atomic_bool closeFlag(false);
+
+void CatchSignal(int sig)
+{
+  closeFlag.store(true);
+}
+
+void App::SetupSignalCatch()
+{
+  signal(SIGINT, CatchSignal);
+  signal(SIGTERM, CatchSignal);
 }
 
 // Runtime logic
@@ -356,8 +372,9 @@ void App::MainLoop()
 
   auto frameStart = std::chrono::system_clock::now(); // time at start of loop (including input polling, ui updating)
   auto frameEnd = std::chrono::system_clock::time_point::max(); // time at end of loop
+  frame = 0;
 
-  while (glfwWindowShouldClose(pWindow) != GLFW_TRUE) { // while user has not quit
+  while (glfwWindowShouldClose(pWindow) != GLFW_TRUE && !closeFlag.load()) { // while user has not quit
     frameStart = std::chrono::system_clock::now();
     
     glfwPollEvents(); // check user input
@@ -439,9 +456,9 @@ void App::MainLoop()
 
     auto drawStart = std::chrono::system_clock::now();
     DrawFrame();
-    std::clog << 
-      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now() - drawStart).count() << 
-      '\n';
+      std::clog << 
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now() - drawStart).count() << 
+        ',';
     
     // Updating variables for next frame (everything is delta-dependent, so effects won't take impact until next frame)
     glfwGetCursorPos(pWindow, &xpos, &ypos);
@@ -643,7 +660,7 @@ void App::PickPhysicalDevice()
       // Check if the device supports the Vulkan 1.4 API version
       bool supportsVulkan1_4 = properties.apiVersion >= VK_API_VERSION_1_4;
       // Check if the device is capable of anisotropic sampling (quality transitioning between mip levels)
-      bool supportsSamplerAnisotropy = properties.limits.maxSamplerAnisotropy >= 1.0f;
+      // bool supportsSamplerAnisotropy = properties.limits.maxSamplerAnisotropy >= 1.0f;
       
       // Get the queue families and their properties of the physical device
       auto queueFamilies = _physicalDevice.getQueueFamilyProperties();
@@ -685,8 +702,7 @@ void App::PickPhysicalDevice()
       // Query those specific features against the available implementation (the device's Vulkan driver)
       bool supportsRequiredFeatures = 
         // allows anisotropic sampling to some degree
-        features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&
-        features.template get<vk::PhysicalDeviceFeatures2>().features.multiDrawIndirect &&
+        //features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&
         // simplified API for Vulkan synchronization objects e.g. semaphores, fences
         features.template get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
         // allows for implicit render passes
@@ -706,7 +722,7 @@ void App::PickPhysicalDevice()
         
       // If all true, this physical device is fit for purpose and we can stop checking
       return supportsVulkan1_4 &&
-             supportsSamplerAnisotropy &&
+            //  supportsSamplerAnisotropy &&
              supportsGraphicsCompute && 
              supportsAllRequiredExtensions &&
              supportsRequiredFeatures;
@@ -767,7 +783,7 @@ void App::CreateLogicalDevice()
                      vk::PhysicalDeviceAccelerationStructureFeaturesKHR, 
                      vk::PhysicalDeviceRayQueryFeaturesKHR>
   featureChain = {
-    {.features = { .multiDrawIndirect = true, .samplerAnisotropy = true } },  // vk::PhysicalDeviceFeatures2
+    {},// {.features = { .samplerAnisotropy = true } },  // vk::PhysicalDeviceFeatures2
     { 
       .shaderSampledImageArrayNonUniformIndexing = true, 
       .descriptorBindingSampledImageUpdateAfterBind = true,
@@ -917,7 +933,8 @@ void App::CreateSwapChainImageViews()
 
   // Create identical views, one for each image
   for (auto image : swapChainImages) {
-    swapChainImageViews.emplace_back(CreateImageView(image, swapChainSurfaceFormat, vk::ImageAspectFlagBits::eColor, 1));
+    swapChainImageViews.emplace_back(CreateImageView(
+      image, vk::ImageViewType::e2D, swapChainSurfaceFormat, vk::ImageAspectFlagBits::eColor, 1));
   }
 }
 
@@ -930,7 +947,7 @@ void App::CreateDepthResources()
   
   // Create a depth image
   CreateImage(
-    swapChainExtent.width, swapChainExtent.height, 1,
+    swapChainExtent.width, swapChainExtent.height, 1, 1,
     depthFormat, vk::ImageTiling::eOptimal,
     vk::ImageUsageFlagBits::eDepthStencilAttachment,
     vk::MemoryPropertyFlagBits::eDeviceLocal,
@@ -938,7 +955,8 @@ void App::CreateDepthResources()
   );
   
   // Create the view
-  depthImageView = CreateImageView(depthImage.first, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);
+  depthImageView = CreateImageView(
+    depthImage.first, vk::ImageViewType::e2D, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);
 }
 
 // All command buffers are allocated from a pool
@@ -1247,14 +1265,20 @@ void App::CreateRenderTexture()
   renderTextureExtent.width  = swapChainExtent.width  / RES_DIV + 1;
   renderTextureExtent.height = swapChainExtent.height / RES_DIV + 1;
 #else
-  renderTextureExtent.width  = CASCADE_0_PROBES[0] * static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * MAX_CASCADES;
-  renderTextureExtent.height = CASCADE_0_PROBES[1] * static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * MAX_CASCADES;
+  renderTextureExtent.width  = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS * CASCADE_0_PROBES[0])) * MAX_CASCADES;
+  renderTextureExtent.height = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS * CASCADE_0_PROBES[1]));
 #endif
+  std::cout << renderTextureExtent.width << ", " << renderTextureExtent.height << std::endl;
 
   // Create the Image on the GPU
   CreateImage(
-    renderTextureExtent.width, renderTextureExtent.height, 1,
-    vk::Format::eR32G32B32A32Sfloat, vk::ImageTiling::eOptimal,
+    renderTextureExtent.width, renderTextureExtent.height, 
+#ifdef RADIANCE_CASCADES
+    MAX_CASCADES,
+#else
+    1,
+#endif
+    1, vk::Format::eR32G32B32A32Sfloat, vk::ImageTiling::eOptimal,
     vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
     vk::MemoryPropertyFlagBits::eDeviceLocal,
     renderTexture.first, renderTexture.second
@@ -1265,11 +1289,15 @@ void App::CreateRenderTexture()
   
   // Create a view for the Image
   renderTextureView = CreateImageView(
-    renderTexture.first,
-    vk::Format::eR32G32B32A32Sfloat,
-    vk::ImageAspectFlagBits::eColor,
-    1
-  );
+    renderTexture.first, 
+#ifdef RADIANCE_CASCADES
+    vk::ImageViewType::e3D, 
+#else
+    vk::ImageViewType::e2D,
+#endif
+    vk::Format::eR32G32B32A32Sfloat, vk::ImageAspectFlagBits::eColor, 1);
+
+  CreateRenderTextureSampler();
 }
 
 // Create the vertex buffers for the scene AND the fullscreen triangle (for postprocessing effects)
@@ -1955,7 +1983,7 @@ void App::CreateDescriptorSets()
 
       // Samplable interface for image
       vk::DescriptorImageInfo samplerInfo {
-        .sampler = baseTextureSampler,
+        .sampler = renderTextureSampler,
         .imageView = static_cast<vk::ImageView>(renderTextureView),
         .imageLayout = vk::ImageLayout::eGeneral,
       };
@@ -2052,6 +2080,7 @@ void App::CreateDescriptorSets()
     device.updateDescriptorSets({materialWrite}, {});
   }
 }
+
 
 // High-level Vulkan frame logic
 void App::DrawFrame()
@@ -2470,7 +2499,8 @@ void App::CreateTextureImage(const char* texturePath, size_t idx)
 
   // Initialise Image
   CreateImage(
-    texWidth, texHeight, mipLevels, textureFormat,
+    texWidth, texHeight, 1, mipLevels,
+    textureFormat,
     vk::ImageTiling::eOptimal,
     vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
     vk::MemoryPropertyFlagBits::eDeviceLocal,
@@ -2494,8 +2524,8 @@ void App::CreateTextureImage(const char* texturePath, size_t idx)
   ktxTexture2_Destroy(kTexture);
 
   // Create the corresponding View
-  baseTextureImageViews[idx] =
-    CreateImageView(baseTextureImages[idx].first, textureFormat, vk::ImageAspectFlagBits::eColor, mipLevels);
+  baseTextureImageViews[idx] = CreateImageView(
+      baseTextureImages[idx].first, vk::ImageViewType::e2D, textureFormat, vk::ImageAspectFlagBits::eColor, mipLevels);
 }
 
 // Transition-only command buffer submission
@@ -2560,7 +2590,7 @@ void App::TransitionImageLayout(
 // Specifies how a shader retrieves texture information
 void App::CreateTextureSampler()
 {
-  vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();
+  // vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();
   // eLinear interpolates based on subtexel coordinates
   // eRepeat tiles the image for texture coordinates outside of [float2(0.0), float2(1.0)]
   // mipLodBias is like an offset for mip levels
@@ -2576,8 +2606,8 @@ void App::CreateTextureSampler()
     .addressModeV = vk::SamplerAddressMode::eRepeat,
     .addressModeW = vk::SamplerAddressMode::eRepeat,
     .mipLodBias = 0.0f,
-    .anisotropyEnable = vk::True,
-    .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+    .anisotropyEnable = vk::False, // Makes no difference in path-tracing
+    // .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
     .compareEnable = vk::False, .compareOp = vk::CompareOp::eAlways,
     .minLod = 0.0f, .maxLod = vk::LodClampNone
   };
@@ -3004,13 +3034,28 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateNrmBuffer(const s
   return copyBuffer;
 }
 
+void App::CreateRenderTextureSampler()
+{
+  vk::SamplerCreateInfo samplerInfo {
+    .magFilter = vk::Filter::eLinear, .minFilter = vk::Filter::eLinear,
+    .mipmapMode = vk::SamplerMipmapMode::eLinear,
+    .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+    .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+    .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+    .anisotropyEnable = vk::False, // always viewed head-on
+    .compareEnable = vk::False,
+    .minLod = 0.0f, .maxLod = vk::LodClampNone
+  };
+
+  renderTextureSampler = vk::raii::Sampler(device, samplerInfo);
+}
 
 // Use the Slang Compilation API to compile slang shaders to SPIR-V during and by the application
 void App::CompileShader(const char* src, const char* dst)
 {
   // Early exit if source file does not exist
-  FILE* fsrc;
-  if (fopen_s(&fsrc, src, "r") != 0) {
+  auto fsrc = fopen(src, "r");
+  if (fsrc == nullptr) {
     std::cout << "failed to open " << src << std::endl;
     return;
   }
@@ -3143,10 +3188,10 @@ void App::ReloadShaders()
 
   // Check that the SPIR-V files exist before continuing
   const auto spirv_paths = {&spirv_path};
-  FILE* f;
   for (const auto& path : spirv_paths) {
     // if the SPIR-V does not exist, abort reloading
-    if (fopen_s(&f, *path, "r") != 0) {
+    auto f = fopen(*path, "r");
+    if (f == nullptr) {
       std::cout << "failed to open " << *path << std::endl;
       return;
     }
@@ -3204,11 +3249,15 @@ void App::RecordComputeCommandBuffer()
   };
   computeCommandBuffers[currentFrame].pushConstants<PathTracePushConstant>(
     *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
+  computeCommandBuffers[currentFrame].dispatch(renderTextureExtent.width / WORKGROUP_SIZE[0] + 1, 
+                                              renderTextureExtent.height / WORKGROUP_SIZE[1] + 1, 1);
 #elif !defined(REFERENCE) && defined(RESTIR) && !defined(RADIANCE_CASCADES)
   ReSTIRPushConstant pushConstant {
   };
   computeCommandBuffers[currentFrame].pushConstants<ReSTIRPushConstant>(
     *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
+  computeCommandBuffers[currentFrame].dispatch(renderTextureExtent.width / WORKGROUP_SIZE[0] + 1, 
+                                              renderTextureExtent.height / WORKGROUP_SIZE[1] + 1, 1);
 #elif !defined(REFERENCE) && !defined(RESTIR) && defined(RADIANCE_CASCADES)
   for (uint32_t level = 0; level < MAX_CASCADES; level++) {
     RadianceCascadesPushConstant pushConstant {
@@ -3216,11 +3265,11 @@ void App::RecordComputeCommandBuffer()
     };
     computeCommandBuffers[currentFrame].pushConstants<RadianceCascadesPushConstant>(
       *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
+    computeCommandBuffers[currentFrame].dispatch(renderTextureExtent.width  / WORKGROUP_SIZE[0] + 1, 
+                                                 renderTextureExtent.height / WORKGROUP_SIZE[1] + 1, 1);
   }
 #endif
   // For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
-  computeCommandBuffers[currentFrame].dispatch(renderTextureExtent.width / WORKGROUP_SIZE[0] + 1, 
-                                              renderTextureExtent.height / WORKGROUP_SIZE[1] + 1, 1);
   computeCommandBuffers[currentFrame].end();
 }
 
@@ -3456,7 +3505,7 @@ uint32_t App::FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags proper
 
 // Allocate DeviceMemory for an image, return handles to the objects
 void App::CreateImage(
-  uint32_t width, uint32_t height, uint32_t mipLevels,
+  uint32_t width, uint32_t height, uint32_t depth, uint32_t mipLevels,
   vk::Format format,
   vk::ImageTiling tiling, vk::ImageUsageFlags usage,
   vk::MemoryPropertyFlags properties,
@@ -3464,9 +3513,9 @@ void App::CreateImage(
 )
 {
   vk::ImageCreateInfo imageInfo {
-    .imageType = vk::ImageType::e2D,
+    .imageType = (depth > 1) ? vk::ImageType::e3D : vk::ImageType::e2D,
     .format = format,
-    .extent = {width, height, 1},
+    .extent = {width, height, depth},
     .mipLevels = mipLevels,
     .arrayLayers = 1,
     .samples = vk::SampleCountFlagBits::e1,
@@ -3488,14 +3537,14 @@ void App::CreateImage(
 
 // Might be the most straight-forward function, simple input-output
 [[nodiscard]] vk::raii::ImageView App::CreateImageView(
-  const vk::Image& image, vk::Format format,
-  vk::ImageAspectFlags aspectFlags,
+  const vk::Image& image, vk::ImageViewType viewType,
+  vk::Format format, vk::ImageAspectFlags aspectFlags,
   uint32_t mipLevels
 ) const
 {
   vk::ImageViewCreateInfo viewInfo {
     .image = image,
-    .viewType = vk::ImageViewType::e2D,
+    .viewType = viewType,
     .format = format,
     .subresourceRange = {
       .aspectMask = aspectFlags,

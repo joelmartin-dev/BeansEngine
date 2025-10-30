@@ -17,7 +17,8 @@ int main(int argc, char** argv)
   else app.useWayland = true;
 #endif
 
-  app.measurement_file_name = std::filesystem::path(argv[0]).stem().string().append(".txt");
+  app.measurement_file_name = 
+    (std::filesystem::path("Measuring") / std::filesystem::path(argv[0]).stem()).string().append(".csv");
 
   try
   {
