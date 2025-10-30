@@ -343,7 +343,8 @@ void App::MainLoop()
 
   // This is not great logic, but at the moment the glTF assets are loaded as triangle lists meaning every 3 indices is 
   // a triangle (as opposed to triangle strips which is indices.size - 2 as each new index uses the previous two)
-  stats.tris = vertices.size() / 3; // total number of indices / 3 should give tri count according to triangle list
+  // Total number of indices / 3 should give tri count according to triangle list
+  stats.tris = static_cast<uint32_t>(vertices.size() / 3);
 
   double xpos, ypos; // cursor position
 
@@ -2284,7 +2285,7 @@ void App::CreateGraphicsPipeline()
 
   // Which DescriptorSetLayouts will be used by this pipeline
   vk::PipelineLayoutCreateInfo pipelineLayoutInfo { 
-    .setLayoutCount = descriptorSetLayouts.size(), .pSetLayouts = descriptorSetLayouts.data(),
+    .setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size()), .pSetLayouts = descriptorSetLayouts.data(),
     .pushConstantRangeCount = 1, .pPushConstantRanges = &pushConstantRange
   };
   graphicsPipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
@@ -2348,7 +2349,7 @@ void App::CreateComputePipeline()
 
   // Which DescriptorSetLayouts will be used by this pipeline
   vk::PipelineLayoutCreateInfo pipelineLayoutInfo { 
-    .setLayoutCount = descriptorSetLayouts.size(), .pSetLayouts = descriptorSetLayouts.data(),
+    .setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size()), .pSetLayouts = descriptorSetLayouts.data(),
     .pushConstantRangeCount = 1, .pPushConstantRanges = &pushConstantRange
   };
   computePipeline.first = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
@@ -2624,7 +2625,7 @@ void App::LoadGeometry()
   // Place a cube somewhere
   vertices = Cube().vertices;
   indices = Cube().indices;
-  float scale = rndDist(rndEngine) * 0.3 + 0.7;
+  float scale = rndDist(rndEngine) * 0.3f + 0.7f;
   float theta = rndDist(rndEngine) * 2.0f * glm::pi<float>();
   glm::vec3 axis = glm::normalize(glm::vec3(
     (rndDist(rndEngine) - 0.5) * 2.0,
@@ -2678,7 +2679,7 @@ void App::LoadGeometry()
             return false;
           });
           if (matIt == matIdxs.end()) throw std::runtime_error("failed to find material!");
-          matIdx = *matIt;
+          matIdx = static_cast<uint32_t>(*matIt);
         }
       }
 
@@ -2715,7 +2716,7 @@ void App::LoadGeometry()
         if (p->material->double_sided)
           indices.insert(indices.end(), indices.rbegin(), indices.rbegin() + written_uints);
         
-        indexOffset = indices.size();
+        indexOffset = static_cast<uint32_t>(indices.size());
 
         // finished with the unpacked_indices
         free(unpacked_indices);
@@ -3002,8 +3003,8 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateNrmBuffer(const s
 void App::CompileShader(const char* src, const char* dst)
 {
   // Early exit if source file does not exist
-  auto fsrc = fopen(src, "r");
-  if (fsrc == NULL) {
+  FILE* fsrc;
+  if (fopen_s(&fsrc, src, "r") != 0) {
     std::cout << "failed to open " << src << std::endl;
     return;
   }
@@ -3136,10 +3137,10 @@ void App::ReloadShaders()
 
   // Check that the SPIR-V files exist before continuing
   const auto spirv_paths = {&spirv_path};
+  FILE* f;
   for (const auto& path : spirv_paths) {
-    auto f = fopen(*path, "r");
     // if the SPIR-V does not exist, abort reloading
-    if (f == NULL) {
+    if (fopen_s(&f, *path, "r") != 0) {
       std::cout << "failed to open " << *path << std::endl;
       return;
     }

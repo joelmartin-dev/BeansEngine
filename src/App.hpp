@@ -52,6 +52,7 @@ const std::vector validationLayers = { // not array; vector allows implicit typi
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 constexpr uint32_t MAX_CASCADES = 4;
+constexpr uint32_t CASCADE_0[] = { 1 << MAX_CASCADES, 1 << MAX_CASCADES };
 constexpr uint32_t WORKGROUP_SIZE[] = {8, 8};
 
 #ifndef RES_DIV

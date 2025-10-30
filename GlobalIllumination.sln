@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.13.35931.197 d17.13
+VisualStudioVersion = 17.13.35931.197
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "GlobalIllumination", "GlobalIllumination.vcxproj", "{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}"
 EndProject
@@ -9,18 +9,36 @@ Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
 		Debug|x86 = Debug|x86
+		Radiance|x64 = Radiance|x64
+		Radiance|x86 = Radiance|x86
+		Reference|x64 = Reference|x64
+		Reference|x86 = Reference|x86
 		Release|x64 = Release|x64
 		Release|x86 = Release|x86
+		ReSTIR|x64 = ReSTIR|x64
+		ReSTIR|x86 = ReSTIR|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Debug|x64.ActiveCfg = Debug|x64
 		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Debug|x64.Build.0 = Debug|x64
 		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Debug|x86.ActiveCfg = Debug|Win32
 		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Debug|x86.Build.0 = Debug|Win32
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Radiance|x64.ActiveCfg = Radianced|x64
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Radiance|x64.Build.0 = Radianced|x64
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Radiance|x86.ActiveCfg = Radianced|Win32
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Radiance|x86.Build.0 = Radianced|Win32
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Reference|x64.ActiveCfg = Referenced|x64
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Reference|x64.Build.0 = Referenced|x64
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Reference|x86.ActiveCfg = Referenced|Win32
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Reference|x86.Build.0 = Referenced|Win32
 		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Release|x64.ActiveCfg = Release|x64
 		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Release|x64.Build.0 = Release|x64
 		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Release|x86.ActiveCfg = Release|Win32
 		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.Release|x86.Build.0 = Release|Win32
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.ReSTIR|x64.ActiveCfg = ReSTIRd|x64
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.ReSTIR|x64.Build.0 = ReSTIRd|x64
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.ReSTIR|x86.ActiveCfg = ReSTIRd|Win32
+		{A2B83FBA-9A60-54AA-32AF-49DF76DF4DC8}.ReSTIR|x86.Build.0 = ReSTIRd|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
