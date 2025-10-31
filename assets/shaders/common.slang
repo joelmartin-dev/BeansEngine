@@ -60,6 +60,17 @@ public struct InstanceLUT {
 };
 [[vk::binding(7, 0)]] public StructuredBuffer<InstanceLUT> instanceLUTBuffer;
 
+// Sampler of the written-to image
+[[vk::binding(8, 0)]] public SamplerState sampler;
+
+// Write access to StorageImages
+[vk_image_format("rgba16f")]
+[[vk::binding(9, 0)]] public RWTexture2D<float4> outImage[];
+
+// Sample access to StorageImages
+[vk_image_format("rgba16f")]
+[[vk::binding(10, 0)]] public Texture2D<float4> renderTextures[];
+
 // Sampler for texture array
 [[vk::binding(0, 1)]] public SamplerState textureSampler;
 

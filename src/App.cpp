@@ -257,6 +257,7 @@ void App::InitVulkan()
   
   // We need to know the number of textures BEFORE we create the descriptor set layouts
   LoadGLTF(std::filesystem::path(model_path).make_preferred());
+  CreateRenderTexture();
   CreateDescriptorSetLayouts(); // Define how data is organised in descriptor sets
   
   InitSlang();// Compile shaders
@@ -272,8 +273,6 @@ void App::InitVulkan()
   CreateAccelerationStructures();
   CreateBLASInstanceLUTBuffer();
   //CreateIndirectCommands();
-  
-  CreateRenderTexture();
   
   //========== Associate external data with defined members =========//
   CreateDescriptorPools();
@@ -369,6 +368,7 @@ void App::MainLoop()
 
   sunDir = normalize(glm::vec3(-0.5f, 1.0f, -0.25f));
   auto oldSunDir = sunDir;
+  interval = 2.0f;
 
   auto frameStart = std::chrono::system_clock::now(); // time at start of loop (including input polling, ui updating)
   auto frameEnd = std::chrono::system_clock::time_point::max(); // time at end of loop
@@ -385,7 +385,7 @@ void App::MainLoop()
       RecreateSwapChain();
     }
     
-    #ifdef _DEBUG
+#ifdef _DEBUG
     // You have to call all of these to update the UI
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -434,6 +434,11 @@ void App::MainLoop()
       ImGui::SliderFloat("LY", &sunDir.y, -1.0f, 1.0f);
       ImGui::SliderFloat("LZ", &sunDir.z, -1.0f, 1.0f);
       
+      {
+        ImGui::BeginChild("Radiance Cascades", ImVec2(0.0f, 0.0f), {});
+        ImGui::SliderFloat("Interval Size", &interval, 0.0f, 2.0f);
+        ImGui::EndChild();
+      }
       ImGui::End();
     }
     // SHADER PATHS
@@ -446,7 +451,7 @@ void App::MainLoop()
     }
     
     ImGui::Render(); // Prepares the UI for rendering, DOES NOT RENDER ANYTHING
-    #endif
+#endif
     
     if (oldSunIntensity != sunIntensity || oldSunDir != sunDir) {
       frame = 0;
@@ -591,7 +596,7 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(
   void*
 )
 {
-  if ((severity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) == severity)// | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo) == severity)
+  if ((severity & (vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo)) == severity)
     std::cerr << "validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
 
   return vk::False;
@@ -708,7 +713,10 @@ void App::PickPhysicalDevice()
         // allows for implicit render passes
         features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
         features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState &&
+        features.template get<vk::PhysicalDeviceVulkan12Features>().descriptorBindingUniformBufferUpdateAfterBind &&
         features.template get<vk::PhysicalDeviceVulkan12Features>().descriptorBindingSampledImageUpdateAfterBind &&
+        features.template get<vk::PhysicalDeviceVulkan12Features>().descriptorBindingStorageImageUpdateAfterBind &&
+        features.template get<vk::PhysicalDeviceVulkan12Features>().descriptorBindingStorageBufferUpdateAfterBind &&
         features.template get<vk::PhysicalDeviceVulkan12Features>().descriptorBindingPartiallyBound &&
         features.template get<vk::PhysicalDeviceVulkan12Features>().descriptorBindingVariableDescriptorCount &&
         features.template get<vk::PhysicalDeviceVulkan12Features>().runtimeDescriptorArray &&
@@ -718,6 +726,8 @@ void App::PickPhysicalDevice()
         // makes timeline semaphores available for synchronisation
         features.template get<vk::PhysicalDeviceVulkan12Features>().timelineSemaphore &&
         features.template get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().accelerationStructure &&
+        features.template 
+          get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().descriptorBindingAccelerationStructureUpdateAfterBind &&
         features.template get<vk::PhysicalDeviceRayQueryFeaturesKHR>().rayQuery;
         
       // If all true, this physical device is fit for purpose and we can stop checking
@@ -783,20 +793,26 @@ void App::CreateLogicalDevice()
                      vk::PhysicalDeviceAccelerationStructureFeaturesKHR, 
                      vk::PhysicalDeviceRayQueryFeaturesKHR>
   featureChain = {
-    {},// {.features = { .samplerAnisotropy = true } },  // vk::PhysicalDeviceFeatures2
+    {},// {.features = { .samplerAnisotropy = true } },       // vk::PhysicalDeviceFeatures2
     { 
       .shaderSampledImageArrayNonUniformIndexing = true, 
+      .descriptorBindingUniformBufferUpdateAfterBind = true,
       .descriptorBindingSampledImageUpdateAfterBind = true,
+      .descriptorBindingStorageImageUpdateAfterBind = true,
+      .descriptorBindingStorageBufferUpdateAfterBind = true,
       .descriptorBindingPartiallyBound = true, 
       .descriptorBindingVariableDescriptorCount = true,
       .runtimeDescriptorArray = true, 
       .hostQueryReset = true,
       .timelineSemaphore = true,
       .bufferDeviceAddress = true,
-    },    // vk::PhysicalDeviceVulkan12Features
+    },                                                      // vk::PhysicalDeviceVulkan12Features
     {.synchronization2 = true, .dynamicRendering = true },  // vk::PhysicalDeviceVulkan13Features
     {.extendedDynamicState = true },                        // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
-    {.accelerationStructure = true },                       // vk::PhysicalDeviceAccelerationStructureFeaturesKHR
+    {
+      .accelerationStructure = true, 
+      .descriptorBindingAccelerationStructureUpdateAfterBind = true 
+    },                                                      // vk::PhysicalDeviceAccelerationStructureFeaturesKHR
     {.rayQuery = true },                                    // vk::PhysicalDeviceRayQueryFeaturesKHR
   };
   
@@ -934,7 +950,7 @@ void App::CreateSwapChainImageViews()
   // Create identical views, one for each image
   for (auto image : swapChainImages) {
     swapChainImageViews.emplace_back(CreateImageView(
-      image, vk::ImageViewType::e2D, swapChainSurfaceFormat, vk::ImageAspectFlagBits::eColor, 1));
+      image, swapChainSurfaceFormat, vk::ImageAspectFlagBits::eColor, 1));
   }
 }
 
@@ -947,7 +963,7 @@ void App::CreateDepthResources()
   
   // Create a depth image
   CreateImage(
-    swapChainExtent.width, swapChainExtent.height, 1, 1,
+    swapChainExtent.width, swapChainExtent.height, 1,
     depthFormat, vk::ImageTiling::eOptimal,
     vk::ImageUsageFlagBits::eDepthStencilAttachment,
     vk::MemoryPropertyFlagBits::eDeviceLocal,
@@ -956,7 +972,7 @@ void App::CreateDepthResources()
   
   // Create the view
   depthImageView = CreateImageView(
-    depthImage.first, vk::ImageViewType::e2D, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);
+    depthImage.first, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);
 }
 
 // All command buffers are allocated from a pool
@@ -1033,6 +1049,57 @@ void App::LoadGLTF(const std::filesystem::path& path)
   CreateTextureSampler();
   // Load vertex data, grouped by material
   LoadGeometry();
+}
+
+// For Path-Tracing Reference, create a read-write Image of the same resolution as the initial framebuffers
+void App::CreateRenderTexture()
+{
+#ifndef RADIANCE_CASCADES
+  renderTextureExtent.width  = swapChainExtent.width  / RES_DIV + 1;
+  renderTextureExtent.height = swapChainExtent.height / RES_DIV + 1;
+#else
+  renderTextureExtent.width  = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * (1 << (MAX_CASCADES - 1));
+  renderTextureExtent.height = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * (1 << (MAX_CASCADES - 1));
+#endif
+  std::cout << renderTextureExtent.width << ", " << renderTextureExtent.height << std::endl;
+
+#ifdef RADIANCE_CASCADES
+  for (size_t i = 0; i < MAX_CASCADES; i++)
+#else
+  for (size_t i = 0; i < 1; i++)
+#endif
+  {
+    std::pair<vk::raii::Image, vk::raii::DeviceMemory> tempImage = std::pair(nullptr, nullptr);
+    // Create the Image on the GPU
+    CreateImage(
+      renderTextureExtent.width, renderTextureExtent.height, 1,
+#ifdef RADIANCE_CASCADES
+      vk::Format::eR16G16B16A16Sfloat,
+#else
+      vk::Format::eR32G32B32A32Sfloat, 
+#endif      
+      vk::ImageTiling::eOptimal,
+      vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+      vk::MemoryPropertyFlagBits::eDeviceLocal,
+      tempImage.first, tempImage.second
+    );
+
+    renderTextures.emplace_back(std::move(tempImage));
+
+    // We want the image in the General layout for read-write operations
+    TransitionImageLayout(renderTextures.back().first, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral, 1);
+    
+    // Create a view for the Image
+    renderTextureViews.emplace_back(CreateImageView(
+      renderTextures.back().first,
+#ifdef RADIANCE_CASCADES
+      vk::Format::eR16G16B16A16Sfloat,
+#else
+      vk::Format::eR32G32B32A32Sfloat, 
+#endif
+      vk::ImageAspectFlagBits::eColor, 1));
+  }
+  CreateRenderTextureSampler();
 }
 
 // Each pipeline needs to know what structures will be passed to the GPU during its lifetime. Not specific data, but
@@ -1115,30 +1182,63 @@ void App::CreateDescriptorSetLayouts()
       // Storage Image read-only Sampler
       vk::DescriptorSetLayoutBinding(
         8,
-        vk::DescriptorType::eCombinedImageSampler,
+        vk::DescriptorType::eSampler,
         1,
         vk::ShaderStageFlagBits::eFragment,
         nullptr
       ),
-      // Storage Image Read-Write
+      // Storage Image Write
       vk::DescriptorSetLayoutBinding(
         9,
         vk::DescriptorType::eStorageImage,
-        1,
+        static_cast<uint32_t>(renderTextureViews.size()),
         vk::ShaderStageFlagBits::eCompute,
+        nullptr
+      ),
+      // Storage Image Sample
+      vk::DescriptorSetLayoutBinding(
+        10,
+        vk::DescriptorType::eSampledImage,
+        static_cast<uint32_t>(renderTextureViews.size()),
+        vk::ShaderStageFlagBits::eFragment,
         nullptr
       )
     };
 
+    std::vector<vk::DescriptorBindingFlags> bindingFlags = {
+      vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+      vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+      vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+      vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+      vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+      vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+      vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+      vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+      vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+      vk::DescriptorBindingFlagBits::ePartiallyBound | 
+        vk::DescriptorBindingFlagBits::eUpdateAfterBind,
+      vk::DescriptorBindingFlagBits::ePartiallyBound | 
+        vk::DescriptorBindingFlagBits::eVariableDescriptorCount | 
+        vk::DescriptorBindingFlagBits::eUpdateAfterBind
+    };
+
+    vk::DescriptorSetLayoutBindingFlagsCreateInfo flagsCreateInfo {
+      .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
+      .pBindingFlags = bindingFlags.data()
+    };
+
     // Copy the bindings into the layout info
     vk::DescriptorSetLayoutCreateInfo globalLayoutInfo{
+      .pNext = &flagsCreateInfo,
+      .flags = vk::DescriptorSetLayoutCreateFlagBits::eUpdateAfterBindPool,
       .bindingCount = static_cast<uint32_t>(globalBindings.size()),
       .pBindings = globalBindings.data()
     };
 
     // Initialise
     descriptorSetLayoutGlobal = vk::raii::DescriptorSetLayout(device, globalLayoutInfo);
-    
+  }
+  {
     uint32_t textureCount = static_cast<uint32_t>(baseTextureImageViews.size());
 
     std::array materialBindings = {
@@ -1258,46 +1358,20 @@ void App::CreateUniformBuffers()
   }
 }
 
-// For Path-Tracing Reference, create a read-write Image of the same resolution as the initial framebuffers
-void App::CreateRenderTexture()
+void App::CreateRenderTextureSampler()
 {
-#ifndef RADIANCE_CASCADES
-  renderTextureExtent.width  = swapChainExtent.width  / RES_DIV + 1;
-  renderTextureExtent.height = swapChainExtent.height / RES_DIV + 1;
-#else
-  renderTextureExtent.width  = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS * CASCADE_0_PROBES[0])) * MAX_CASCADES;
-  renderTextureExtent.height = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS * CASCADE_0_PROBES[1]));
-#endif
-  std::cout << renderTextureExtent.width << ", " << renderTextureExtent.height << std::endl;
+  vk::SamplerCreateInfo samplerInfo {
+    .magFilter = vk::Filter::eLinear, .minFilter = vk::Filter::eLinear,
+    .mipmapMode = vk::SamplerMipmapMode::eLinear,
+    .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+    .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+    .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+    .anisotropyEnable = vk::False, // always viewed head-on
+    .compareEnable = vk::False,
+    .minLod = 0.0f, .maxLod = vk::LodClampNone
+  };
 
-  // Create the Image on the GPU
-  CreateImage(
-    renderTextureExtent.width, renderTextureExtent.height, 
-#ifdef RADIANCE_CASCADES
-    MAX_CASCADES,
-#else
-    1,
-#endif
-    1, vk::Format::eR32G32B32A32Sfloat, vk::ImageTiling::eOptimal,
-    vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
-    vk::MemoryPropertyFlagBits::eDeviceLocal,
-    renderTexture.first, renderTexture.second
-  );
-
-  // We want the image in the General layout for read-write operations
-  TransitionImageLayout(renderTexture.first, vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral, 1);
-  
-  // Create a view for the Image
-  renderTextureView = CreateImageView(
-    renderTexture.first, 
-#ifdef RADIANCE_CASCADES
-    vk::ImageViewType::e3D, 
-#else
-    vk::ImageViewType::e2D,
-#endif
-    vk::Format::eR32G32B32A32Sfloat, vk::ImageAspectFlagBits::eColor, 1);
-
-  CreateRenderTextureSampler();
+  renderTextureSampler = vk::raii::Sampler(device, samplerInfo);
 }
 
 // Create the vertex buffers for the scene AND the fullscreen triangle (for postprocessing effects)
@@ -1799,9 +1873,10 @@ void App::CreateDescriptorPools()
       // BLAS LUT Buffer
       vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT),
       // Compute Output Image Sampler
-      vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, MAX_FRAMES_IN_FLIGHT),
+      vk::DescriptorPoolSize(vk::DescriptorType::eSampler, MAX_FRAMES_IN_FLIGHT),
       // Compute Output Writable Image
-      vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, MAX_FRAMES_IN_FLIGHT),
+      vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage, MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(renderTextureViews.size())),
+      vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage, MAX_FRAMES_IN_FLIGHT * static_cast<uint32_t>(renderTextureViews.size())),
       // Material Texture Sampler
       vk::DescriptorPoolSize(vk::DescriptorType::eSampler, MAX_FRAMES_IN_FLIGHT),
       // Textures
@@ -1862,222 +1937,257 @@ void App::CreateDescriptorSets()
 {
   // STANDARD 3D MODELS
   {
-    // MAX_FRAMES_IN_FLIGHT copies of DescriptorSetLayout
-    std::vector<vk::DescriptorSetLayout> globalLayouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayoutGlobal);
+    // Shader Resources
+    {
+      std::vector<uint32_t> variableCounts = { static_cast<uint32_t>(renderTextureViews.size()), static_cast<uint32_t>(renderTextureViews.size()) };
+      vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountInfo = {
+        .descriptorSetCount = static_cast<uint32_t>(variableCounts.size()),
+        .pDescriptorCounts = variableCounts.data()
+      };
+      // MAX_FRAMES_IN_FLIGHT copies of DescriptorSetLayout
+      std::vector<vk::DescriptorSetLayout> globalLayouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayoutGlobal);
 
-    // Collate the relevant info (DescriptorPool and DescriptorSetLayouts)
-    vk::DescriptorSetAllocateInfo globalAllocInfo{
-      .descriptorPool = static_cast<vk::DescriptorPool>(graphicsDescriptorPool),
-      .descriptorSetCount = static_cast<uint32_t>(globalLayouts.size()),
-      .pSetLayouts = globalLayouts.data(),
-    };
-
-    globalDescriptorSets.clear();
-    globalDescriptorSets = device.allocateDescriptorSets(globalAllocInfo);
-
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-      // MVP Buffer
-      vk::DescriptorBufferInfo mvpBufferInfo{
-        .buffer = *mvpBuffers[i].first,
-        .offset = 0,
-        .range = sizeof(MVP)
+      // Collate the relevant info (DescriptorPool and DescriptorSetLayouts)
+      vk::DescriptorSetAllocateInfo globalAllocInfo{
+        .pNext = &variableCountInfo,
+        .descriptorPool = static_cast<vk::DescriptorPool>(graphicsDescriptorPool),
+        .descriptorSetCount = static_cast<uint32_t>(globalLayouts.size()),
+        .pSetLayouts = globalLayouts.data(),
       };
 
-      vk::WriteDescriptorSet mvpBufferWrite {
-        .dstSet = globalDescriptorSets[i],
-        .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eUniformBuffer,
-        .pBufferInfo = &mvpBufferInfo
+      globalDescriptorSets.clear();
+      globalDescriptorSets = device.allocateDescriptorSets(globalAllocInfo);
+
+      for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        // MVP Buffer
+        vk::DescriptorBufferInfo mvpBufferInfo{
+          .buffer = *mvpBuffers[i].first,
+          .offset = 0,
+          .range = sizeof(MVP)
+        };
+
+        vk::WriteDescriptorSet mvpBufferWrite {
+          .dstSet = globalDescriptorSets[i],
+          .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1,
+          .descriptorType = vk::DescriptorType::eUniformBuffer,
+          .pBufferInfo = &mvpBufferInfo
+        };
+
+        // Camera transforms Buffer
+        vk::DescriptorBufferInfo cubeBufferInfo{
+          .buffer = *mvpBuffers[i].first,
+          .offset = 0,
+          .range = sizeof(CubeTransforms)
+        };
+
+        vk::WriteDescriptorSet cubeBufferWrite {
+          .dstSet = globalDescriptorSets[i],
+          .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1,
+          .descriptorType = vk::DescriptorType::eUniformBuffer,
+          .pBufferInfo = &cubeBufferInfo
+        };
+
+        vk::WriteDescriptorSetAccelerationStructureKHR asInfo {
+          .accelerationStructureCount = 1,
+          .pAccelerationStructures = &*tlasHandle
+        };
+
+        vk::WriteDescriptorSet asWrite {
+          .pNext = &asInfo,
+          .dstSet = globalDescriptorSets[i],
+          .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1,
+          .descriptorType = vk::DescriptorType::eAccelerationStructureKHR
+        };
+
+        vk::DescriptorBufferInfo indexBufferInfo {
+          .buffer = *indexBuffer.first,
+          .offset = 0,
+          .range = sizeof(uint32_t) * indices.size()
+        };
+
+        vk::WriteDescriptorSet indexBufferWrite {
+          .dstSet = globalDescriptorSets[i],
+          .dstBinding = 3, .dstArrayElement = 0, .descriptorCount = 1,
+          .descriptorType = vk::DescriptorType::eStorageBuffer,
+          .pBufferInfo = &indexBufferInfo
+        };
+
+        vk::DescriptorBufferInfo colourBufferInfo {
+          .buffer = *colourBuffer.first,
+          .offset = 0,
+          .range = sizeof(glm::aligned_vec4) * vertices.size()
+        };
+
+        vk::WriteDescriptorSet colourBufferWrite {
+          .dstSet = globalDescriptorSets[i],
+          .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1,
+          .descriptorType = vk::DescriptorType::eStorageBuffer,
+          .pBufferInfo = &colourBufferInfo
+        };
+
+        vk::DescriptorBufferInfo uvBufferInfo {
+          .buffer = *uvBuffer.first,
+          .offset = 0,
+          .range = sizeof(glm::aligned_vec2) * vertices.size()
+        };
+
+        vk::WriteDescriptorSet uvBufferWrite {
+          .dstSet = globalDescriptorSets[i],
+          .dstBinding = 5, .dstArrayElement = 0, .descriptorCount = 1,
+          .descriptorType = vk::DescriptorType::eStorageBuffer,
+          .pBufferInfo = &uvBufferInfo
+        };
+
+        vk::DescriptorBufferInfo nrmBufferInfo {
+          .buffer = *nrmBuffer.first,
+          .offset = 0,
+          .range = sizeof(glm::aligned_vec4) * vertices.size()
+        };
+
+        vk::WriteDescriptorSet nrmBufferWrite {
+          .dstSet = globalDescriptorSets[i],
+          .dstBinding = 6, .dstArrayElement = 0, .descriptorCount = 1,
+          .descriptorType = vk::DescriptorType::eStorageBuffer,
+          .pBufferInfo = &nrmBufferInfo
+        };
+
+        vk::DescriptorBufferInfo blasInstanceLUTBufferInfo {
+          .buffer = *blasInstanceLUTBuffer.first,
+          .offset = 0,
+          .range = sizeof(InstanceLUT) * blasInstanceLUTs.size()
+        };
+
+        vk::WriteDescriptorSet blasInstanceLUTBufferWrite {
+          .dstSet = globalDescriptorSets[i],
+          .dstBinding = 7, .dstArrayElement = 0, .descriptorCount = 1,
+          .descriptorType = vk::DescriptorType::eStorageBuffer,
+          .pBufferInfo = &blasInstanceLUTBufferInfo
+        };
+
+        // Samplable interface for image
+        vk::DescriptorImageInfo samplerInfo {
+          .sampler = renderTextureSampler
+        };
+        
+        // Image as CombinedImageSampler
+        vk::WriteDescriptorSet samplerWrite {
+          .dstSet = globalDescriptorSets[i],
+          .dstBinding = 8, .dstArrayElement = 0, .descriptorCount = 1,
+          .descriptorType = vk::DescriptorType::eSampler, .pImageInfo = &samplerInfo
+        };
+
+        std::vector<vk::DescriptorImageInfo> storageImageInfos;
+        storageImageInfos.reserve(renderTextureViews.size());
+        for (auto& imageView: renderTextureViews) {
+          vk::DescriptorImageInfo imageInfo {
+            .imageView = imageView,
+            .imageLayout = vk::ImageLayout::eGeneral
+          };
+          storageImageInfos.push_back(imageInfo);
+        }
+
+        vk::WriteDescriptorSet storageImageWrite {
+          .dstSet = globalDescriptorSets[i],
+          .dstBinding = 9,
+          .dstArrayElement = 0,
+          .descriptorCount = static_cast<uint32_t>(storageImageInfos.size()),
+          .descriptorType = vk::DescriptorType::eStorageImage,
+          .pImageInfo = storageImageInfos.data()
+        };
+
+        std::vector<vk::DescriptorImageInfo> sampledImageInfos;
+        storageImageInfos.reserve(renderTextureViews.size());
+        for (auto& imageView: renderTextureViews) {
+          vk::DescriptorImageInfo imageInfo {
+            .imageView = imageView,
+            .imageLayout = vk::ImageLayout::eGeneral
+          };
+          sampledImageInfos.push_back(imageInfo);
+        }
+
+        vk::WriteDescriptorSet sampledImageWrite {
+          .dstSet = globalDescriptorSets[i],
+          .dstBinding = 10,
+          .dstArrayElement = 0,
+          .descriptorCount = static_cast<uint32_t>(sampledImageInfos.size()),
+          .descriptorType = vk::DescriptorType::eSampledImage,
+          .pImageInfo = sampledImageInfos.data()
+        };
+
+        std::array descriptorWrites = {
+          mvpBufferWrite,
+          cubeBufferWrite, 
+          asWrite,
+          colourBufferWrite,
+          indexBufferWrite, 
+          uvBufferWrite,
+          nrmBufferWrite,
+          blasInstanceLUTBufferWrite,
+          samplerWrite,
+          storageImageWrite,
+          sampledImageWrite
+        };
+
+        // Write the descriptor sets to the GPU
+        device.updateDescriptorSets(descriptorWrites, {});
+      }
+    }
+
+    // Mapped Textures
+    {
+      std::vector<uint32_t> variableCounts = { static_cast<uint32_t>(baseTextureImageViews.size()) };
+      vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountInfo = {
+        .descriptorSetCount = 1,
+        .pDescriptorCounts = variableCounts.data()
       };
 
-      // Camera transforms Buffer
-      vk::DescriptorBufferInfo cubeBufferInfo{
-        .buffer = *mvpBuffers[i].first,
-        .offset = 0,
-        .range = sizeof(CubeTransforms)
+      std::vector<vk::DescriptorSetLayout> layouts { *descriptorSetLayoutMaterial };
+
+      vk::DescriptorSetAllocateInfo matAllocInfo {
+        .pNext = &variableCountInfo,
+        .descriptorPool = *graphicsDescriptorPool,
+        .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
+        .pSetLayouts = layouts.data(),
       };
 
-      vk::WriteDescriptorSet cubeBufferWrite {
-        .dstSet = globalDescriptorSets[i],
-        .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eUniformBuffer,
-        .pBufferInfo = &cubeBufferInfo
-      };
+      materialDescriptorSets = device.allocateDescriptorSets(matAllocInfo);
 
-      vk::WriteDescriptorSetAccelerationStructureKHR asInfo {
-        .accelerationStructureCount = 1,
-        .pAccelerationStructures = &*tlasHandle
-      };
-
-      vk::WriteDescriptorSet asWrite {
-        .pNext = &asInfo,
-        .dstSet = globalDescriptorSets[i],
-        .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eAccelerationStructureKHR
-      };
-
-      vk::DescriptorBufferInfo indexBufferInfo {
-        .buffer = *indexBuffer.first,
-        .offset = 0,
-        .range = sizeof(uint32_t) * indices.size()
-      };
-
-      vk::WriteDescriptorSet indexBufferWrite {
-        .dstSet = globalDescriptorSets[i],
-        .dstBinding = 3, .dstArrayElement = 0, .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eStorageBuffer,
-        .pBufferInfo = &indexBufferInfo
-      };
-
-      vk::DescriptorBufferInfo colourBufferInfo {
-        .buffer = *colourBuffer.first,
-        .offset = 0,
-        .range = sizeof(glm::aligned_vec4) * vertices.size()
-      };
-
-      vk::WriteDescriptorSet colourBufferWrite {
-        .dstSet = globalDescriptorSets[i],
-        .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eStorageBuffer,
-        .pBufferInfo = &colourBufferInfo
-      };
-
-      vk::DescriptorBufferInfo uvBufferInfo {
-        .buffer = *uvBuffer.first,
-        .offset = 0,
-        .range = sizeof(glm::aligned_vec2) * vertices.size()
-      };
-
-      vk::WriteDescriptorSet uvBufferWrite {
-        .dstSet = globalDescriptorSets[i],
-        .dstBinding = 5, .dstArrayElement = 0, .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eStorageBuffer,
-        .pBufferInfo = &uvBufferInfo
-      };
-
-      vk::DescriptorBufferInfo nrmBufferInfo {
-        .buffer = *nrmBuffer.first,
-        .offset = 0,
-        .range = sizeof(glm::aligned_vec4) * vertices.size()
-      };
-
-      vk::WriteDescriptorSet nrmBufferWrite {
-        .dstSet = globalDescriptorSets[i],
-        .dstBinding = 6, .dstArrayElement = 0, .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eStorageBuffer,
-        .pBufferInfo = &nrmBufferInfo
-      };
-
-      vk::DescriptorBufferInfo blasInstanceLUTBufferInfo {
-        .buffer = *blasInstanceLUTBuffer.first,
-        .offset = 0,
-        .range = sizeof(InstanceLUT) * blasInstanceLUTs.size()
-      };
-
-      vk::WriteDescriptorSet blasInstanceLUTBufferWrite {
-        .dstSet = globalDescriptorSets[i],
-        .dstBinding = 7, .dstArrayElement = 0, .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eStorageBuffer,
-        .pBufferInfo = &blasInstanceLUTBufferInfo
-      };
-
-      // Samplable interface for image
       vk::DescriptorImageInfo samplerInfo {
-        .sampler = renderTextureSampler,
-        .imageView = static_cast<vk::ImageView>(renderTextureView),
-        .imageLayout = vk::ImageLayout::eGeneral,
+        .sampler = baseTextureSampler
       };
-      
-      // Image as CombinedImageSampler
+
       vk::WriteDescriptorSet samplerWrite {
-        .dstSet = globalDescriptorSets[i],
-        .dstBinding = 8, .dstArrayElement = 0, .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &samplerInfo
+        .dstSet = materialDescriptorSets[0],
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eSampler,
+        .pImageInfo = &samplerInfo
       };
 
-      // Writable interface for image
-      vk::DescriptorImageInfo imageInfo {
-        .imageView = static_cast<vk::ImageView>(renderTextureView),
-        .imageLayout = vk::ImageLayout::eGeneral,
+      device.updateDescriptorSets({samplerWrite}, {});
+
+      std::vector<vk::DescriptorImageInfo> imageInfos;
+      imageInfos.reserve(baseTextureImageViews.size());
+      for (auto& imageView: baseTextureImageViews) {
+        vk::DescriptorImageInfo imageInfo {
+          .imageView = imageView,
+          .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
+        };
+        imageInfos.push_back(imageInfo);
+      }
+
+      vk::WriteDescriptorSet materialWrite {
+        .dstSet = materialDescriptorSets[0],
+        .dstBinding = 1,
+        .dstArrayElement = 0,
+        .descriptorCount = static_cast<uint32_t>(imageInfos.size()),
+        .descriptorType = vk::DescriptorType::eSampledImage,
+        .pImageInfo = imageInfos.data()
       };
 
-      // Image as StorageImage
-      vk::WriteDescriptorSet imageWrite {
-        .dstSet = globalDescriptorSets[i],
-        .dstBinding = 9, .dstArrayElement = 0, .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &imageInfo
-      };
-
-
-      std::array descriptorWrites = {
-        mvpBufferWrite,
-        cubeBufferWrite, 
-        asWrite,
-        colourBufferWrite,
-        indexBufferWrite, 
-        uvBufferWrite,
-        nrmBufferWrite,
-        blasInstanceLUTBufferWrite,
-        samplerWrite,
-        imageWrite
-      };
-
-      // Write the descriptor sets to the GPU
-      device.updateDescriptorSets(descriptorWrites, {});
+      device.updateDescriptorSets({materialWrite}, {});
     }
-
-    std::vector<uint32_t> variableCounts = { static_cast<uint32_t>(baseTextureImageViews.size()) };
-    vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountInfo = {
-      .descriptorSetCount = 1,
-      .pDescriptorCounts = variableCounts.data()
-    };
-
-    std::vector<vk::DescriptorSetLayout> layouts { *descriptorSetLayoutMaterial };
-
-    vk::DescriptorSetAllocateInfo matAllocInfo {
-      .pNext = &variableCountInfo,
-      .descriptorPool = *graphicsDescriptorPool,
-      .descriptorSetCount = static_cast<uint32_t>(layouts.size()),
-      .pSetLayouts = layouts.data(),
-    };
-
-    materialDescriptorSets = device.allocateDescriptorSets(matAllocInfo);
-
-    vk::DescriptorImageInfo samplerInfo {
-      .sampler = baseTextureSampler
-    };
-
-    vk::WriteDescriptorSet samplerWrite {
-      .dstSet = materialDescriptorSets[0],
-      .dstBinding = 0,
-      .dstArrayElement = 0,
-      .descriptorCount = 1,
-      .descriptorType = vk::DescriptorType::eSampler,
-      .pImageInfo = &samplerInfo
-    };
-
-    device.updateDescriptorSets({samplerWrite}, {});
-
-    std::vector<vk::DescriptorImageInfo> imageInfos;
-    imageInfos.reserve(baseTextureImageViews.size());
-    for (auto& imageView: baseTextureImageViews) {
-      vk::DescriptorImageInfo imageInfo {
-        .imageView = imageView,
-        .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
-      };
-      imageInfos.push_back(imageInfo);
-    }
-
-    vk::WriteDescriptorSet materialWrite {
-      .dstSet = materialDescriptorSets[0],
-      .dstBinding = 1,
-      .dstArrayElement = 0,
-      .descriptorCount = static_cast<uint32_t>(imageInfos.size()),
-      .descriptorType = vk::DescriptorType::eSampledImage,
-      .pImageInfo = imageInfos.data()
-    };
-
-    device.updateDescriptorSets({materialWrite}, {});
   }
 }
 
@@ -2499,7 +2609,7 @@ void App::CreateTextureImage(const char* texturePath, size_t idx)
 
   // Initialise Image
   CreateImage(
-    texWidth, texHeight, 1, mipLevels,
+    texWidth, texHeight, mipLevels,
     textureFormat,
     vk::ImageTiling::eOptimal,
     vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
@@ -2516,7 +2626,10 @@ void App::CreateTextureImage(const char* texturePath, size_t idx)
   CopyBufferToImage(stagingBuffer, baseTextureImages[idx].first, texWidth, texHeight, mipLevels, kTexture);
   // Get the image ready for sampling in the shader
   TransitionImageLayout(
-    baseTextureImages[idx].first, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, mipLevels);
+    baseTextureImages[idx].first, 
+    vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, 
+    mipLevels
+  );
   // CRITICAL SECTION OVER
   m.unlock();
   
@@ -2525,15 +2638,12 @@ void App::CreateTextureImage(const char* texturePath, size_t idx)
 
   // Create the corresponding View
   baseTextureImageViews[idx] = CreateImageView(
-      baseTextureImages[idx].first, vk::ImageViewType::e2D, textureFormat, vk::ImageAspectFlagBits::eColor, mipLevels);
+    baseTextureImages[idx].first, textureFormat, vk::ImageAspectFlagBits::eColor, mipLevels);
 }
 
 // Transition-only command buffer submission
 void App::TransitionImageLayout(
-  const vk::raii::Image& image,
-  vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
-  uint32_t mipLevels
-)
+  const vk::raii::Image& image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout, uint32_t mipLevels)
 {
   // Image layout transitions are single-time commands submitted to the GPU
   const auto commandBuffer = BeginSingleTimeCommands();
@@ -2569,7 +2679,7 @@ void App::TransitionImageLayout(
     srcStage = vk::PipelineStageFlagBits::eTransfer;
     dstStage = vk::PipelineStageFlagBits::eFragmentShader;
   }
-  // The render target for the path tracing shader
+  // Transition render texture
   else if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eGeneral) {
     // Not confident this is correct
     barrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
@@ -3034,22 +3144,6 @@ std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> App::CreateNrmBuffer(const s
   return copyBuffer;
 }
 
-void App::CreateRenderTextureSampler()
-{
-  vk::SamplerCreateInfo samplerInfo {
-    .magFilter = vk::Filter::eLinear, .minFilter = vk::Filter::eLinear,
-    .mipmapMode = vk::SamplerMipmapMode::eLinear,
-    .addressModeU = vk::SamplerAddressMode::eClampToEdge,
-    .addressModeV = vk::SamplerAddressMode::eClampToEdge,
-    .addressModeW = vk::SamplerAddressMode::eClampToEdge,
-    .anisotropyEnable = vk::False, // always viewed head-on
-    .compareEnable = vk::False,
-    .minLod = 0.0f, .maxLod = vk::LodClampNone
-  };
-
-  renderTextureSampler = vk::raii::Sampler(device, samplerInfo);
-}
-
 // Use the Slang Compilation API to compile slang shaders to SPIR-V during and by the application
 void App::CompileShader(const char* src, const char* dst)
 {
@@ -3261,7 +3355,9 @@ void App::RecordComputeCommandBuffer()
 #elif !defined(REFERENCE) && !defined(RESTIR) && defined(RADIANCE_CASCADES)
   for (uint32_t level = 0; level < MAX_CASCADES; level++) {
     RadianceCascadesPushConstant pushConstant {
-      .level = level
+      .level = level,
+      .maxLevel = MAX_CASCADES,
+      .interval = interval
     };
     computeCommandBuffers[currentFrame].pushConstants<RadianceCascadesPushConstant>(
       *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
@@ -3375,7 +3471,7 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
         *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
 #else
       RadianceCascadesPushConstant pushConstant {
-        .level = 0
+        .maxLevel = MAX_CASCADES,
       };
       drawCommandBuffers[currentFrame].pushConstants<RadianceCascadesPushConstant>(
         *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
@@ -3505,7 +3601,7 @@ uint32_t App::FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags proper
 
 // Allocate DeviceMemory for an image, return handles to the objects
 void App::CreateImage(
-  uint32_t width, uint32_t height, uint32_t depth, uint32_t mipLevels,
+  uint32_t width, uint32_t height, uint32_t mipLevels,
   vk::Format format,
   vk::ImageTiling tiling, vk::ImageUsageFlags usage,
   vk::MemoryPropertyFlags properties,
@@ -3513,9 +3609,9 @@ void App::CreateImage(
 )
 {
   vk::ImageCreateInfo imageInfo {
-    .imageType = (depth > 1) ? vk::ImageType::e3D : vk::ImageType::e2D,
+    .imageType = vk::ImageType::e2D,
     .format = format,
-    .extent = {width, height, depth},
+    .extent = {width, height, 1},
     .mipLevels = mipLevels,
     .arrayLayers = 1,
     .samples = vk::SampleCountFlagBits::e1,
@@ -3537,14 +3633,11 @@ void App::CreateImage(
 
 // Might be the most straight-forward function, simple input-output
 [[nodiscard]] vk::raii::ImageView App::CreateImageView(
-  const vk::Image& image, vk::ImageViewType viewType,
-  vk::Format format, vk::ImageAspectFlags aspectFlags,
-  uint32_t mipLevels
-) const
+  const vk::Image& image, vk::Format format, vk::ImageAspectFlags aspectFlags, uint32_t mipLevels) const
 {
   vk::ImageViewCreateInfo viewInfo {
     .image = image,
-    .viewType = viewType,
+    .viewType = vk::ImageViewType::e2D,
     .format = format,
     .subresourceRange = {
       .aspectMask = aspectFlags,

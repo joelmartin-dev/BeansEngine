@@ -51,8 +51,7 @@ const std::vector validationLayers = { // not array; vector allows implicit typi
 // Let's the CPU start working on the next frame before the GPU asks (higher values == latency, CPU too far ahead)
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
-constexpr uint32_t MAX_CASCADES = 4;
-constexpr uint32_t CASCADE_0_PROBES[] = { 1 << MAX_CASCADES, 1 << MAX_CASCADES };
+constexpr uint32_t MAX_CASCADES = 2;
 constexpr uint32_t CASCADE_0_RAYS = 4;
 
 constexpr uint32_t WORKGROUP_SIZE[] = {8, 8};
@@ -306,9 +305,9 @@ struct App {
   
   // CreateRenderTexture
   vk::Extent2D renderTextureExtent;
+  std::vector<std::pair<vk::raii::Image, vk::raii::DeviceMemory>> renderTextures;
+  std::vector<vk::raii::ImageView> renderTextureViews;
   vk::raii::Sampler renderTextureSampler = nullptr;
-  std::pair<vk::raii::Image, vk::raii::DeviceMemory> renderTexture = std::pair(nullptr, nullptr);
-  vk::raii::ImageView renderTextureView = nullptr;
   
   // CreateDescriptorPools
   vk::raii::DescriptorPool graphicsDescriptorPool = nullptr;
@@ -347,6 +346,7 @@ struct App {
   float sunIntensity;
   glm::aligned_vec3 sunDir;
   glm::aligned_mat4x4 oldView;
+  float interval;
 
   void Run();
 
@@ -373,6 +373,7 @@ struct App {
   void CreateCommandBuffers();
   void CreateSyncObjects();
   void LoadGLTF(const std::filesystem::path& path);
+  void CreateRenderTexture();
   void CreateDescriptorSetLayouts();
   void InitSlang();
   void CreatePipelines();
@@ -385,7 +386,6 @@ struct App {
   void CreateAccelerationStructures();
   void CreateBLASInstanceLUTBuffer();
   void CreateIndirectCommands();
-  void CreateRenderTexture();
   void CreateDescriptorPools();
   void CreateDescriptorSets();
   
@@ -414,6 +414,9 @@ struct App {
   );
   void CreateTextureSampler();
   void LoadGeometry();
+
+  // CreateRenderTexture
+  void CreateRenderTextureSampler();
   
   // CreateVertexBuffers
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateVertexBuffer(const std::vector<Vertex>& verts);
@@ -431,8 +434,6 @@ struct App {
   // CreateNrmBuffers
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> CreateNrmBuffer(const std::vector<Vertex>& verts);
     
-  // CreateRenderTexture
-  void CreateRenderTextureSampler();
 
   // Shader Management
   void CompileShader(const char* src, const char* dst);
@@ -463,7 +464,7 @@ struct App {
   uint32_t FindMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
 
   void CreateImage(
-    uint32_t width, uint32_t height, uint32_t depth, uint32_t mipLevels, 
+    uint32_t width, uint32_t height, uint32_t mipLevels, 
     vk::Format format,
     vk::ImageTiling tiling, vk::ImageUsageFlags usage,
     vk::MemoryPropertyFlags properties,
@@ -471,10 +472,7 @@ struct App {
   );
 
   [[nodiscard]] vk::raii::ImageView CreateImageView(
-    const vk::Image& image, vk::ImageViewType viewType,
-    vk::Format format, vk::ImageAspectFlags aspectFlags,
-    uint32_t mipLevels
-  ) const;
+    const vk::Image& image, vk::Format format, vk::ImageAspectFlags aspectFlags, uint32_t mipLevels) const;
   
   vk::raii::CommandBuffer BeginSingleTimeCommands() const;
   void EndSingleTimeCommands(const vk::raii::CommandBuffer& commandBuffer) const;

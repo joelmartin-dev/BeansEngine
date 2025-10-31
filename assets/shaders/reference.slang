@@ -21,18 +21,11 @@ struct PushConstant {
 };
 [push_constant] PushConstant pc;
 
-// Sampler of the written-to image
-[[vk::binding(8, 0)]] public Sampler2D sampler;
-
 // Sample the StorageImage using fullscreen triangle
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET {
-    return sampler.Sample(vertIn.fragTexCoord);
+    return renderTextures[0].Sample(textureSampler, vertIn.fragTexCoord);
 }
-
-// Write access to StorageImage
-[vk_image_format("rgba32f")]
-[[vk::binding(9, 0)]] public RWTexture2D<float4> outImage;
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -42,7 +35,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     
     // Get StorageImage's resolution
     uint2 imgSize;
-    outImage.GetDimensions(imgSize.x, imgSize.y);
+    outImage[0].GetDimensions(imgSize.x, imgSize.y);
     
     // if this pixel is not in the image, don't do the work
     if (pixelCoords.x >= imgSize.x || pixelCoords.y >= imgSize.y) return;
@@ -58,7 +51,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     const float4 viewCoords = mul(camera.invProj, float4(clipCoords, 1.0, 1.0)); // Transform to view space
     
     // More samples == faster convergence, slower execution (but minus new frame overhead)
-    const uint MAX_SAMPLES = 8;
+    const uint MAX_SAMPLES = 2;
     const uint MAX_DEPTH = 4;
     const float INITIAL_MISS_DISTANCE = 1000.0f;
 
@@ -175,11 +168,11 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     summedPixelCol /= (float)MAX_SAMPLES;
 
     if (pc.frame == 0) {
-        outImage[pixelCoords] = float4(summedPixelCol, 1.0);
+        outImage[0][pixelCoords] = float4(summedPixelCol, 1.0);
     }
     else {
         float a = max(1.0 / (float) (pc.frame + 1), 0.001);
-        float3 old_colour = outImage[pixelCoords].rgb;
-        outImage[pixelCoords] = float4(lerp(old_colour, summedPixelCol, a), 1.0);
+        float3 old_colour = outImage[0][pixelCoords].rgb;
+        outImage[0][pixelCoords] = float4(lerp(old_colour, summedPixelCol, a), 1.0);
     }
 }

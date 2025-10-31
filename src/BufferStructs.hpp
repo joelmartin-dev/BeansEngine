@@ -34,6 +34,8 @@ struct RasterPushConstant {
 
 struct RadianceCascadesPushConstant {
   uint32_t level;
+  uint32_t maxLevel;
+  float interval;
 };
 
 struct ReSTIRPushConstant {
