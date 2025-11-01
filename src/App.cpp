@@ -368,7 +368,7 @@ void App::MainLoop()
 
   sunDir = normalize(glm::vec3(-0.5f, 1.0f, -0.25f));
   auto oldSunDir = sunDir;
-  interval = 2.0f;
+  interval = 10.0f;
 
   auto frameStart = std::chrono::system_clock::now(); // time at start of loop (including input polling, ui updating)
   auto frameEnd = std::chrono::system_clock::time_point::max(); // time at end of loop
@@ -434,11 +434,13 @@ void App::MainLoop()
       ImGui::SliderFloat("LY", &sunDir.y, -1.0f, 1.0f);
       ImGui::SliderFloat("LZ", &sunDir.z, -1.0f, 1.0f);
       
+#ifdef RADIANCE_CASCADES
       {
         ImGui::BeginChild("Radiance Cascades", ImVec2(0.0f, 0.0f), {});
-        ImGui::SliderFloat("Interval Size", &interval, 0.0f, 2.0f);
+        ImGui::SliderFloat("Interval Size", &interval, 0.0f, 100.0f);
         ImGui::EndChild();
       }
+#endif
       ImGui::End();
     }
     // SHADER PATHS
@@ -1055,16 +1057,17 @@ void App::LoadGLTF(const std::filesystem::path& path)
 void App::CreateRenderTexture()
 {
 #ifndef RADIANCE_CASCADES
-  renderTextureExtent.width  = swapChainExtent.width  / RES_DIV + 1;
-  renderTextureExtent.height = swapChainExtent.height / RES_DIV + 1;
+  initialRenderTextureExtent.width  = swapChainExtent.width  / RES_DIV + 1;
+  initialRenderTextureExtent.height = swapChainExtent.height / RES_DIV + 1;
 #else
-  renderTextureExtent.width  = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * (1 << (MAX_CASCADES - 1));
-  renderTextureExtent.height = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * (1 << (MAX_CASCADES - 1));
+  initialRenderTextureExtent.width  = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * CASCADE_0_PROBES[0];
+  initialRenderTextureExtent.height = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * CASCADE_0_PROBES[1];
 #endif
-  std::cout << renderTextureExtent.width << ", " << renderTextureExtent.height << std::endl;
+  std::cout << initialRenderTextureExtent.width << ", " << initialRenderTextureExtent.height << std::endl;
 
+  auto currentRenderTextureExtent = initialRenderTextureExtent;
 #ifdef RADIANCE_CASCADES
-  for (size_t i = 0; i < MAX_CASCADES; i++)
+  for (size_t i = 0; i < static_cast<size_t>(log2(CASCADE_0_PROBES[0]) + 1); i++)
 #else
   for (size_t i = 0; i < 1; i++)
 #endif
@@ -1072,7 +1075,7 @@ void App::CreateRenderTexture()
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> tempImage = std::pair(nullptr, nullptr);
     // Create the Image on the GPU
     CreateImage(
-      renderTextureExtent.width, renderTextureExtent.height, 1,
+      currentRenderTextureExtent.width, currentRenderTextureExtent.height, 1,
 #ifdef RADIANCE_CASCADES
       vk::Format::eR16G16B16A16Sfloat,
 #else
@@ -1098,6 +1101,7 @@ void App::CreateRenderTexture()
       vk::Format::eR32G32B32A32Sfloat, 
 #endif
       vk::ImageAspectFlagBits::eColor, 1));
+    currentRenderTextureExtent.setWidth(currentRenderTextureExtent.width >> 1);
   }
   CreateRenderTextureSampler();
 }
@@ -2771,7 +2775,7 @@ void App::LoadGeometry()
   // Place a cube somewhere
   vertices = Cube().vertices;
   indices = Cube().indices;
-  float scale = rndDist(rndEngine) * 0.3f + 0.7f;
+  float scale = (rndDist(rndEngine) * 0.3f + 0.7f) * 0.1f;
   float theta = rndDist(rndEngine) * 2.0f * glm::pi<float>();
   glm::vec3 axis = glm::normalize(glm::vec3(
     (rndDist(rndEngine) - 0.5) * 2.0,
@@ -2787,7 +2791,7 @@ void App::LoadGeometry()
     transformationMatrix = glm::translate(transformationMatrix, translation);
 
     // Apply transformation
-    v.pos = glm::vec4(v.pos, 1.0) * transformationMatrix;
+    v.pos = glm::vec3(0.5f, 0.5f, 0.0f) + glm::vec3(glm::vec4(v.pos, 1.0) * transformationMatrix);
   }
 
   submeshes.push_back({
@@ -2799,7 +2803,7 @@ void App::LoadGeometry()
     .alphaCut = false,
     .reflective = false
   });
-#if defined(REFERENCE) || defined(RESTIR) || defined(RASTER)
+#if defined(REFERENCE) || defined(RESTIR) || defined(RASTER)// || defined(RADIANCE_CASCADES)
   for (cgltf_size meshIt = 0; meshIt < asset->meshes_count; meshIt++) {
     auto m = &asset->meshes[meshIt];
 
@@ -3343,26 +3347,30 @@ void App::RecordComputeCommandBuffer()
   };
   computeCommandBuffers[currentFrame].pushConstants<PathTracePushConstant>(
     *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
-  computeCommandBuffers[currentFrame].dispatch(renderTextureExtent.width / WORKGROUP_SIZE[0] + 1, 
-                                              renderTextureExtent.height / WORKGROUP_SIZE[1] + 1, 1);
+  computeCommandBuffers[currentFrame].dispatch(initialRenderTextureExtent.width / WORKGROUP_SIZE[0] + 1, 
+                                              initialRenderTextureExtent.height / WORKGROUP_SIZE[1] + 1, 1);
 #elif !defined(REFERENCE) && defined(RESTIR) && !defined(RADIANCE_CASCADES)
   ReSTIRPushConstant pushConstant {
   };
   computeCommandBuffers[currentFrame].pushConstants<ReSTIRPushConstant>(
     *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
-  computeCommandBuffers[currentFrame].dispatch(renderTextureExtent.width / WORKGROUP_SIZE[0] + 1, 
-                                              renderTextureExtent.height / WORKGROUP_SIZE[1] + 1, 1);
+  computeCommandBuffers[currentFrame].dispatch(initialRenderTextureExtent.width / WORKGROUP_SIZE[0] + 1, 
+                                              initialRenderTextureExtent.height / WORKGROUP_SIZE[1] + 1, 1);
 #elif !defined(REFERENCE) && !defined(RESTIR) && defined(RADIANCE_CASCADES)
-  for (uint32_t level = 0; level < MAX_CASCADES; level++) {
+  const uint32_t MAX_CASCADES = static_cast<uint32_t>(log2(CASCADE_0_PROBES[0]) + 1);
+  for (uint32_t level = 0; level < static_cast<size_t>(MAX_CASCADES); level++) {
     RadianceCascadesPushConstant pushConstant {
       .level = level,
       .maxLevel = MAX_CASCADES,
-      .interval = interval
+      .c0ProbeCount = glm::u32vec2(CASCADE_0_PROBES[0], CASCADE_0_PROBES[1]),
+      .interval = interval,
+      .intensity = sunIntensity,
+      .lightDir = glm::normalize(sunDir)
     };
     computeCommandBuffers[currentFrame].pushConstants<RadianceCascadesPushConstant>(
       *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);
-    computeCommandBuffers[currentFrame].dispatch(renderTextureExtent.width  / WORKGROUP_SIZE[0] + 1, 
-                                                 renderTextureExtent.height / WORKGROUP_SIZE[1] + 1, 1);
+    computeCommandBuffers[currentFrame].dispatch((initialRenderTextureExtent.width >> level)  / WORKGROUP_SIZE[0] + 1, 
+                                                  initialRenderTextureExtent.height           / WORKGROUP_SIZE[1] + 1, 1);
   }
 #endif
   // For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
@@ -3450,7 +3458,7 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
    ));
   drawCommandBuffers[currentFrame].setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
 
-#if !defined(REFERENCE) && !defined(RESTIR)
+#if !defined(REFERENCE) && !defined(RESTIR) && !defined(RADIANCE_CASCADES)
   // STATIC MODELS
   {
     drawCommandBuffers[currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline.second);
@@ -3462,20 +3470,12 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
 
     for (size_t i = 0; i < submeshes.size(); i++) {
-#ifndef RADIANCE_CASCADES
       RasterPushConstant pushConstant {
         .materialIndex = static_cast<uint32_t>(submeshes[i].materialID),
         .instanceID = static_cast<uint32_t>(i)
       };
       drawCommandBuffers[currentFrame].pushConstants<RasterPushConstant>(
         *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
-#else
-      RadianceCascadesPushConstant pushConstant {
-        .maxLevel = MAX_CASCADES,
-      };
-      drawCommandBuffers[currentFrame].pushConstants<RadianceCascadesPushConstant>(
-        *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
-#endif
       drawCommandBuffers[currentFrame].drawIndexed(submeshes[i].indexCount, 1, submeshes[i].indexOffset, 0, 0);
     }
   }
@@ -3491,6 +3491,12 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 0, *globalDescriptorSets[currentFrame], nullptr);
     drawCommandBuffers[currentFrame].bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
+    RadianceCascadesPushConstant pushConstant {
+      .maxLevel = static_cast<uint32_t>(log2(CASCADE_0_PROBES[0]) + 1),
+      .c0ProbeCount = glm::u32vec2(CASCADE_0_PROBES[0], CASCADE_0_PROBES[1])
+    };
+    drawCommandBuffers[currentFrame].pushConstants<RadianceCascadesPushConstant>(
+      *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
     drawCommandBuffers[currentFrame].drawIndexed(3, 1, 0, 0, 0);
   }
 #ifdef _DEBUG

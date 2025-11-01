@@ -35,7 +35,10 @@ struct RasterPushConstant {
 struct RadianceCascadesPushConstant {
   uint32_t level;
   uint32_t maxLevel;
+  glm::u32vec2 c0ProbeCount;
   float interval;
+  float intensity;
+  glm::aligned_vec3 lightDir;
 };
 
 struct ReSTIRPushConstant {

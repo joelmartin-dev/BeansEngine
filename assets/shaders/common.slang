@@ -16,6 +16,7 @@ public struct VSOutput {
     public float3 fragColor;
     public float3 fragNormal;
     public float3 worldPos;
+    public uint cubeID;
 };
 
 // 3D Transformation Matrices + Inversions

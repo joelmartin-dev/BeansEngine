@@ -51,10 +51,11 @@ const std::vector validationLayers = { // not array; vector allows implicit typi
 // Let's the CPU start working on the next frame before the GPU asks (higher values == latency, CPU too far ahead)
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
-constexpr uint32_t MAX_CASCADES = 2;
+// constexpr uint32_t MAX_CASCADES = 6;
+constexpr uint32_t CASCADE_0_PROBES[2] = {512, 512};
 constexpr uint32_t CASCADE_0_RAYS = 4;
 
-constexpr uint32_t WORKGROUP_SIZE[] = {8, 8};
+constexpr uint32_t WORKGROUP_SIZE[] = {4, 8};
 
 #ifndef RES_DIV
   #define RES_DIV 1
@@ -304,7 +305,7 @@ struct App {
   std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> indirectCommandsBuffer = std::pair(nullptr, nullptr);
   
   // CreateRenderTexture
-  vk::Extent2D renderTextureExtent;
+  vk::Extent2D initialRenderTextureExtent;
   std::vector<std::pair<vk::raii::Image, vk::raii::DeviceMemory>> renderTextures;
   std::vector<vk::raii::ImageView> renderTextureViews;
   vk::raii::Sampler renderTextureSampler = nullptr;

@@ -16,11 +16,12 @@ import common;
 [shader("vertex")]
 VSOutput vertMain(VSInput input) {
     VSOutput output;
-    output.pos = (input.cubeID == 1) ? mul(camera.proj, mul(camera.view, mul(camera.model, float4(input.inPosition, 1.0)))) : float4(input.inPosition, 1.0);
+    output.pos = float4(input.inPosition, 1.0);
     output.fragColor = input.inColor;
     output.fragTexCoord = input.inTexCoord;
     output.fragNormal = input.inNormal;
     output.worldPos = input.inPosition;
+    output.cubeID = input.cubeID;
     return output;
 }
 
@@ -28,58 +29,42 @@ VSOutput vertMain(VSInput input) {
 struct PushConstant {
     uint level;
     uint maxLevel;
+    uint2 c0ProbeCount;
     float interval;
+    float sunIntensity;
+    float sunDirection;
 };
 [push_constant] PushConstant pc;
-
-float3 GatherFluence(uint2 globalPixel, const uint maxProbeWidth)
-{
-    const uint minProbeWidth = (maxProbeWidth / (1 << (pc.maxLevel - 1)));
-    uint currentProbeWidth = maxProbeWidth;
-    
-    const uint maxLevelFluenceCount = 1 << (pc.maxLevel - 1);
-    uint currentLevelFluenceCount = maxLevelFluenceCount;
-    
-    float3 totalSummedCol = float3(0.0f);
-    
-    for (uint level = pc.maxLevel - 1; level >= 0; level--) {
-        float3 levelSummedCol = float3(0.0f);
-        uint2 firstLocalPixel = globalPixel % currentProbeWidth;
-        for (uint i = 0; i < currentLevelFluenceCount; i++) {
-            uint2 fluence = firstLocalPixel + uint2(i, 0);
-            while (fluence.x >= currentProbeWidth) {
-                fluence = uint2(
-                    fluence.x % currentProbeWidth,
-                    fluence.y + 1
-                );
-                if (fluence.y >= currentProbeWidth) fluence = uint2(fluence.x, 0);
-            }
-            if (fluence.y >= currentProbeWidth) fluence = uint2(fluence.x, 0);
-            
-            // Convert fluence coords to global coords
-            fluence = globalPixel - firstLocalPixel + fluence;
-            
-            levelSummedCol += renderTextures[level].Sample(sampler, fluence / float(maxProbeWidth)).rgb;
-        }
-        totalSummedCol += levelSummedCol / float(currentLevelFluenceCount * 2.0f);
-        currentProbeWidth /= 2;
-        currentLevelFluenceCount /= 2;
-    }
-    return totalSummedCol;
-}
 
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET
 {
     uint width, height;
     renderTextures[0].GetDimensions(width, height);
-    uint2 pixel = uint2(round(vertIn.fragTexCoord * float2(width, height)));
-    float3 radiance = GatherFluence(pixel, width);
-    return float4(radiance, 1.0f);
+    
+    uint2 globalPixel = uint2(vertIn.fragTexCoord * float2(width, height));
+    // return renderTextures[0][globalPixel];
+    const uint probeWidth = width / (pc.c0ProbeCount[0] >> pc.level);
+    const uint rootProbeCount = width / probeWidth;
+    const uint probeHeight = height / rootProbeCount;
+    const uint2 localPixel = globalPixel % uint2(probeWidth, probeHeight);
+
+    // Global location of the probe's (0,0) pixel
+    const uint2 probeOrigin = uint2(globalPixel - localPixel);
+
+    float3 summedCol = float3(0.0f);
+    for (uint i = 0; i < probeWidth; i++) {
+        for (uint j = 0; j < probeWidth; j++) {
+            summedCol += renderTextures[0].Sample(sampler, (probeOrigin + uint2(i, j)) / float2(width, height)).rgb;
+        }
+    }
+    summedCol /= float(probeWidth * probeWidth);
+
+    return float4(summedCol, 1.0f);
 }
 
 [shader("compute")]
-[numthreads(8, 8, 1)]
+[numthreads(4, 8, 1)]
 void compMain(uint3 threadIdx: SV_DispatchThreadID)
 {
     uint width, height;
@@ -87,34 +72,43 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     const uint2 globalPixel = threadIdx.xy;
     if (globalPixel.x >= width || globalPixel.y >= height) return;
 
-    // Get side length of probe's kernel: width / 2^n
-    const uint probeWidth = (width / (1 << (pc.maxLevel - (pc.level + 1))));
+    // Get side length of probe's kernel: width / 2^(M - (L + 1))
+    const uint probeWidth = width / (pc.c0ProbeCount[0] >> pc.level);
+    const uint rootProbeCount = width / probeWidth;
+    const uint probeHeight = height / rootProbeCount;
     // Transform the image pixel coordinates to the local pixel coordinates of the probe's kernel
-    const uint2 localPixel = globalPixel % probeWidth;
-
-    // const float2 screenUV = (float2)localPixel / (float)probeWidth;
-    // outImage[pc.level][globalPixel] = float4(screenUV, 0.0f, 1.0f);
-    // return;
-
+    const uint2 localPixel = globalPixel % uint2(probeWidth, probeHeight);
+    
     // Global location of the probe's (0,0) pixel, in the [0, 1] range
-    const float2 probeOrigin = float2(globalPixel - localPixel) / (float)width;
+    const float2 probeOrigin = float2(globalPixel - localPixel) / float2(width, height);
+    const float2 probeCenter = probeOrigin + float2(0.5f / (float)rootProbeCount, 0.5f / float(height / probeWidth));
+    const uint2 globalProbeCoords = uint2(probeOrigin * rootProbeCount);
+    const uint2 localProbeCoords = globalProbeCoords % uint2(probeWidth, probeHeight);
+    const uint localProbeIndex = localProbeCoords.x + localProbeCoords.y * probeWidth;
+    const uint2 probeCoordsOrigin = globalProbeCoords - localProbeCoords;
+    const uint2 mappedProbeCoordsOrigin = uint2(probeCoordsOrigin.x, probeCoordsOrigin.y * (probeHeight / probeWidth) * 2);
+    const uint2 fluence_neg_coords = mappedProbeCoordsOrigin + uint2(0, localProbeIndex);
+    const uint2 fluence_pos_coords = fluence_neg_coords + uint2(1, 0);
 
-    // Screen position of the probe
-    const float2 probeCenter = (float2)probeOrigin + ((float)probeWidth / (float) width) / 2.0f;
-    // Calculate the angle between each ray direction in the probe
-    const float deltaTheta = -2.0f / float(probeWidth * probeWidth);
-    // Determine the direction of this thread
-    const float theta = -1 + deltaTheta / 2.0f + (localPixel.x + localPixel.y * (float)probeWidth) * deltaTheta;
-    const float2 rayDirection = float2(cospi(theta), -sinpi(theta));
-
-    // outImage[pc.level][globalPixel] = float4(rayDirection, 0.0f, 1.0f);
+    // outImage[pc.level][globalPixel] = float4(fluence_neg_coords, 0.0f, 1.0f);
     // return;
 
-    const float2 pixelCenter = (float2)globalPixel;// + subpixelJitter;             // Jittered pixel position
+    // const float2 screenUV = (float2)localPixel / float2(uint2(width, height) / rootProbeCount);
+    // outImage[pc.level][globalPixel] = float4(probeCenter, 0.0f, 1.0f);
+    // return;
+
+    // Calculate the angle between each ray direction in the probe
+    const float deltaTheta = 2.0f / float(probeWidth * probeHeight);
+    // Determine the direction of this ray
+    const float theta = -1 + deltaTheta / 2.0f + (localPixel.x + localPixel.y * (float)probeWidth) * deltaTheta;
+    const float2 rayDirection = float2(sinpi(theta), cospi(theta));
+
+    float4 outColour = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    const float interval = 1.0f / (pc.interval);
+
+    const float2 pixelCenter = (float2)globalPixel + 0.5f;// + subpixelJitter;             // Jittered pixel position
     const float2 clipCoords = pixelCenter / float2(width, height) * 2.0 - 1.0;      // Convert to NDC [-1,1]
     const float4 viewCoords = mul(camera.invProj, float4(clipCoords, 1.0, 1.0)); // Transform to view space
-
-
 
     // Shoot ray from probeOrigin in rayDirection
     RayDesc rayDesc;
@@ -122,18 +116,23 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
         // Screenspace center
         float3(probeCenter, 0.0f)
         // Move in 5 units along the camera's forward vector
-        + mul(camera.invView, float4(normalize(viewCoords.xyz), 0.0)).xyz * 5.0f
+        //+ mul(camera.invView, float4(normalize(viewCoords.xyz), 0.0)).xyz
         // Start from the end interval of the previous cascade
-        + float3(rayDirection, 0.0f) * pc.interval * float(pc.level - 1) * float(pc.level) / 2.0f
+        + float3(rayDirection, 0.0f) * interval * ((1 << pc.level) - 1)
         // Add world space camera transform
         + mul(camera.invView, float4(0.0, 0.0, 0.0, 1.0)).xyz;
+
+    // outImage[pc.level][globalPixel] = float4(rayDirection, 0.0f, 1.0f);
+    // return;
 
     float4 rightVector = camera.invView[0];
     float4 upVector = camera.invView[1];
 
+    // rayDesc.Direction = float3(rayDirection, 0.0f);
+    // rayDesc.Direction = mul(camera.invView, float4(rayDirection, 0.0)).xyz;
     rayDesc.Direction = normalize((rayDirection.x * rightVector + rayDirection.y * upVector).xyz);
     rayDesc.TMin = 0.0;
-    rayDesc.TMax = pc.interval * (pc.level + 1);
+    rayDesc.TMax = interval * (1 << pc.level);
 
     RayQuery<RAY_FLAG_NONE> rq;
     let rayFlags = RAY_FLAG_NONE;
@@ -157,23 +156,150 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             rq.CommitNonOpaqueTriangleHit();
     }
 
-    if (rq.CommittedStatus() == COMMITTED_NOTHING) {
-        outImage[pc.level][globalPixel] = float4(0.0f, 0.0f, 0.0f, 1.0f);
-        return;
+    if (rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+        const uint instanceID = rq.CommittedInstanceIndex();
+        const uint primIndex = rq.CommittedPrimitiveIndex();
+
+        const float3x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CommittedTriangleBarycentrics());
+        const float3 col = primAttribs[0];
+        const float2 uv = primAttribs[1].xy;
+
+        // const uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
+
+        // uint _width, _height, levelCount;
+        // textures[NonUniformResourceIndex(materialID)].GetDimensions(1, _width, _height, levelCount);
+        // const float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CandidateTriangleRayT() / (float)levelCount);
+        // outColour = float4(intersectionColor.rgb * col, intersectionColor.a);
+        outColour = float4(col, 1.0f);
+    }
+    else {
+        //outColour = float4(skyColour(rayDesc.Direction, pc.sunDirection, pc.sunIntensity), 1.0f);
+    }
+    // If highest cascade, just store value
+    if (pc.level + 1 >= 3) {
+        outImage[pc.level][globalPixel] = outColour;
+    }
+    // Merge F- F+
+    else {
+        float4 fluence_neg = outImage[pc.level + 1][fluence_neg_coords];
+        float4 fluence_pos = outImage[pc.level + 1][fluence_pos_coords];
+        outImage[pc.level][globalPixel] = ((fluence_neg + fluence_pos) / 2.0f + outColour) / 2.0f;
+        // outImage[pc.level][globalPixel] = outColour;
     }
 
-    const uint instanceID = rq.CommittedInstanceIndex();
-    const uint primIndex = rq.CommittedPrimitiveIndex();
+    // // Get side length of probe's kernel: width / 2^(M - (L + 1))
+    // const uint probeWidth = (width / (1 << (pc.maxLevel - (pc.level + 1)))) / pc.c0ProbeCount[0];
+    // // Transform the image pixel coordinates to the local pixel coordinates of the probe's kernel
+    // const uint2 localPixel = globalPixel % probeWidth;
+    
+    // // const float2 screenUV = (float2)localPixel / (float)probeWidth;
+    // // outImage[pc.level][globalPixel] = float4(screenUV, 0.0f, 1.0f);
+    // // return;
+    
+    // // Global location of the probe's (0,0) pixel, in the [0, 1] range
+    // const float2 probeOrigin = float2(globalPixel - localPixel) / (float)(width);
+    
+    // // Screen position of the probe
+    // const float2 probeCenter = probeOrigin + (float(probeWidth) / 2.0f) / (float)(width);
+    
+    // // Calculate the angle between each ray direction in the probe
+    // const float deltaTheta = 2.0f / float(probeWidth * probeWidth);
+    // // Determine the direction of this ray
+    // const float theta = -1 + deltaTheta / 2.0f + (localPixel.x + localPixel.y * (float)probeWidth) * deltaTheta;
+    // const float2 rayDirection = float2(sinpi(theta), cospi(theta));
+    
+    // // outImage[pc.level][globalPixel] = float4(probeOrigin, 0.0f, 1.0f);
+    // // return;
+    
+    // const float2 pixelCenter = (float2)globalPixel + 0.5f;// + subpixelJitter;             // Jittered pixel position
+    // const float2 clipCoords = pixelCenter / float2(width, height) * 2.0 - 1.0;      // Convert to NDC [-1,1]
+    // const float4 viewCoords = mul(camera.invProj, float4(clipCoords, 1.0, 1.0)); // Transform to view space
+    
+    // // outImage[pc.level][globalPixel] = float4(localPixel, 0.0f, localPixel.x + localPixel.y * probeWidth);
+    // // return;
 
-    const float3x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CommittedTriangleBarycentrics());
-    const float3 col = primAttribs[0];
-    const float2 uv = primAttribs[1].xy;
+    // float4 outColour = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    // const float interval = 1.0f / (pc.interval);
 
-    outImage[pc.level][globalPixel] = float4(col, 1.0f);
-    // const uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
+    // // Shoot ray from probeOrigin in rayDirection
+    // RayDesc rayDesc;
+    // rayDesc.Origin =
+    //     // Screenspace center
+    //     float3(probeCenter, 0.0f)
+    //     // Move in 5 units along the camera's forward vector
+    //     //+ mul(camera.invView, float4(normalize(viewCoords.xyz), 0.0)).xyz
+    //     // Start from the end interval of the previous cascade
+    //     + float3(rayDirection, 0.0f) * interval * ((1 << pc.level) - 1);
+    //     // Add world space camera transform
+    //     //+ mul(camera.invView, float4(0.0, 0.0, 0.0, 1.0)).xyz;
 
-    // uint _width, _height, levelCount;
-    // textures[NonUniformResourceIndex(materialID)].GetDimensions(1, _width, _height, levelCount);
-    // const float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CandidateTriangleRayT() / (float)levelCount);
-    // outImage[pc.level][globalPixel] = float4(intersectionColor.rgb * col, intersectionColor.a);
+    // // outImage[pc.level][globalPixel] = float4(rayDesc.Origin, 1.0f);
+    // // return;
+
+    // float4 rightVector = camera.invView[0];
+    // float4 upVector = camera.invView[1];
+
+    // rayDesc.Direction = float3(rayDirection, 0.0f);
+    // // rayDesc.Direction = mul(camera.invView, float4(rayDirection, 0.0)).xyz;
+    // // rayDesc.Direction = normalize((rayDirection.x * rightVector + rayDirection.y * upVector).xyz);
+    // rayDesc.TMin = 0.0;
+    // rayDesc.TMax = interval * (1 << pc.level);
+
+    // RayQuery<RAY_FLAG_NONE> rq;
+    // let rayFlags = RAY_FLAG_NONE;
+
+    // rq.TraceRayInline(accelerationStructure, rayFlags, 0xFF, rayDesc);
+
+    // while (rq.Proceed()) {
+    //     const uint instanceID = rq.CandidateInstanceIndex();
+    //     const uint primIndex = rq.CandidatePrimitiveIndex();
+
+    //     const float3x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CandidateTriangleBarycentrics());
+    //     const float2 uv = primAttribs[1].xy;
+
+    //     const uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
+
+    //     uint _width, _height, levelCount;
+    //     textures[NonUniformResourceIndex(materialID)].GetDimensions(1, _width, _height, levelCount);
+    //     const float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CandidateTriangleRayT() / (float)levelCount);
+
+    //     if (intersectionColor.a >= 0.5)
+    //         rq.CommitNonOpaqueTriangleHit();
+    // }
+
+    // if (rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+    //     const uint instanceID = rq.CommittedInstanceIndex();
+    //     const uint primIndex = rq.CommittedPrimitiveIndex();
+
+    //     const float3x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CommittedTriangleBarycentrics());
+    //     const float3 col = primAttribs[0];
+    //     const float2 uv = primAttribs[1].xy;
+
+    //     // const uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
+
+    //     // uint _width, _height, levelCount;
+    //     // textures[NonUniformResourceIndex(materialID)].GetDimensions(1, _width, _height, levelCount);
+    //     // const float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CandidateTriangleRayT() / (float)levelCount);
+    //     // outColour = float4(intersectionColor.rgb * col, intersectionColor.a);
+    //     outColour = float4(col, 1.0f);
+    // }
+    // else {
+    //     //outColour = float4(skyColour(rayDesc.Direction, pc.sunDirection, pc.sunIntensity), 1.0f);
+    // }
+    // // If highest cascade, just store value
+    // if (pc.level + 1 >= pc.maxLevel) {
+    //     outImage[pc.level][globalPixel] = outColour;
+    // }
+    // // Merge F- F+
+    // else {
+    //     float4 fluence_neg = outImage[pc.level + 1][globalPixel];
+    //     // Get fluence_pos local pixel as 1D array
+    //     uint fluence_pos_1D = ((globalPixel.x % probeWidth) + (globalPixel.y % probeWidth) * probeWidth + 1) % (probeWidth * probeWidth);
+    //     // Convert fluence coords to global coords
+    //     uint2 fluence_pos_pixel = (globalPixel - localPixel) + uint2(fluence_pos_1D % probeWidth, fluence_pos_1D / probeWidth);
+    //     float4 fluence_pos = outImage[pc.level + 1][fluence_pos_pixel];
+    //     // fluence_neg = outColour;
+    //     // fluence_pos = fluence_neg;
+    //     outImage[pc.level][globalPixel] = float4(((fluence_neg + fluence_pos) / 2.0f + outColour) / 2.0f);
+    // }
 }
