@@ -3491,12 +3491,14 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 0, *globalDescriptorSets[currentFrame], nullptr);
     drawCommandBuffers[currentFrame].bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
+#ifdef RADIANCE_CASCADES
     RadianceCascadesPushConstant pushConstant {
       .maxLevel = static_cast<uint32_t>(log2(CASCADE_0_PROBES[0]) + 1),
       .c0ProbeCount = glm::u32vec2(CASCADE_0_PROBES[0], CASCADE_0_PROBES[1])
     };
     drawCommandBuffers[currentFrame].pushConstants<RadianceCascadesPushConstant>(
       *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);
+#endif
     drawCommandBuffers[currentFrame].drawIndexed(3, 1, 0, 0, 0);
   }
 #ifdef _DEBUG
