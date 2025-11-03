@@ -155,7 +155,7 @@ struct App {
   vk::raii::Instance instance = nullptr;
   
   // SetupDebugMessenger
-  vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
+  VkDebugUtilsMessengerEXT debugMessenger = nullptr;
   
   // CreateSurface
   vk::raii::SurfaceKHR surface = nullptr;

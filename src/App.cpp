@@ -296,7 +296,7 @@ void App::InitImGui()
 
   // Associate ImGui with all of the already initialised App Vulkan members
   ImGui_ImplVulkan_InitInfo initInfo = {
-    .ApiVersion = vk::ApiVersion14,
+    .ApiVersion = vk::ApiVersion13,
     .Instance = static_cast<VkInstance>(*instance),
     .PhysicalDevice = static_cast<VkPhysicalDevice>(*physicalDevice),
     .Device = static_cast<VkDevice>(*device),
@@ -522,6 +522,8 @@ void App::Cleanup()
   CleanupSwapChain();
   surface = nullptr;
 
+  vkDestroyDebugUtilsMessengerEXT(*instance, debugMessenger, nullptr);
+
   // GLFW helpers
   glfwDestroyWindow(pWindow);
   glfwTerminate();
@@ -538,7 +540,7 @@ void App::CreateInstance()
     .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
     .pEngineName        = "Backend Engine",
     .engineVersion      = VK_MAKE_VERSION(1, 0, 0),
-    .apiVersion         = vk::ApiVersion14
+    .apiVersion         = vk::ApiVersion13
   };
 
   // the only required layers are enabled solely in debug mode
@@ -591,15 +593,17 @@ void App::CreateInstance()
 
 // A logging function made available to the Vulkan API at runtime
 // Determines which types and severities of information are passed through
-static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(
-  vk::DebugUtilsMessageSeverityFlagBitsEXT severity, 
-  vk::DebugUtilsMessageTypeFlagsEXT type, 
-  const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData, 
+static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
+  VkDebugUtilsMessageSeverityFlagBitsEXT severity, 
+  VkDebugUtilsMessageTypeFlagsEXT type, 
+  const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, 
   void*
 )
 {
-  if ((severity & (vk::DebugUtilsMessageSeverityFlagBitsEXT::eError | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo)) == severity)
-    std::cerr << "validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
+  if ((severity & (VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)) == severity)
+    std::cerr << "validation layer: type " << 
+      (((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) == severity) ? "error" : "info")
+    << " msg: " << pCallbackData->pMessage << std::endl;
 
   return vk::False;
 }
@@ -611,7 +615,7 @@ void App::SetupDebugMessenger()
   if (!enableValidationLayers) return;
 
   // Determine which message severities to even consider printing
-  vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(
+  VkDebugUtilsMessageSeverityFlagsEXT severityFlags(
     vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
     vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo    |
     vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
@@ -619,21 +623,21 @@ void App::SetupDebugMessenger()
   );
   
   // Determine which message types to even consider printing
-  vk::DebugUtilsMessageTypeFlagsEXT messageTypeFlags(
+  VkDebugUtilsMessageTypeFlagsEXT messageTypeFlags(
     vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral     |
     vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
     vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation
   );
 
   // The instantiation data for the debugMessenger
-  vk::DebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT {
+  VkDebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT {
     .messageSeverity = severityFlags,
     .messageType = messageTypeFlags,
     .pfnUserCallback = &DebugCallback
   };
 
   // Associate the debugMessenger with the instance
-  debugMessenger = instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
+  vkCreateDebugUtilsMessengerEXT(*instance, &debugUtilsMessengerCreateInfoEXT, nullptr, &debugMessenger);
 }
 
 // Abstracting the GLFW window as a presentable surface
@@ -665,7 +669,7 @@ void App::PickPhysicalDevice()
       // get the properties of the current device
       vk::PhysicalDeviceProperties properties = _physicalDevice.getProperties();
       // Check if the device supports the Vulkan 1.4 API version
-      bool supportsVulkan1_4 = properties.apiVersion >= VK_API_VERSION_1_4;
+      bool supportsVulkan1_4 = properties.apiVersion >= VK_API_VERSION_1_3;
       // Check if the device is capable of anisotropic sampling (quality transitioning between mip levels)
       // bool supportsSamplerAnisotropy = properties.limits.maxSamplerAnisotropy >= 1.0f;
       

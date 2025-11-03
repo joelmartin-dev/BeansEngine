@@ -40,8 +40,11 @@ struct PushConstant {
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET
 {
-    const uint level = 0;
-    return renderTextures[level].Sample(sampler, vertIn.fragTexCoord);
+    float4 outColour = float4(0.0);
+    for (uint level = 0; level < pc.maxLevel; level++) {
+        outColour += float4(renderTextures[level].Sample(sampler, vertIn.fragTexCoord).rgb, 1.0);
+    }
+    return outColour / float4(pc.maxLevel);
 }
 
 [shader("compute")]
@@ -81,49 +84,71 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     const float4 viewCoords = mul(camera.invProj, float4(clipCoords, 1.0, 1.0)); // Transform to view space
 
     // // Calculate the angle between each ray direction in the probe
-    const float deltaTheta = 1.0f / (pc.baseRayCount << pc.level);
+    // const float deltaTheta = 1.0f / (pc.baseRayCount << pc.level);
+
+    const float GOLDEN_RATIO = (1.0 + pow(5.0, 0.5)) / 2.0;
+    const float deltaTheta = 2.0 * float.getPi() / GOLDEN_RATIO;
+    const float deltaPhi = 2.0 / float(rayCount);
     
     const float intervalSize = 1.0f / pc.interval;
     const float intervalStart = intervalSize * pc.level * pc.level;
     const float intervalEnd = intervalSize * (pc.level + 1) * (pc.level + 1);
 
-    float3 probeWorldPos = float3(0.0);
-    float3 radiance = float3(0.0f);
+    float3 probeWorldPos = float3(probeCenter, 0.0);
+    float4 radiance = float4(0.0f);
     {
         RayDesc ray;
         ray.TMin = 0.0;
         ray.TMax = 1000.0;
         ray.Origin = mul(camera.invView, float4(0.0, 0.0, 0.0, 1.0)).xyz; // Camera position in world space
         ray.Direction = mul(camera.invView, float4(normalize(viewCoords.xyz), 0.0)).xyz;         // Ray direction in world space
-        // if (i == 10) {
-        //     outImage[pc.level][globalPixel] = float4(ray.Direction, 1.0f);
-        //     return;
-        // }
+
         RayQuery<RAY_FLAG_NONE> rq;
         let rayFlags = RAY_FLAG_NONE;
 
         rq.TraceRayInline(accelerationStructure, rayFlags, 0xFF, ray);
 
-        while (rq.Proceed()) rq.CommitNonOpaqueTriangleHit();
+        while (rq.Proceed()) {
+            const uint instanceID = rq.CandidateInstanceIndex();
+            const uint primIndex = rq.CandidatePrimitiveIndex();
 
+            const float3x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CandidateTriangleBarycentrics());
+            const float2 uv = primAttribs[1].xy;
+
+            const uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
+
+            uint _width, _height, levelCount;
+            textures[NonUniformResourceIndex(materialID)].GetDimensions(1, _width, _height, levelCount);
+            const float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CandidateTriangleRayT() / (float)levelCount);
+
+            if (intersectionColor.a >= 0.5)
+                rq.CommitNonOpaqueTriangleHit();
+        }
         if (rq.CommittedStatus() == COMMITTED_NOTHING) {
             outImage[pc.level][globalPixel] = float4((renderTextures[pc.level + 1].Sample(sampler, probeCenter).rgb
-                //+ skyColour(ray.Direction, pc.sunDirection, pc.sunIntensity))
-                 / 2.0), 1.0);
+                + skyColour(ray.Direction, pc.sunDirection, pc.sunIntensity))
+                 / 2.0, 1.0);
             return;
         }
 
         // World position slightly back from hit
-        probeWorldPos = ray.Origin + (rq.CommittedRayT() - 0.001) * ray.Direction;
+        probeWorldPos = ray.Origin + (rq.CommittedRayT() - 0.001) * 1.0 / float(pc.level + 1) * ray.Direction;
     }
 
     for (uint i = 0; i < rayCount; i++) {
-        const float theta = ((float(i) + 0.5) * 2.0) * deltaTheta;
-        const float3 rayDirection = float3(-float2(cospi(theta), sinpi(theta)), 0.0f);
+        // const float theta = ((float(i) + 0.5) * 2.0) * deltaTheta;
+        const float theta = deltaTheta * float(i);
+        const float phi = acos(1.0 - deltaPhi * float(i));
+        const float3 rayDirection = float3(
+            cos(theta) * sin(phi), 
+            sin(theta) * sin(phi), 
+            cos(phi)
+        );
         RayDesc ray;
         ray.TMin = 0.0;
         ray.TMax = intervalEnd - intervalStart;
         ray.Direction = mul(camera.invView, float4(rayDirection, 0.0)).xyz; // Ray direction in world space
+        // ray.Direction = rayDirection;
         ray.Origin = probeWorldPos; // Ray origin in world space
         // if (i == 10) {
         //     outImage[pc.level][globalPixel] = float4(ray.Direction, 1.0f);
@@ -134,8 +159,22 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
 
         rq.TraceRayInline(accelerationStructure, rayFlags, 0xFF, ray);
 
-        while (rq.Proceed()) rq.CommitNonOpaqueTriangleHit();
+        while (rq.Proceed()) {
+            const uint instanceID = rq.CandidateInstanceIndex();
+            const uint primIndex = rq.CandidatePrimitiveIndex();
 
+            const float3x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CandidateTriangleBarycentrics());
+            const float2 uv = primAttribs[1].xy;
+
+            const uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
+
+            uint _width, _height, levelCount;
+            textures[NonUniformResourceIndex(materialID)].GetDimensions(1, _width, _height, levelCount);
+            const float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CandidateTriangleRayT() / (float)levelCount);
+
+            if (intersectionColor.a >= 0.5)
+                rq.CommitNonOpaqueTriangleHit();
+        }
         float4 radDelta = float4(0.0f);
         if (rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
             const uint instanceID = rq.CommittedInstanceIndex();
@@ -154,18 +193,45 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             radDelta += float4(intersectionColor.rgb * col, intersectionColor.a);
         }
         if (rq.CommittedStatus() == COMMITTED_NOTHING && (pc.level + 1) < pc.maxLevel) {
-            radDelta += float4(renderTextures[pc.level + 1].Sample(sampler, probeCenter).rgb / 2.0, 1.0);
+            radDelta += float4(renderTextures[pc.level + 1].Sample(sampler, probeCenter)) / 2.0;
         }
-        radiance += radDelta.rgb;
+        radiance += float4(radDelta.rgb, 1.0);
     }
-    radiance /= float(rayCount);
-    // radiance += renderTextures[pc.level + 1].Sample(sampler, probeCenter).rgb / 2.0;
-    outImage[pc.level][globalPixel] = float4(radiance, 1.0f);
-    // // Determine the direction of this ray
+    // {
+    //     RayDesc ray;
+    //     ray.TMin = 0.0;
+    //     ray.TMax = 1000.0;
+    //     ray.Origin = probeWorldPos;                // Camera position in world space
+    //     ray.Direction = pc.sunDirection; // Ray direction in world space
 
-    // const float ROOT_2 = sqrt(2.0f);
+    //     RayQuery<RAY_FLAG_NONE> rq;
+    //     let rayFlags = RAY_FLAG_NONE;
 
-    // float4 outColour = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    //     rq.TraceRayInline(accelerationStructure, rayFlags, 0xFF, ray);
+
+    //     while (rq.Proceed()) {
+    //         const uint instanceID = rq.CandidateInstanceIndex();
+    //         const uint primIndex = rq.CandidatePrimitiveIndex();
+
+    //         const float3x3 primAttribs = getPrimAttribs(instanceID, primIndex, rq.CandidateTriangleBarycentrics());
+    //         const float2 uv = primAttribs[1].xy;
+
+    //         const uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
+
+    //         uint _width, _height, levelCount;
+    //         textures[NonUniformResourceIndex(materialID)].GetDimensions(1, _width, _height, levelCount);
+    //         const float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, rq.CandidateTriangleRayT() / (float)levelCount);
+
+    //         if (intersectionColor.a >= 0.5)
+    //             rq.CommitNonOpaqueTriangleHit();
+    //     }
+    //     if (rq.CommittedStatus() == COMMITTED_NOTHING) {
+    //         radiance += float4(skyColour(ray.Direction, pc.sunDirection, pc.sunIntensity), 1.0);
+    //     }
+    // }
+    radiance /= float(rayCount + 1);
+
+    outImage[pc.level][globalPixel] = radiance;
     
 
     // // Shoot ray from probeOrigin in rayDirection
