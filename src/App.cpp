@@ -705,7 +705,8 @@ void App::PickPhysicalDevice()
                                                             vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
                                                             vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
                                                             vk::PhysicalDeviceRayQueryFeaturesKHR,
-                                                            vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR>();
+                                                            vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR,
+                                                            vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR>();
       // Query those specific features against the available implementation (the device's Vulkan driver)
       bool supportsRequiredFeatures = 
         // allows anisotropic sampling to some degree
@@ -730,7 +731,9 @@ void App::PickPhysicalDevice()
         features.template get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().accelerationStructure &&
         features.template 
           get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>().descriptorBindingAccelerationStructureUpdateAfterBind &&
-        features.template get<vk::PhysicalDeviceRayQueryFeaturesKHR>().rayQuery;
+        features.template get<vk::PhysicalDeviceRayQueryFeaturesKHR>().rayQuery &&
+        // Allows linear sampling in compute shader stage
+        features.template get<vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR>().computeDerivativeGroupQuads;
         
       // If all true, this physical device is fit for purpose and we can stop checking
       return supportsVulkan1_4 &&
@@ -793,7 +796,8 @@ void App::CreateLogicalDevice()
                      vk::PhysicalDeviceVulkan13Features, 
                      vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
                      vk::PhysicalDeviceAccelerationStructureFeaturesKHR, 
-                     vk::PhysicalDeviceRayQueryFeaturesKHR>
+                     vk::PhysicalDeviceRayQueryFeaturesKHR,
+                     vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR>
   featureChain = {
     {},// {.features = { .samplerAnisotropy = true } },       // vk::PhysicalDeviceFeatures2
     { 
@@ -816,6 +820,7 @@ void App::CreateLogicalDevice()
       .descriptorBindingAccelerationStructureUpdateAfterBind = true 
     },                                                      // vk::PhysicalDeviceAccelerationStructureFeaturesKHR
     {.rayQuery = true },                                    // vk::PhysicalDeviceRayQueryFeaturesKHR
+    {.computeDerivativeGroupQuads = true},                  // vk::PhysicalDeviceComputeShaderDerivativesFeaturesKHR
   };
   
   //=============================================== Devices and Queues ===============================================//
@@ -1056,32 +1061,34 @@ void App::LoadGLTF(const std::filesystem::path& path)
 // For Path-Tracing Reference, create a read-write Image of the same resolution as the initial framebuffers
 void App::CreateRenderTexture()
 {
+  // Use the whole screen for stochastic, cascading resolutions for RC
 #ifndef RADIANCE_CASCADES
   initialRenderTextureExtent.width  = swapChainExtent.width  / RES_DIV + 1;
   initialRenderTextureExtent.height = swapChainExtent.height / RES_DIV + 1;
 #else
-  initialRenderTextureExtent.width  = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * CASCADE_0_PROBES[0];
-  initialRenderTextureExtent.height = static_cast<uint32_t>(sqrt(CASCADE_0_RAYS)) * CASCADE_0_PROBES[1];
+  // Dimensions of Cascade 0's render texture
+  // initialRenderTextureExtent.width  = static_cast<uint32_t>(SQRT_CASCADE_0_RAYS) * CASCADE_0_PROBES[0];
+  // initialRenderTextureExtent.height = static_cast<uint32_t>(SQRT_CASCADE_0_RAYS) * CASCADE_0_PROBES[1];
+  initialRenderTextureExtent.width  = CASCADE_0_PROBES[0];
+  initialRenderTextureExtent.height = CASCADE_0_PROBES[1];
 #endif
   std::cout << initialRenderTextureExtent.width << ", " << initialRenderTextureExtent.height << std::endl;
 
+  // Store the currentRenderTexture, whose X axis is halved every iteration
   auto currentRenderTextureExtent = initialRenderTextureExtent;
 #ifdef RADIANCE_CASCADES
-  for (size_t i = 0; i < static_cast<size_t>(log2(CASCADE_0_PROBES[0]) + 1); i++)
+  const uint RENDER_TEXTURE_COUNT = static_cast<size_t>(log2(CASCADE_0_PROBES[0]) + 1) > MAX_RENDER_TEXTURES ?
+  MAX_RENDER_TEXTURES : static_cast<size_t>(log2(CASCADE_0_PROBES[0]) + 1);
 #else
-  for (size_t i = 0; i < 1; i++)
+  const uint RENDER_TEXTURE_COUNT = MAX_RENDER_TEXTURES;
 #endif
+  for (size_t i = 0; i < RENDER_TEXTURE_COUNT; i++)
   {
     std::pair<vk::raii::Image, vk::raii::DeviceMemory> tempImage = std::pair(nullptr, nullptr);
     // Create the Image on the GPU
     CreateImage(
       currentRenderTextureExtent.width, currentRenderTextureExtent.height, 1,
-#ifdef RADIANCE_CASCADES
-      vk::Format::eR16G16B16A16Sfloat,
-#else
-      vk::Format::eR32G32B32A32Sfloat, 
-#endif      
-      vk::ImageTiling::eOptimal,
+      vk::Format::eR32G32B32A32Sfloat, vk::ImageTiling::eOptimal,
       vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
       vk::MemoryPropertyFlagBits::eDeviceLocal,
       tempImage.first, tempImage.second
@@ -1094,14 +1101,9 @@ void App::CreateRenderTexture()
     
     // Create a view for the Image
     renderTextureViews.emplace_back(CreateImageView(
-      renderTextures.back().first,
-#ifdef RADIANCE_CASCADES
-      vk::Format::eR16G16B16A16Sfloat,
-#else
-      vk::Format::eR32G32B32A32Sfloat, 
-#endif
-      vk::ImageAspectFlagBits::eColor, 1));
+      renderTextures.back().first, vk::Format::eR32G32B32A32Sfloat, vk::ImageAspectFlagBits::eColor, 1));
     currentRenderTextureExtent.setWidth(currentRenderTextureExtent.width >> 1);
+    currentRenderTextureExtent.setHeight(currentRenderTextureExtent.height >> 1);
   }
   CreateRenderTextureSampler();
 }
@@ -1188,6 +1190,7 @@ void App::CreateDescriptorSetLayouts()
         8,
         vk::DescriptorType::eSampler,
         1,
+        vk::ShaderStageFlagBits::eCompute |
         vk::ShaderStageFlagBits::eFragment,
         nullptr
       ),
@@ -1204,6 +1207,7 @@ void App::CreateDescriptorSetLayouts()
         10,
         vk::DescriptorType::eSampledImage,
         static_cast<uint32_t>(renderTextureViews.size()),
+        vk::ShaderStageFlagBits::eCompute |
         vk::ShaderStageFlagBits::eFragment,
         nullptr
       )
@@ -2803,7 +2807,7 @@ void App::LoadGeometry()
     .alphaCut = false,
     .reflective = false
   });
-#if defined(REFERENCE) || defined(RESTIR) || defined(RASTER)// || defined(RADIANCE_CASCADES)
+#if defined(REFERENCE) || defined(RESTIR) || defined(RASTER) || defined(RADIANCE_CASCADES)
   for (cgltf_size meshIt = 0; meshIt < asset->meshes_count; meshIt++) {
     auto m = &asset->meshes[meshIt];
 
@@ -3184,6 +3188,10 @@ void App::CompileShader(const char* src, const char* dst)
     slang::CompilerOptionEntry {
       .name = slang::CompilerOptionName::Capability,
       .value = slang::CompilerOptionValue {.intValue0 = globalSession->findCapability("spvRayQueryKHR")}
+    },
+    slang::CompilerOptionEntry {
+      .name = slang::CompilerOptionName::Capability,
+      .value = slang::CompilerOptionValue {.intValue0 = globalSession->findCapability("ComputeDerivativeGroupQuadsKHR")}
     }
   };
   sessionDesc.compilerOptionEntries = compilerOptionEntries.data();
@@ -3357,12 +3365,15 @@ void App::RecordComputeCommandBuffer()
   computeCommandBuffers[currentFrame].dispatch(initialRenderTextureExtent.width / WORKGROUP_SIZE[0] + 1, 
                                               initialRenderTextureExtent.height / WORKGROUP_SIZE[1] + 1, 1);
 #elif !defined(REFERENCE) && !defined(RESTIR) && defined(RADIANCE_CASCADES)
-  const uint32_t MAX_CASCADES = static_cast<uint32_t>(log2(CASCADE_0_PROBES[0]) + 1);
-  for (uint32_t level = 0; level < static_cast<size_t>(MAX_CASCADES); level++) {
+  const uint32_t HIGHEST_CASCADE = static_cast<uint32_t>(log2(CASCADE_0_PROBES[0]) + 1) > MAX_RENDER_TEXTURES ? 
+    MAX_RENDER_TEXTURES : static_cast<uint32_t>(log2(CASCADE_0_PROBES[0]) + 1);
+  
+  for (uint32_t level = 0; level < static_cast<size_t>(HIGHEST_CASCADE); level++) {
     RadianceCascadesPushConstant pushConstant {
       .level = level,
-      .maxLevel = MAX_CASCADES,
-      .c0ProbeCount = glm::u32vec2(CASCADE_0_PROBES[0], CASCADE_0_PROBES[1]),
+      .maxLevel = HIGHEST_CASCADE,
+      .baseRayCount = CASCADE_0_RAYS,
+      // .c0ProbeCount = glm::u32vec2(CASCADE_0_PROBES[0], CASCADE_0_PROBES[1]),
       .interval = interval,
       .intensity = sunIntensity,
       .lightDir = glm::normalize(sunDir)
@@ -3492,9 +3503,11 @@ void App::RecordCommandBuffer(uint32_t imageIndex)
     drawCommandBuffers[currentFrame].bindDescriptorSets(
       vk::PipelineBindPoint::eGraphics, *graphicsPipeline.first, 1, *materialDescriptorSets[0], nullptr);
 #ifdef RADIANCE_CASCADES
+    const uint32_t HIGHEST_CASCADE = static_cast<uint32_t>(log2(CASCADE_0_PROBES[0]) + 1) > MAX_RENDER_TEXTURES ? 
+      MAX_RENDER_TEXTURES : static_cast<uint32_t>(log2(CASCADE_0_PROBES[0]) + 1);
     RadianceCascadesPushConstant pushConstant {
-      .maxLevel = static_cast<uint32_t>(log2(CASCADE_0_PROBES[0]) + 1),
-      .c0ProbeCount = glm::u32vec2(CASCADE_0_PROBES[0], CASCADE_0_PROBES[1])
+      .maxLevel = HIGHEST_CASCADE,
+      // .c0ProbeCount = glm::u32vec2(CASCADE_0_PROBES[0], CASCADE_0_PROBES[1])
     };
     drawCommandBuffers[currentFrame].pushConstants<RadianceCascadesPushConstant>(
       *graphicsPipeline.first, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);

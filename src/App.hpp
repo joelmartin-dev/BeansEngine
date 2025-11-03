@@ -51,9 +51,17 @@ const std::vector validationLayers = { // not array; vector allows implicit typi
 // Let's the CPU start working on the next frame before the GPU asks (higher values == latency, CPU too far ahead)
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
-// constexpr uint32_t MAX_CASCADES = 6;
-constexpr uint32_t CASCADE_0_PROBES[2] = {512, 512};
-constexpr uint32_t CASCADE_0_RAYS = 4;
+#ifdef RADIANCE_CASCADES
+// Maximum number of cascades to calculate, less is permitted. Used to iteratively instantiate render textures
+constexpr uint32_t MAX_RENDER_TEXTURES = 8;
+// Number of probes in Cascade 0, given as width and height
+constexpr uint32_t CASCADE_0_PROBES[2] = {1440, 900};
+// Cascade 0 Probes are always square, just define a side length > 1
+constexpr uint32_t CASCADE_0_RAYS = 16;
+#else
+// Stochastic approaches only use 1 render texture
+constexpr uint32_t MAX_RENDER_TEXTURES = 1;
+#endif
 
 constexpr uint32_t WORKGROUP_SIZE[] = {4, 8};
 
@@ -161,7 +169,8 @@ struct App {
     vk::KHRAccelerationStructureExtensionName,
     vk::KHRBufferDeviceAddressExtensionName,
     vk::KHRDeferredHostOperationsExtensionName,
-    vk::KHRRayQueryExtensionName
+    vk::KHRRayQueryExtensionName,
+    vk::KHRComputeShaderDerivativesExtensionName
   };
   vk::raii::PhysicalDevice physicalDevice = nullptr;
   
