@@ -195,6 +195,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
         if (rq.CommittedStatus() == COMMITTED_NOTHING && (pc.level + 1) < pc.maxLevel) {
             radDelta += float4(renderTextures[pc.level + 1].Sample(sampler, probeCenter)) / 2.0;
         }
+        radDelta = 1.0 - exp(-1.0 * radDelta);
         radiance += float4(radDelta.rgb, 1.0);
     }
     // {

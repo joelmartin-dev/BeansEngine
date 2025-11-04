@@ -522,8 +522,6 @@ void App::Cleanup()
   CleanupSwapChain();
   surface = nullptr;
 
-  vkDestroyDebugUtilsMessengerEXT(*instance, debugMessenger, nullptr);
-
   // GLFW helpers
   glfwDestroyWindow(pWindow);
   glfwTerminate();
