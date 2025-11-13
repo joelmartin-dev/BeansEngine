@@ -5,7 +5,7 @@ REFERENCE_EXEC := reference
 RESTIR_EXEC := restir
 RADIANCE_EXEC := radiance_cascades
 
-BUILD_DIR := bin
+BUILD_DIR := ../bin
 SRC_DIR := src
 DEPS_DIR := deps
 OBJ_DIR := obj
