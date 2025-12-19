@@ -63,7 +63,7 @@ constexpr uint32_t CASCADE_0_RAYS = 16;
 constexpr uint32_t MAX_RENDER_TEXTURES = 1;
 #endif
 
-constexpr uint32_t WORKGROUP_SIZE[] = {4, 8};
+constexpr uint32_t WORKGROUP_SIZE[] = {8, 8};
 
 #ifndef RES_DIV
   #define RES_DIV 1
@@ -76,18 +76,18 @@ constexpr uint32_t HEIGHT = 900;
 constexpr uint32_t LIGHT_COUNT = 8;
 
 // Default asset paths
-static char model_path[256] = "assets/sponza/Sponza.gltf";
-static char common_path[] = "assets/shaders/common.slang";
+static char model_path[256] = "../assets/sponza/Sponza.gltf";
+static char common_path[] = "../assets/shaders/common.slang";
 #ifdef REFERENCE
-static char slang_path[256] = "assets/shaders/reference.slang";
+static char slang_path[256] = "../assets/shaders/reference.slang";
 #elif RESTIR
-static char slang_path[256] = "assets/shaders/restir.slang";
+static char slang_path[256] = "../assets/shaders/restir.slang";
 #elif RADIANCE_CASCADES
-static char slang_path[256] = "assets/shaders/radiance_cascades.slang";
+static char slang_path[256] = "../assets/shaders/radiance_cascades.slang";
 #else
-static char slang_path[256] = "assets/shaders/raster.slang";
+static char slang_path[256] = "../assets/shaders/raster.slang";
 #endif
-static char spirv_path[256] = "assets/shaders/shader.spv";
+static char spirv_path[256] = "../assets/shaders/shader.spv";
 
 /*===================================================== Terminology ==================================================//
        Surface: an abstraction of an image, something a framebuffer can present to

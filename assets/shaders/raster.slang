@@ -31,19 +31,13 @@ struct PushConstant {
 };
 [push_constant] PushConstant pc;
 
-// Sampler of the written-to image
-[[vk::binding(8, 0)]] public Sampler2D sampler;
-
 // Sample the StorageImage using fullscreen triangle
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET {
     float4 textureColour = textures[pc.materialID].Sample(textureSampler, vertIn.fragTexCoord);
-    return float4(vertIn.fragTexCoord, 0.0f, 1.0f);
+    return textureColour * float4(vertIn.fragColor, 1.0);
+    // return float4(vertIn.fragTexCoord, 0.0f, 1.0f);
 }
-
-// Write access to StorageImage
-[vk_image_format("rgba32f")]
-[[vk::binding(9, 0)]] public RWTexture2D<float4> outImage;
 
 [shader("compute")]
 [numthreads(8, 8, 1)]

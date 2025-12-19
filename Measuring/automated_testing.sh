@@ -12,11 +12,11 @@ GRAPH_SCRIPT="gen_graph.py"
 
 source .venv/bin/activate
 
-rm $REFERENCE*
+rm -f $REFERENCE*
 for (( i=0; i<$ITERS; i++ )); do
   cd ..
 
-  "./bin/$REFERENCE" &
+  "./target/release/$REFERENCE" &> Measuring/$REFERENCE.csv &
   PID=$!
 
   sleep $WAIT_TIME
@@ -32,22 +32,22 @@ done
 
 python $GRAPH_SCRIPT $REFERENCE
 
-rm $RADIANCE*
-for (( i=0; i<$ITERS; i++ )); do
-  cd ..
+# rm -f $RADIANCE*
+# for (( i=0; i<$ITERS; i++ )); do
+#   cd ..
 
-  "./bin/$RADIANCE" &
-  PID=$!
+#   "./target/release/$RADIANCE > Measuring/radiance_cascades.csv" &
+#   PID=$!
 
-  sleep $WAIT_TIME
+#   sleep $WAIT_TIME
 
-  kill $PID
+#   kill $PID
 
-  sleep 1
+#   sleep 1
 
-  cd Measuring
+#   cd Measuring
 
-  python $MEAN_STDEV_SCRIPT $RADIANCE
-done
+#   python $MEAN_STDEV_SCRIPT $RADIANCE
+# done
 
-python $GRAPH_SCRIPT $RADIANCE
+# python $GRAPH_SCRIPT $RADIANCE

@@ -3350,10 +3350,10 @@ void App::RecordComputeCommandBuffer()
 
 #if defined(REFERENCE) && !defined(RESTIR) && !defined(RADIANCE_CASCADES)
   PathTracePushConstant pushConstant {
-    .frame = frame,
-    .time = runtime,
+    .lightDir = glm::normalize(sunDir),
     .intensity = sunIntensity,
-    .lightDir = glm::normalize(sunDir)
+    .time = runtime,
+    .frame = frame
   };
   computeCommandBuffers[currentFrame].pushConstants<PathTracePushConstant>(
     *computePipeline.first, vk::ShaderStageFlagBits::eCompute, 0, pushConstant);

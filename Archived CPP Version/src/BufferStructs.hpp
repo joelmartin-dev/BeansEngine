@@ -21,10 +21,10 @@ struct CubeTransforms {
 };
 
 struct PathTracePushConstant {
-  uint32_t frame;
-  float time;
-  float intensity;
   glm::aligned_vec3 lightDir;
+  float intensity;
+  float time;
+  uint32_t frame;
 };
 
 struct RasterPushConstant {

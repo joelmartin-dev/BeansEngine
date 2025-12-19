@@ -21,7 +21,6 @@ VSOutput vertMain(VSInput input) {
     output.fragTexCoord = input.inTexCoord;
     output.fragNormal = input.inNormal;
     output.worldPos = input.inPosition;
-    output.cubeID = input.cubeID;
     return output;
 }
 

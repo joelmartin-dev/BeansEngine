@@ -6,7 +6,6 @@ public struct VSInput {
     public float2 inTexCoord;
     public float3 inColor;
     public float3 inNormal;
-    public uint cubeID;
 };
 
 // Internal struct for passing attributes to fragment shader
@@ -16,7 +15,6 @@ public struct VSOutput {
     public float3 fragColor;
     public float3 fragNormal;
     public float3 worldPos;
-    public uint cubeID;
 };
 
 // 3D Transformation Matrices + Inversions

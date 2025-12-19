@@ -7,7 +7,6 @@
 .venv
 
 *.json
-*.txt
 *.ini
 *.csv
 *.svg
@@ -23,3 +22,7 @@ GlobalIl.*/
 *.zip
 *.7z
 assets/shaders/Shadertoy/*
+
+# Added by cargo
+
+/target
