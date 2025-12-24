@@ -50,6 +50,7 @@ winit = "0.30.12"
 
 [features]
 default = []
+hardware = []
 sponza = []
 suzanne = []
 radiance_cascades = []

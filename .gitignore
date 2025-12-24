@@ -26,3 +26,4 @@ assets/shaders/Shadertoy/*
 # Added by cargo
 
 /target
+Cargo.lock

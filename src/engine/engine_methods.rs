@@ -2,21 +2,22 @@ use std::ffi::{CStr, CString, c_void};
 use std::fs::{self, File};
 use std::io::{Write};
 use std::path::{Path, PathBuf};
+use std::ptr::null_mut;
 use std::sync::{Arc, Mutex};
 use tokio::task;
 use std::{u64, f32};
 
-use crate::buffer_structs::{CubeTransforms, InstanceLUT, MVP, SubMesh};
+use crate::buffer_structs::{InstanceLUT, MVP, SubMesh};
 #[cfg(feature = "reference")] use crate::buffer_structs::PathTracePushConstant;
 #[cfg(feature = "restir")]  use crate::buffer_structs::ReSTIRPushConstant;
 #[cfg(feature = "radiance_cascades")] use crate::buffer_structs::RadianceCascadesPushConstant;
 #[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] 
 use crate::buffer_structs::RasterPushConstant;
 
+#[cfg(feature = "hardware")]
+use crate::engine::AccelerationStructureData;
 use crate::engine::{
-  DEFAULT_MODEL_PATH, DEFAULT_SLANG_PATH, DEFAULT_SPIRV_PATH, 
-  DebugGuiContext, ENABLE_VALIDATION_LAYERS, Engine, EngineContext, 
-  MAX_FRAMES_IN_FLIGHT, MAX_RENDER_TEXTURES, RES, VALIDATION_LAYERS
+  DEFAULT_MODEL_PATH, DEFAULT_SLANG_PATH, DEFAULT_SPIRV_PATH, DebugGuiContext, ENABLE_VALIDATION_LAYERS, Engine, EngineContext, FALLBACK_TEXTURE_PATH, ImageData, MAX_FRAMES_IN_FLIGHT, MAX_RENDER_TEXTURES, RES, SHADER_ROOT_PATH, TEXTURES_DESCRIPTOR_ARRAY_LENGTH, VALIDATION_LAYERS, VertexData
 };
 #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
 use crate::engine::WORKGROUP_SIZE;
@@ -105,11 +106,16 @@ impl Engine
     Self::setup_debug_messenger(&entry, &instance);
     
     // The device extensions required by the application at some point during runtime
-    let required_device_extensions = vec![
-      vk::KHR_SWAPCHAIN_NAME, vk::KHR_SPIRV_1_4_NAME, vk::KHR_SYNCHRONIZATION2_NAME, vk::KHR_CREATE_RENDERPASS2_NAME, 
-      vk::KHR_ACCELERATION_STRUCTURE_NAME, vk::KHR_BUFFER_DEVICE_ADDRESS_NAME, vk::KHR_DEFERRED_HOST_OPERATIONS_NAME, 
-      vk::KHR_RAY_QUERY_NAME, vk::NV_COMPUTE_SHADER_DERIVATIVES_NAME, // will become KHR in ash v0.39.0
+    let mut required_device_extensions = vec![
+      vk::KHR_SWAPCHAIN_NAME, vk::KHR_SYNCHRONIZATION2_NAME, vk::KHR_CREATE_RENDERPASS2_NAME, 
+      vk::KHR_SPIRV_1_4_NAME, vk::KHR_DEFERRED_HOST_OPERATIONS_NAME,
     ];
+
+#[cfg(feature = "hardware")] 
+    required_device_extensions.extend(vec![
+      vk::EXT_DESCRIPTOR_INDEXING_NAME, vk::KHR_BUFFER_DEVICE_ADDRESS_NAME, 
+      vk::KHR_ACCELERATION_STRUCTURE_NAME, vk::KHR_RAY_QUERY_NAME
+    ]);
 
     // Select a physical device
     let physical_device = Self::pick_physical_device(&instance, &required_device_extensions);
@@ -134,10 +140,16 @@ impl Engine
       &swapchain, surface_khr, surface_capabilities, surface_format, swapchain_extent, swapchain_present_mode);
     let swapchain_image_views = Self::create_swapchain_image_views(&device, &swapchain_images, surface_format.format);
       
+    let swapchain_image_data = ImageData {
+      images: swapchain_images.iter().map(|&img| (img, vk::DeviceMemory::null())).collect(),
+      views: swapchain_image_views,
+      sampler: None
+    };
     // Establish command pool for command buffer allocation
     let command_pool = Self::create_command_pool(&device, qfi);    
     
     // Load acceleration structure functions
+#[cfg(feature = "hardware")]
     let as_device = acceleration_structure::Device::new(&instance, &device);
     
     // Initialise Shader-Slang Compilation API
@@ -146,7 +158,8 @@ impl Engine
     // Everything needed for any given Vulkan operation
     let context = EngineContext {
       _entry: entry, instance, surface, surface_khr, physical_device, device, 
-      queue, command_pool, swapchain, swapchain_khr, as_device, global_session
+      queue, command_pool, swapchain, swapchain_khr, global_session,
+      #[cfg(feature = "hardware")] as_device
     };
     
     // Set up ImGui
@@ -173,9 +186,24 @@ impl Engine
 
     let debug_gui_context = DebugGuiContext { imgui, platform, renderer, model_path, slang_path, spirv_path, delta };
 
+    let fallback_texture_data = {
+      let command_buffer = Self::begin_single_time_commands(&context.device, context.command_pool);
+      let guarded_device = Mutex::new(context.device.clone());
+      let (image, format, mip_levels) = Self::create_texture_image_from_png(
+        &context.instance, &context.device, &guarded_device, 
+        context.physical_device, command_buffer, &Path::new(FALLBACK_TEXTURE_PATH)
+      );
+      Self::end_single_time_commands(&context.device, context.queue, command_buffer);
+      let view = Self::create_image_view(&context.device, image.0, format, vk::ImageAspectFlags::COLOR, mip_levels);
+      ImageData { images: vec![image], views: vec![view], sampler: None }
+    };
+
     // We need to know the number of textures BEFORE we create the descriptor set layouts
     let (vertices, indices, submeshes, base_texture_images, base_texture_image_views, base_texture_sampler) = 
       Self::load_gltf(&context, &Path::new(DEFAULT_MODEL_PATH), 0, 0, 0);
+
+    let gltf_textures_data = ImageData {
+      images: base_texture_images, views: base_texture_image_views, sampler: Some(base_texture_sampler) };
 
     // Load any other glTF files
     // {
@@ -191,15 +219,32 @@ impl Engine
     // }
 
     // The texture/textures the compute shader writes to/fragment shader reads from
-    let (initial_render_texture_extent, render_textures, render_texture_views, render_texture_sampler) = 
-      Self::create_render_texture(&context, #[cfg(not(feature = "radiance_cascades"))] swapchain_extent);
-    
+    let (initial_render_texture_extent, render_textures_data) = {
+      let (initial_render_texture_extent, render_textures, render_texture_views, render_texture_sampler) = 
+        Self::create_render_texture(&context, #[cfg(not(feature = "radiance_cascades"))] swapchain_extent);
+      (
+        initial_render_texture_extent, 
+        ImageData { 
+          images: render_textures, 
+          views: render_texture_views, 
+          sampler: Some(render_texture_sampler) 
+        }
+      )
+    };
+
     // Create the depth stencil
-    let (depth_image, depth_image_view) = Self::create_depth_resources(&context, swapchain_extent);
-    
+    let depth_image_data = {
+      let (depth_image, depth_image_view) = Self::create_depth_resources(&context, swapchain_extent);
+      ImageData {
+        images: vec![depth_image],
+        views: vec![depth_image_view],
+        sampler: None
+      }
+    };
+
     // Define how data is organised in descriptor sets
     let (descriptor_set_layout_global, descriptor_set_layout_material) = 
-      Self::create_descriptor_set_layouts(&context, &base_texture_image_views, &render_texture_views);
+      Self::create_descriptor_set_layouts(&context, &gltf_textures_data, &render_textures_data);
     
     // Create the draw-time GPU synchronisation objects
     let (timeline_semaphore, in_flight_fences) = Self::create_sync_objects(&context);
@@ -208,7 +253,7 @@ impl Engine
     let (draw_command_buffers, compute_command_buffers) = Self::create_command_buffers(&context);
     
     // We manually call CompileShader for all shaders on start, ensuring SPIR-V exists by the time pipelines are created
-    Self::compile_shader(&context, &Path::new(DEFAULT_SLANG_PATH), &Path::new(DEFAULT_SPIRV_PATH));
+    Self::compile_shader(&context, &Path::new(SHADER_ROOT_PATH).join(DEFAULT_SLANG_PATH), &Path::new(DEFAULT_SPIRV_PATH));
 
     // Define how data is passed through stages, with an attached descriptor set layout and shader
     let graphics_pipeline = Self::create_graphics_pipeline(
@@ -222,36 +267,50 @@ impl Engine
     // Per-frame camera-based transformations
     let mvp_buffers = Self::create_uniform_buffers(&context);
 
-    let vertex_buffer = Self::create_vertex_buffer(&context, &vertices);
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-    // The triangle that the render texture is rendered to
-    let triangle_vertex_buffer = Self::create_vertex_buffer(&context, &TRIANGLE.vertices);
-    
-    let index_buffer = Self::create_index_buffer(&context, &indices,
-      vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER |
-      vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-    );
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-    let triangle_index_buffer = Self::create_index_buffer(&context, &TRIANGLE.indices, vk::BufferUsageFlags::default());
-    
-    let colour_buffer = Self::create_colour_buffer(&context, &vertices);
-    let uv_buffer = Self::create_uv_buffer(&context, &vertices);
-    let nrm_buffer = Self::create_normal_buffer(&context, &vertices);
+    let vertex_data = {
+      let vertex_buffer = Self::create_vertex_buffer(&context, &vertices);
+      #[cfg(feature = "hardware")]
+      let index_buffer = Self::create_index_buffer(&context, &indices,
+        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
+        vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+      );
+      #[cfg(not(feature = "hardware"))]
+      let index_buffer = Self::create_index_buffer(&context, &indices, vk::BufferUsageFlags::STORAGE_BUFFER);
+      let colour_buffer = Self::create_colour_buffer(&context, &vertices);
+      let uv_buffer = Self::create_uv_buffer(&context, &vertices);
+      let nrm_buffer = Self::create_normal_buffer(&context, &vertices);
 
+      VertexData { vertex_buffer, index_buffer, colour_buffer, uv_buffer, nrm_buffer }
+    };
+
+    // The triangle that the render texture is rendered to
+    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+    let (triangle_vertex_buffer, triangle_index_buffer) = {(
+      Self::create_vertex_buffer(&context, &TRIANGLE.vertices), 
+      Self::create_index_buffer(&context, &TRIANGLE.indices, vk::BufferUsageFlags::default())
+    )};
+    
     // Create the acceleration structures
-    let (blas_handles, blas_instance_buffer, tlas_buffer, tlas_handle, blas_instance_luts) = 
-      Self::create_acceleration_structures(&context, vertex_buffer.0, index_buffer.0, &submeshes);
-    let blas_instance_lut_buffer = Self::create_blas_instance_lut_buffer(&context, &blas_instance_luts);
+#[cfg(feature = "hardware")]
+    let acceleration_structure_data = {
+      let (blas_handles, blas_instance_buffer, tlas_buffer, tlas_handle, blas_instance_luts) = 
+        Self::create_acceleration_structures(&context, &vertex_data, &submeshes);
+      let blas_instance_lut_buffer = Self::create_blas_instance_lut_buffer(&context, &blas_instance_luts);
+      AccelerationStructureData { 
+        blas_handles, blas_instance_buffer, 
+        tlas_buffer, tlas_handle, 
+        blas_instance_luts, blas_instance_lut_buffer 
+      }
+    };
     
     // Set limits on the number of descriptor sets that can be allocated at any time
-    let descriptor_pool = Self::create_descriptor_pools(&context, &render_texture_views, &base_texture_image_views);
+    let descriptor_pool = Self::create_descriptor_pools(&context, &gltf_textures_data, &render_textures_data);
       
     // Organise buffers so that they are accessible on the GPU
     let (global_descriptor_sets, material_descriptor_sets) = Self::create_descriptor_sets(
-      &context, &render_texture_views, &base_texture_image_views, render_texture_sampler, base_texture_sampler, 
+      &context, &fallback_texture_data, &gltf_textures_data, &render_textures_data, 
       descriptor_set_layout_global, descriptor_set_layout_material, descriptor_pool, &mvp_buffers, 
-      &vertices, &indices, index_buffer.0, colour_buffer.0, uv_buffer.0, nrm_buffer.0, 
-      tlas_handle, &blas_instance_luts, blas_instance_lut_buffer.0
+      &vertices, &indices, &vertex_data, #[cfg(feature = "hardware")] &acceleration_structure_data
     );
 
     let camera = Camera::new(
@@ -267,10 +326,8 @@ impl Engine
       surface_format,
       swapchain_extent,
       swapchain_present_mode,
-      swapchain_images,
-      swapchain_image_views,
-      depth_image,
-      depth_image_view,
+      swapchain_image_data,
+      depth_image_data,
       draw_command_buffers,
       compute_command_buffers,
       in_flight_fences,
@@ -282,31 +339,19 @@ impl Engine
       compute_pipeline,
       graphics_pipeline,
       mvp_buffers,
+      fallback_texture_data,
       vertices,
       indices,
       submeshes,
-      base_texture_images,
-      base_texture_image_views,
-      base_texture_sampler,
-      vertex_buffer,
-      index_buffer,
+      gltf_textures_data,
+      vertex_data,
       #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] triangle_vertex_buffer,
       #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] triangle_index_buffer,
-      colour_buffer,
-      uv_buffer,
-      nrm_buffer,
-      blas_handles,
-      blas_instance_buffer,
-      tlas_handle,
-      tlas_buffer,
-      blas_instance_luts,
-      blas_instance_lut_buffer,
+      #[cfg(feature = "hardware")] acceleration_structure_data,
       // indirect_commands: Default::default(),
       // indirect_commands_buffer: Default::default(),
       initial_render_texture_extent,
-      render_textures,
-      render_texture_views,
-      render_texture_sampler,
+      render_textures_data,
       descriptor_pool,
       global_descriptor_sets,
       material_descriptor_sets,
@@ -423,8 +468,10 @@ impl Engine
       let properties = unsafe { instance.get_physical_device_properties(*physical_device) };
       // Check if the device supports the Vulkan 1.3 API version
       let supports_vulkan_1_3 = properties.api_version >= vk::API_VERSION_1_3;
+      if !supports_vulkan_1_3 { println!("{:?} does not support Vulkan v1.3.x", *physical_device); return false; }
       // Check if the device is capable of anisotropic sampling (quality transitioning between mip levels)
       let supports_sampler_anisotropy = properties.limits.max_sampler_anisotropy >= 1.0;
+      if !supports_sampler_anisotropy { println!("{:?} does not support anisotropic sampling", *physical_device); return false; }
       
       // Get the queue families and their properties of the physical device
       let queue_families = unsafe {
@@ -435,7 +482,8 @@ impl Engine
       // I have not implemented logic for separate queue families
       let supports_graphics_compute: bool = queue_families.iter().any(|&qfp| 
         (qfp.queue_flags & (vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)) != vk::QueueFlags::default());
-      
+      if !supports_graphics_compute { println!("{:?} does not have single queue graphics compute queue", *physical_device); return false; }
+
       // Get the device extensions available on this physical device
       let available_device_extensions = unsafe {
         instance.enumerate_device_extension_properties(*physical_device)
@@ -443,11 +491,14 @@ impl Engine
       };
       
       // Check if ALL required device extensions are available
-      let supports_all_required_extensions = required_device_extensions.iter().all(|&extension|
-        // Check if the current requiredDeviceExtension is offered by the physical device
-        available_device_extensions.iter().any(|&available_extension| 
-          available_extension.extension_name_as_c_str().unwrap() == extension)
+      let supports_all_required_extensions = required_device_extensions.iter().all(|&extension| {
+          // Check if the current requiredDeviceExtension is offered by the physical device
+          let extension_supported = available_device_extensions.iter().any(|&available_extension| 
+            available_extension.extension_name_as_c_str().unwrap() == extension);
+          if extension_supported { true } else { println!("{} not supported!", extension.to_string_lossy()); false }
+        }
       );
+      if !supports_all_required_extensions { println!("{:?} does not support required extensions", *physical_device); return false; }
 
       let mut compute_shader_derivatives_features = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default();
       let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
@@ -480,7 +531,7 @@ impl Engine
       // Each of these structs' members have been set by the device, and we can query the members' availability through
       // them. I don't know why we use a .template getFeatures2, but it works and is visually comprehensible
       // Query those specific features against the available implementation (the device's Vulkan driver)
-      let supports_required_features = 
+      let supports_required_min_spec_features = 
         // allows anisotropic sampling to some degree
         features2.features.sampler_anisotropy != vk::FALSE &&
         // simplified API for Vulkan synchronization objects e.g. semaphores, fences
@@ -488,6 +539,14 @@ impl Engine
         // allows for implicit render passes
         vulkan_13_features.dynamic_rendering != vk::FALSE &&
         extended_dynamic_state_features.extended_dynamic_state != vk::FALSE &&
+        // makes timeline semaphores available for synchronisation
+        vulkan_12_features.timeline_semaphore != vk::FALSE;
+        
+      if !supports_required_min_spec_features { 
+        println!("{:?} does not support required features", *physical_device); return false; }
+
+      #[cfg(feature = "hardware")] 
+      let supports_required_hardware_features =
         vulkan_12_features.descriptor_binding_uniform_buffer_update_after_bind != vk::FALSE &&
         vulkan_12_features.descriptor_binding_sampled_image_update_after_bind != vk::FALSE &&
         vulkan_12_features.descriptor_binding_storage_image_update_after_bind != vk::FALSE &&
@@ -498,20 +557,28 @@ impl Engine
         vulkan_12_features.shader_sampled_image_array_non_uniform_indexing != vk::FALSE &&
         vulkan_12_features.host_query_reset != vk::FALSE &&
         vulkan_12_features.buffer_device_address != vk::FALSE &&
-        // makes timeline semaphores available for synchronisation
-        vulkan_12_features.timeline_semaphore != vk::FALSE &&
         acceleration_structure_features.acceleration_structure != vk::FALSE &&
         acceleration_structure_features.descriptor_binding_acceleration_structure_update_after_bind != vk::FALSE &&
-        ray_query_features.ray_query != vk::FALSE &&
-        // Allows linear sampling in compute shader stage
-        compute_shader_derivatives_features.compute_derivative_group_quads != vk::FALSE;
-          
+        ray_query_features.ray_query != vk::FALSE;
+        
+      #[cfg(feature = "hardware")] if !supports_required_hardware_features { 
+        println!("{:?} does not support required features", *physical_device); return false; }
+
       // If all true, this physical device is fit for purpose and we can stop checking
+      #[cfg(not(feature = "hardware"))] 
       return supports_vulkan_1_3 &&
-            supports_sampler_anisotropy &&
-            supports_graphics_compute && 
-            supports_all_required_extensions &&
-            supports_required_features;
+        supports_sampler_anisotropy &&
+        supports_graphics_compute && 
+        supports_all_required_extensions &&
+        supports_required_min_spec_features;
+
+      #[cfg(feature = "hardware")] 
+      return supports_vulkan_1_3 &&
+        supports_sampler_anisotropy &&
+        supports_graphics_compute && 
+        supports_all_required_extensions &&
+        supports_required_min_spec_features &&
+        supports_required_hardware_features;
     }).expect("failed to find a suitable physical device!");
     return *first_suitable_device;
   }
@@ -541,6 +608,7 @@ impl Engine
     // Find the index of the Graphics Compute queue family that we know exists on the physical device
     let qfi = Self::find_queue_families(instance, physical_device);
 
+    #[cfg(feature = "hardware")] 
     let mut vulkan_12_features = vk::PhysicalDeviceVulkan12Features::default()
       .descriptor_binding_uniform_buffer_update_after_bind(true)
       .descriptor_binding_sampled_image_update_after_bind(true)
@@ -553,36 +621,45 @@ impl Engine
       .host_query_reset(true)
       .buffer_device_address(true)
       .timeline_semaphore(true);
+    #[cfg(not(feature = "hardware"))] 
+    let mut vulkan_12_features = vk::PhysicalDeviceVulkan12Features::default()
+      .timeline_semaphore(true);
     let mut vulkan_13_features = vk::PhysicalDeviceVulkan13Features::default()
       .synchronization2(true)
       .dynamic_rendering(true);
     let mut extended_dynamic_state_features = vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT::default()
       .extended_dynamic_state(true);
+    #[cfg(feature = "hardware")] 
     let mut acceleration_structure_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
       .acceleration_structure(true)
       .descriptor_binding_acceleration_structure_update_after_bind(true);
+    #[cfg(feature = "hardware")] 
     let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default()
       .ray_query(true);
-    let mut compute_shader_derivatives_features = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default()
-      .compute_derivative_group_quads(true);
 
     // Build the pNext chain (in reverse order)
     // Each structure's pNext points to the next one in the chain
-    compute_shader_derivatives_features.p_next = std::ptr::null_mut();
-    ray_query_features.p_next = 
-        &mut compute_shader_derivatives_features as *mut _ as *mut c_void;
-    acceleration_structure_features.p_next = 
+    #[cfg(feature = "hardware")] {
+      ray_query_features.p_next = null_mut();
+      acceleration_structure_features.p_next = 
         &mut ray_query_features as *mut _ as *mut c_void;
-    extended_dynamic_state_features.p_next = 
+      extended_dynamic_state_features.p_next = 
         &mut acceleration_structure_features as *mut _ as *mut c_void;
+    }
+    #[cfg(not(feature = "hardware"))] {
+      extended_dynamic_state_features.p_next = null_mut();
+    }
     vulkan_13_features.p_next = 
-        &mut extended_dynamic_state_features as *mut _ as *mut c_void;
+      &mut extended_dynamic_state_features as *mut _ as *mut c_void;
     vulkan_12_features.p_next = 
-        &mut vulkan_13_features as *mut _ as *mut c_void;
+      &mut vulkan_13_features as *mut _ as *mut c_void;
 
     // Create the main features2 structure with the chain
     let mut features2 = vk::PhysicalDeviceFeatures2::default()
-      .features(vk::PhysicalDeviceFeatures::default().sampler_anisotropy(true)).push_next(&mut vulkan_12_features);
+      .features(
+        vk::PhysicalDeviceFeatures::default()
+          .sampler_anisotropy(true)
+        ).push_next(&mut vulkan_12_features);
     
     //============================================== Devices and Queues ==============================================//
 
@@ -1688,10 +1765,12 @@ impl Engine
   // Each pipeline needs to know what structures will be passed to the GPU during its lifetime. Not specific data, but
   // just the expected layout of the data once it exists
   fn create_descriptor_set_layouts(
-    context: &EngineContext, base_texture_image_views: &Vec<vk::ImageView>, render_texture_views: &Vec<vk::ImageView>
+    context: &EngineContext, gltf_textures_data: &ImageData, render_textures_data: &ImageData
   ) -> (vk::DescriptorSetLayout, vk::DescriptorSetLayout)
   {
     let device = &context.device;
+    let gltf_texture_views = &gltf_textures_data.views;
+    let render_texture_views = &render_textures_data.views;
     // STANDARD 3D MODELS
     // Descriptor bindings are like slots in descriptor sets
     let global_bindings = [
@@ -1702,68 +1781,65 @@ impl Engine
         .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::COMPUTE),
-      // Cube Transform Buffer
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(1)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::COMPUTE),
-      // TLAS
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(2)
-        .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-        .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::COMPUTE),
       // Index Buffer
       vk::DescriptorSetLayoutBinding::default()
-        .binding(3)
+        .binding(1)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE),
       // Vertex Colour Buffer
       vk::DescriptorSetLayoutBinding::default()
-        .binding(4)
+        .binding(2)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
       // UV Buffer
       vk::DescriptorSetLayoutBinding::default()
-        .binding(5)
+        .binding(3)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
       // Normals Buffer
       vk::DescriptorSetLayoutBinding::default()
-        .binding(6)
+        .binding(4)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE),
-      // BLAS Lookup Table Buffer
+      // TLAS
+      #[cfg(feature = "hardware")]
       vk::DescriptorSetLayoutBinding::default()
-        .binding(7)
+        .binding(5)
+        .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE),
+      // BLAS Lookup Table Buffer
+      #[cfg(feature = "hardware")]
+      vk::DescriptorSetLayoutBinding::default()
+        .binding(6)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE),
       // Storage Image read-only Sampler
       vk::DescriptorSetLayoutBinding::default()
-        .binding(8)
+        .binding(7)
         .descriptor_type(vk::DescriptorType::SAMPLER)
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
       // Storage Image Write
       vk::DescriptorSetLayoutBinding::default()
-        .binding(9)
+        .binding(8)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(render_texture_views.len().try_into().unwrap())
         .stage_flags(vk::ShaderStageFlags::COMPUTE),
       // Storage Image Sample
       vk::DescriptorSetLayoutBinding::default()
-        .binding(10)
+        .binding(9)
         .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
         .descriptor_count(render_texture_views.len().try_into().unwrap())
         .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
     ];
 
+    #[cfg(feature = "hardware")] 
     let binding_flags = [
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
@@ -1778,6 +1854,7 @@ impl Engine
       vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT | 
         vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
     ];
+    #[cfg(not(feature = "hardware"))] let binding_flags = vec![vk::DescriptorBindingFlags::default(); global_bindings.len()];
 
     let mut flags_create_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
       .binding_flags(&binding_flags);
@@ -1794,8 +1871,6 @@ impl Engine
         .expect("failed to create global descriptor set layouts")
     };
 
-    let texture_count: u32 = base_texture_image_views.len().try_into().unwrap();
-
     let material_bindings = [
       // Binding for a texture (colloquial), used exclusively by the fragment shader
       vk::DescriptorSetLayoutBinding::default()
@@ -1807,15 +1882,19 @@ impl Engine
       vk::DescriptorSetLayoutBinding::default()
         .binding(1)
         .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .descriptor_count(texture_count)
+        .descriptor_count(TEXTURES_DESCRIPTOR_ARRAY_LENGTH)
         .stage_flags(vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE)
     ];
 
+    #[cfg(feature = "hardware")]
     let mat_binding_flags = [
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-      vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT | 
-                                                    vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+      vk::DescriptorBindingFlags::PARTIALLY_BOUND | 
+        vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT | 
+        vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
     ];
+    #[cfg(not(feature = "hardware"))] 
+    let mat_binding_flags = [vk::DescriptorBindingFlags::default(), vk::DescriptorBindingFlags::default()];
 
     let mut mat_flags_create_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
       .binding_flags(&mat_binding_flags);
@@ -1903,13 +1982,16 @@ impl Engine
     They have the same relationship as vertices and indices. Vertices store the attributes, indices act as instances 
     of those vertices.
   */
+#[cfg(feature = "hardware")]
   fn cleanup_acceleration_structures(
-    context: &EngineContext,
-    blas_handles: &Vec<vk::AccelerationStructureKHR>, blas_instance_buffer: (vk::Buffer, vk::DeviceMemory), 
-    tlas_buffer: (vk::Buffer, vk::DeviceMemory), tlas_handle: vk::AccelerationStructureKHR, 
+    context: &EngineContext, acceleration_structure_data: &AccelerationStructureData
   )
   {
     let device = &context.device; let as_device = &context.as_device;
+    let blas_handles = &acceleration_structure_data.blas_handles;
+    let blas_instance_buffer = acceleration_structure_data.blas_instance_buffer;
+    let tlas_handle = acceleration_structure_data.tlas_handle;
+    let tlas_buffer = acceleration_structure_data.tlas_buffer;
 
     unsafe { device.device_wait_idle().expect("failed to wait for device idle!"); }
 
@@ -1924,29 +2006,33 @@ impl Engine
     };
   }
 
+#[cfg(feature = "hardware")]
   pub fn rebuild_acceleration_structures(&mut self)
   {
     let context = self.context.as_ref().unwrap();
     
     Self::cleanup_acceleration_structures(
-      context, &self.blas_handles, self.blas_instance_buffer, self.tlas_buffer, self.tlas_handle);
+      context, &self.acceleration_structure_data);
     
-    let vertex_buffer = &self.vertex_buffer; let index_buffer = &self.index_buffer; let submeshes = &self.submeshes;
+    let vertex_data = &self.vertex_data; let submeshes = &self.submeshes;
     let (blas_handles, blas_instance_buffer, tlas_buffer, tlas_handle, blas_instance_luts) = 
-      Self::create_acceleration_structures(context, vertex_buffer.0, index_buffer.0, &submeshes);
+      Self::create_acceleration_structures(context, vertex_data, &submeshes);
 
-    self.blas_handles = blas_handles;
-    self.blas_instance_buffer = blas_instance_buffer;
-    self.tlas_handle = tlas_handle;
-    self.tlas_buffer = tlas_buffer;
-    self.blas_instance_luts = blas_instance_luts;
+    let blas_instance_lut_buffer = Self::create_blas_instance_lut_buffer(context, &blas_instance_luts);
+
+    self.acceleration_structure_data = AccelerationStructureData { 
+      blas_handles, blas_instance_buffer, 
+      tlas_handle, tlas_buffer, 
+      blas_instance_luts, blas_instance_lut_buffer 
+    };
 
     self.reload_shaders();
   }
 
   // Create the BLAS and TLAS for the scene
+#[cfg(feature = "hardware")]
   fn create_acceleration_structures(
-    context: &EngineContext, vertex_buffer: vk::Buffer, index_buffer: vk::Buffer, submeshes: &Vec<SubMesh>
+    context: &EngineContext, vertex_data: &VertexData, submeshes: &Vec<SubMesh>
   ) -> (
     Vec<vk::AccelerationStructureKHR>, (vk::Buffer, vk::DeviceMemory), (vk::Buffer, vk::DeviceMemory), 
     vk::AccelerationStructureKHR, Vec<InstanceLUT>
@@ -1958,6 +2044,8 @@ impl Engine
     let command_pool = context.command_pool;
     let queue = context.queue;
     let as_device = &context.as_device;
+    let vertex_buffer = vertex_data.vertex_buffer.0;
+    let index_buffer = vertex_data.index_buffer.0;
     // Used to query the calculated size of a compacted buffer after the creation of uncompacted buffer
     let query_pool_create_info = vk::QueryPoolCreateInfo::default()
       .query_type(vk::QueryType::ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR)
@@ -2383,10 +2471,12 @@ impl Engine
   // Create DescriptorPools that can allocate DescriptorSets. It's like a check making sure not too many descriptors of
   // some type are allocated, as it does not take layouts into account
   fn create_descriptor_pools(
-    context: &EngineContext, render_texture_views: &Vec<vk::ImageView>, base_texture_image_views: &Vec<vk::ImageView>
+    context: &EngineContext, gltf_textures_data: &ImageData, render_textures_data: &ImageData
   ) -> vk::DescriptorPool
   {
     let device = &context.device;
+    let gltf_texture_views = &gltf_textures_data.views;
+    let render_texture_views = &render_textures_data.views;
     // It's possible that a driver allows overallocation from pool, avoiding VK_ERROR_OUT_OF_POOL_MEMORY when allocating
     // for more descriptor sets than the descriptor pool sizes "allow". In these cases it may not seem like the
     // descriptorCount member has any effect, but it will for some other drivers.
@@ -2398,9 +2488,6 @@ impl Engine
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::UNIFORM_BUFFER).descriptor_count(descriptor_count),
       // Cube transform matrices
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::UNIFORM_BUFFER).descriptor_count(descriptor_count),
-      // TLAS
-      vk::DescriptorPoolSize::default().ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-        .descriptor_count(descriptor_count),
       // Index Buffer
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(descriptor_count),
       // Vertex Colour Buffer
@@ -2409,7 +2496,12 @@ impl Engine
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(descriptor_count),
       // Normal Buffer
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(descriptor_count),
+      // TLAS
+      #[cfg(feature = "hardware")]
+      vk::DescriptorPoolSize::default().ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
+        .descriptor_count(descriptor_count),
       // BLAS LUT Buffer
+      #[cfg(feature = "hardware")]
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(descriptor_count),
       // Compute Output Image Sampler
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLER).descriptor_count(descriptor_count),
@@ -2422,7 +2514,7 @@ impl Engine
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLER).descriptor_count(descriptor_count),
       // Textures
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLED_IMAGE)
-        .descriptor_count(base_texture_image_views.len().try_into().unwrap())
+        .descriptor_count(TEXTURES_DESCRIPTOR_ARRAY_LENGTH)
     ];
 
     let pool_info = vk::DescriptorPoolCreateInfo::default()
@@ -2443,17 +2535,31 @@ impl Engine
 
   // Collation of Descriptors for shaders
   fn create_descriptor_sets(
-    context: &EngineContext,
-    render_texture_views: &Vec<vk::ImageView>, base_texture_image_views: &Vec<vk::ImageView>,
-    render_texture_sampler: vk::Sampler, base_texture_sampler: vk::Sampler,
+    context: &EngineContext, fallback_texture_data: &ImageData,
+    gltf_textures_data: &ImageData, render_textures_data: &ImageData,
     descriptor_set_layout_global: vk::DescriptorSetLayout, descriptor_set_layout_material: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool, mvp_buffers: &Vec<(vk::Buffer, vk::DeviceMemory)>,
-    vertices: &Vec<Vertex>, indices: &Vec<u32>, index_buffer: vk::Buffer, colour_buffer: vk::Buffer, 
-    uv_buffer: vk::Buffer, normal_buffer: vk::Buffer, tlas_handle: vk::AccelerationStructureKHR, 
-    blas_instance_luts: &Vec<InstanceLUT>, blas_instance_lut_buffer: vk::Buffer,
+    vertices: &Vec<Vertex>, indices: &Vec<u32>, vertex_data: &VertexData, 
+    #[cfg(feature = "hardware")] acceleration_structure_data: &AccelerationStructureData
   ) -> (Vec<vk::DescriptorSet>, Vec<vk::DescriptorSet>)
   {
     let device = &context.device;
+    let fallback_texture_view = fallback_texture_data.views[0];
+    let gltf_texture_views = &gltf_textures_data.views;
+    let gltf_texture_sampler = gltf_textures_data.sampler.unwrap();
+    let render_texture_views = &render_textures_data.views;
+    let render_texture_sampler = render_textures_data.sampler.unwrap();
+    let index_buffer = vertex_data.index_buffer.0;
+    let colour_buffer = vertex_data.colour_buffer.0;
+    let uv_buffer = vertex_data.uv_buffer.0;
+    let normal_buffer = vertex_data.nrm_buffer.0;
+    #[cfg(feature = "hardware")] let (tlas_handle, blas_instance_luts, blas_instance_lut_buffer) = {
+      (
+        acceleration_structure_data.tlas_handle, 
+        &acceleration_structure_data.blas_instance_luts,
+        acceleration_structure_data.blas_instance_lut_buffer.0
+      )
+    };
     // STANDARD 3D MODELS
     // Shader Resources
     // [value; num_of_copies]
@@ -2481,78 +2587,73 @@ impl Engine
       let mvp_buffer_info = [vk::DescriptorBufferInfo::default()
         .buffer(mvp_buffers[i].0).offset(0).range(size_of::<MVP>().try_into().unwrap())];
 
-      let mvp_buffer_write = vk::WriteDescriptorSet::default()
+      let mvp_write = vk::WriteDescriptorSet::default()
         .dst_set(global_descriptor_sets[i]).dst_binding(0).dst_array_element(0)
         .descriptor_count(1).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
         .buffer_info(&mvp_buffer_info);
 
-      // Camera transforms Buffer
-      let cube_buffer_info = [vk::DescriptorBufferInfo::default()
-        .buffer(mvp_buffers[i].0).offset(0).range(size_of::<CubeTransforms>().try_into().unwrap())];
-
-      let cube_buffer_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(1).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .buffer_info(&cube_buffer_info);
-
-      let acc_structs = [tlas_handle];
-      let mut as_info = vk::WriteDescriptorSetAccelerationStructureKHR::default().acceleration_structures(&acc_structs);
-
-      let as_write = vk::WriteDescriptorSet::default()
-        .push_next(&mut as_info)
-        .dst_set(global_descriptor_sets[i]).dst_binding(2).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR);
-
       let index_buffer_info = [vk::DescriptorBufferInfo::default()
         .buffer(index_buffer).offset(0).range(size_of::<u32>() as vk::DeviceSize * indices.len() as vk::DeviceSize)];
 
-      let index_buffer_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(3).dst_array_element(0)
+      let indices_write = vk::WriteDescriptorSet::default()
+        .dst_set(global_descriptor_sets[i]).dst_binding(1).dst_array_element(0)
         .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .buffer_info(&index_buffer_info);
 
       let colour_buffer_info = [vk::DescriptorBufferInfo::default()
         .buffer(colour_buffer).offset(0)
         .range(size_of::<glm::Vec4>() as vk::DeviceSize * vertices.len() as vk::DeviceSize)];
-
-      let colour_buffer_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(4).dst_array_element(0)
+      
+      let colours_write = vk::WriteDescriptorSet::default()
+        .dst_set(global_descriptor_sets[i]).dst_binding(2).dst_array_element(0)
         .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .buffer_info(&colour_buffer_info);
 
       let uv_buffer_info = [vk::DescriptorBufferInfo::default()
         .buffer(uv_buffer).offset(0)
         .range(size_of::<glm::Vec2>() as vk::DeviceSize * vertices.len() as vk::DeviceSize)];
-
-      let uv_buffer_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(5).dst_array_element(0)
+    
+      let uvs_write = vk::WriteDescriptorSet::default()
+        .dst_set(global_descriptor_sets[i]).dst_binding(3).dst_array_element(0)
         .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .buffer_info(&uv_buffer_info);
 
-      let nrm_buffer_info = [vk::DescriptorBufferInfo::default()
+      let norms_buffer_info = [vk::DescriptorBufferInfo::default()
         .buffer(normal_buffer).offset(0)
         .range(size_of::<glm::Vec4>() as vk::DeviceSize * vertices.len() as vk::DeviceSize)];
 
-      let nrm_buffer_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(6).dst_array_element(0)
+      let norms_write = vk::WriteDescriptorSet::default()
+        .dst_set(global_descriptor_sets[i]).dst_binding(4).dst_array_element(0)
         .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(&nrm_buffer_info);
+        .buffer_info(&norms_buffer_info);
 
-      let blas_instance_lut_buffer_info = [vk::DescriptorBufferInfo::default()
+      #[cfg(feature = "hardware")] let acc_structs = [tlas_handle];
+      #[cfg(feature = "hardware")] let mut as_info = 
+        vk::WriteDescriptorSetAccelerationStructureKHR::default().acceleration_structures(&acc_structs);
+
+      #[cfg(feature = "hardware")] 
+      let as_write = vk::WriteDescriptorSet::default()
+        .push_next(&mut as_info)
+        .dst_set(global_descriptor_sets[i]).dst_binding(5).dst_array_element(0)
+        .descriptor_count(1).descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR);
+
+      #[cfg(feature = "hardware")]
+      let instance_lut_buffer_info = [vk::DescriptorBufferInfo::default()
         .buffer(blas_instance_lut_buffer).offset(0)
         .range(size_of::<InstanceLUT>() as vk::DeviceSize * blas_instance_luts.len() as vk::DeviceSize)];
 
-      let blas_instance_lut_buffer_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(7).dst_array_element(0)
+      #[cfg(feature = "hardware")] 
+      let instance_lut_write = vk::WriteDescriptorSet::default()
+        .dst_set(global_descriptor_sets[i]).dst_binding(6).dst_array_element(0)
         .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(&blas_instance_lut_buffer_info);
+        .buffer_info(&instance_lut_buffer_info);
 
       // Samplable interface for image
       let sampler_info = [vk::DescriptorImageInfo::default().sampler(render_texture_sampler)];
       
       // Image as CombinedImageSampler
       let sampler_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(8).dst_array_element(0)
+        .dst_set(global_descriptor_sets[i]).dst_binding(7).dst_array_element(0)
         .descriptor_count(1).descriptor_type(vk::DescriptorType::SAMPLER)
         .image_info(&sampler_info);
 
@@ -2565,7 +2666,7 @@ impl Engine
       }
 
       let storage_image_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(9).dst_array_element(0)
+        .dst_set(global_descriptor_sets[i]).dst_binding(8).dst_array_element(0)
         .descriptor_count(storage_image_infos.len().try_into().unwrap())
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .image_info(&storage_image_infos);
@@ -2579,20 +2680,19 @@ impl Engine
       }
 
       let sampled_image_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(10).dst_array_element(0)
+        .dst_set(global_descriptor_sets[i]).dst_binding(9).dst_array_element(0)
         .descriptor_count(sampled_image_infos.len().try_into().unwrap())
         .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
         .image_info(&sampled_image_infos);
 
       let descriptor_writes = [
-        mvp_buffer_write,
-        cube_buffer_write, 
-        as_write,
-        colour_buffer_write,
-        index_buffer_write, 
-        uv_buffer_write,
-        nrm_buffer_write,
-        blas_instance_lut_buffer_write,
+        mvp_write,
+        colours_write,
+        indices_write, 
+        uvs_write,
+        norms_write,
+        #[cfg(feature = "hardware")] as_write,
+        #[cfg(feature = "hardware")] instance_lut_write,
         sampler_write,
         storage_image_write,
         sampled_image_write
@@ -2602,21 +2702,25 @@ impl Engine
       unsafe { device.update_descriptor_sets(&descriptor_writes, &[]) };
     }
     // Mapped Textures
-    let mat_variable_counts = [base_texture_image_views.len() as u32];
+    let mat_layouts = [descriptor_set_layout_material];
+
+    let mat_variable_counts = [gltf_texture_views.len() as u32];
     let mut mat_variable_count_info = vk::DescriptorSetVariableDescriptorCountAllocateInfo::default()
       .descriptor_counts(&mat_variable_counts);
 
-    let mat_layouts = [descriptor_set_layout_material];
-
+    #[cfg(feature = "hardware")]
     let mat_alloc_info = vk::DescriptorSetAllocateInfo::default()
       .push_next(&mut mat_variable_count_info)
       .descriptor_pool(descriptor_pool)
       .set_layouts(&mat_layouts);
 
+    #[cfg(not(feature = "hardware"))]
+    let mat_alloc_info = vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(&mat_layouts);
+
     let material_descriptor_sets = unsafe { 
       device.allocate_descriptor_sets(&mat_alloc_info).expect("failed to create material descriptor sets!") };
 
-    let mat_sampler_info = [vk::DescriptorImageInfo::default().sampler(base_texture_sampler)];
+    let mat_sampler_info = [vk::DescriptorImageInfo::default().sampler(gltf_texture_sampler)];
 
     let mat_sampler_write = vk::WriteDescriptorSet::default()
       .dst_set(material_descriptor_sets[0]).dst_binding(0).dst_array_element(0)
@@ -2626,11 +2730,19 @@ impl Engine
     unsafe { device.update_descriptor_sets(&[mat_sampler_write], &[]) };
 
     let mut mat_image_infos: Vec<vk::DescriptorImageInfo> = vec![];
-    mat_image_infos.reserve(base_texture_image_views.len());
-    for view in 0..base_texture_image_views.len() {
+    mat_image_infos.reserve(gltf_texture_views.len());
+    for view in 0..gltf_texture_views.len() {
       let image_info = vk::DescriptorImageInfo::default()
-        .image_view(base_texture_image_views[view]).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        .image_view(gltf_texture_views[view]).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
       mat_image_infos.push(image_info);
+    }
+
+    // Fill remainder of buffer with fallback textures
+    #[cfg(not(feature = "hardware"))]
+    if (mat_image_infos.len() as u32) < TEXTURES_DESCRIPTOR_ARRAY_LENGTH {
+      let image_info = vk::DescriptorImageInfo::default()
+        .image_view(fallback_texture_view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+      mat_image_infos.extend(vec![image_info; (TEXTURES_DESCRIPTOR_ARRAY_LENGTH as usize) - mat_image_infos.len()]);
     }
 
     let material_write = vk::WriteDescriptorSet::default()
@@ -2739,8 +2851,8 @@ impl Engine
     let fence = self.in_flight_fences[self.current_frame];
     let global_descriptor_set = self.global_descriptor_sets[self.current_frame];
     let material_descriptor_set = self.material_descriptor_sets[0];
-    let depth_image = self.depth_image.0;
-    let depth_view = self.depth_image_view;
+    let depth_image = self.depth_image_data.images[0].0;
+    let depth_view = self.depth_image_data.views[0];
 
     let debug_gui_context = self.debug_gui_context.as_mut().unwrap();
     let camera = &mut self.camera;
@@ -2783,8 +2895,8 @@ impl Engine
     }.unwrap();
 
     let swapchain_extent = self.swapchain_extent;
-    let image = self.swapchain_images[image_index as usize];
-    let view = self.swapchain_image_views[image_index as usize];
+    let image = self.swapchain_image_data.images[image_index as usize].0;
+    let view = self.swapchain_image_data.views[image_index as usize];
     
     // Wait until next image is acquired
     while match unsafe {
@@ -2852,7 +2964,7 @@ impl Engine
         context, renderer, draw_data, draw_command_buffer, pipeline, image, view, swapchain_extent, 
         depth_image, depth_view, global_descriptor_set, material_descriptor_set,
         #[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] 
-        (self.vertex_buffer.0, self.index_buffer.0, &self.submeshes),
+        (self.vertex_data.vertex_buffer.0, self.vertex_data.index_buffer.0, &self.submeshes),
         #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
         (self.triangle_vertex_buffer.0, self.triangle_index_buffer.0)
       );
@@ -2948,10 +3060,11 @@ impl Engine
 
     context.swapchain_khr = swapchain_khr;
     self.swapchain_extent = swapchain_extent;
-    self.swapchain_images = swapchain_images;
-    self.swapchain_image_views = swapchain_image_views;
-    self.depth_image = depth_image;
-    self.depth_image_view = depth_image_view;
+    self.swapchain_image_data = ImageData { 
+      images: swapchain_images.iter().map(|&img| (img, vk::DeviceMemory::null())).collect(), 
+      views: swapchain_image_views, sampler: None 
+    };
+    self.depth_image_data = ImageData { images: vec![depth_image], views: vec![depth_image_view], sampler: None };
 
     self.reload_shaders();
   }
@@ -2962,10 +3075,11 @@ impl Engine
     let context = self.context.as_ref().unwrap();
     let device = &context.device; let swapchain = &context.swapchain; let swapchain_khr = context.swapchain_khr;
     unsafe {
-      device.destroy_image_view(self.depth_image_view, None);
-      device.destroy_image(self.depth_image.0, None);
-      device.free_memory(self.depth_image.1, None);
-      self.swapchain_image_views.iter().for_each(|view| device.destroy_image_view(*view, None));
+      self.depth_image_data.views.iter().for_each(|&view| device.destroy_image_view(view, None));
+      self.depth_image_data.images.iter().for_each(|&img| 
+        { device.destroy_image(img.0, None); device.free_memory(img.1, None); } 
+      );
+      self.swapchain_image_data.views.iter().for_each(|&view| device.destroy_image_view(view, None));
       swapchain.destroy_swapchain(swapchain_khr, None);
     }
   }
@@ -3209,11 +3323,18 @@ impl Engine
   // We just need the vertices stored on the GPU. We will instruct the GPU on how to interpret the data later.
   fn create_vertex_buffer(context: &EngineContext, verts: &Vec<Vertex>) -> (vk::Buffer, vk::DeviceMemory)
   {
+    #[cfg(feature = "hardware")]
     let usage_flags = 
       vk::BufferUsageFlags::VERTEX_BUFFER | 
       vk::BufferUsageFlags::TRANSFER_DST | 
       vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
       vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
+
+    #[cfg(not(feature = "hardware"))]
+    let usage_flags = 
+      vk::BufferUsageFlags::VERTEX_BUFFER | 
+      vk::BufferUsageFlags::TRANSFER_DST;
+
     return Self::create_buffer_from_vector(context, verts, usage_flags);
   }
 
@@ -3272,13 +3393,20 @@ impl Engine
     let targets = [target_desc];
 
     // Some options that ensure proper output
+    #[cfg(feature = "hardware")]
     let compiler_option_entries = slang::CompilerOptions::default()
       .vulkan_use_entry_point_name(true)
       .matrix_layout_column(true)
       .emit_spirv_directly(true)
       .capability(global_session.find_capability("vk_mem_model"))
-      .capability(global_session.find_capability("spvRayQueryKHR"))
-      .capability(global_session.find_capability("ComputeDerivativeGroupQuadsKHR"));
+      .capability(global_session.find_capability("spvRayQueryKHR"));
+
+    #[cfg(not(feature = "hardware"))]
+    let compiler_option_entries = slang::CompilerOptions::default()
+      .vulkan_use_entry_point_name(true)
+      .matrix_layout_column(true)
+      .emit_spirv_directly(true)
+      .capability(global_session.find_capability("vk_mem_model"));
 
     // Slang likes to look for the files by itself, even if you pass in an absolute path, so direct it to look in the
     // parent directory of src
