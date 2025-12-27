@@ -42,6 +42,7 @@ use shader_slang as slang;
 //============================== User-Defined Structs ==============================//
 use crate::camera::Camera; // Provides a global MVP matrix a.k.a. Camera
 use crate::vertex::Vertex; // Hashable Vertex primitive, with position, colour and uvs
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
 use crate::buffer_structs::InstanceLUT; // Structs for passing data to shaders
 use crate::buffer_structs::SubMesh;
 
@@ -75,7 +76,7 @@ const TEXTURES_DESCRIPTOR_ARRAY_LENGTH: u32 = 32;
 #[cfg(not(feature = "hardware"))] const SHADER_ROOT_PATH: &'static str = "assets/shaders/software";
 
 #[cfg(feature = "reference")]
-const DEFAULT_SLANG_PATH: &'static str = "reference.slang";
+const DEFAULT_SLANG_PATH: &'static str = "sw_reference.slang";
 #[cfg(feature = "restir")]
 const DEFAULT_SLANG_PATH: &'static str = "restir.slang";
 #[cfg(feature = "radiance_cascades")]
@@ -177,8 +178,10 @@ pub struct DebugGuiContext {
   delta: u128,
 }
 
+#[cfg(feature = "hardware")]
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
 #[derive(Default)]
-pub struct AccelerationStructureData {
+pub struct RayTraceData {
   blas_handles: Vec<vk::AccelerationStructureKHR>,
   blas_instance_buffer: (vk::Buffer, vk::DeviceMemory),
   
@@ -187,6 +190,14 @@ pub struct AccelerationStructureData {
   
   blas_instance_luts: Vec<InstanceLUT>,
   blas_instance_lut_buffer: (vk::Buffer, vk::DeviceMemory),
+}
+
+#[cfg(not(feature = "hardware"))]
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[derive(Default)]
+pub struct RayTraceData {
+  instance_luts: Vec<InstanceLUT>,
+  instance_lut_buffer: (vk::Buffer, vk::DeviceMemory)
 }
 
 #[derive(Default)]
@@ -242,11 +253,14 @@ pub struct Engine {
   gltf_textures_data: ImageData,
   
   vertex_data: VertexData,
-  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] triangle_vertex_buffer: (vk::Buffer, vk::DeviceMemory),
-  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] triangle_index_buffer: (vk::Buffer, vk::DeviceMemory),
+  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+  triangle_vertex_buffer: (vk::Buffer, vk::DeviceMemory),
+  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+  triangle_index_buffer: (vk::Buffer, vk::DeviceMemory),
   
   // Acceleration Structures
-  #[cfg(feature = "hardware")] acceleration_structure_data: AccelerationStructureData,
+  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+  ray_trace_data: RayTraceData,
   
   // create_indirect_commands
   // indirect_commands: Vec<vk::DrawIndexedIndirectCommand>,

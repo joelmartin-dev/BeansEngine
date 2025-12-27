@@ -166,12 +166,12 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
             }
 
             if (rq.CommittedStatus() == COMMITTED_NOTHING) {
-                if (dot(rayDirection, pc.lightDir) > 0.9) {
-                    accumCol *= float3(pc.intensity);
-                } else {
-                    accumCol *= float3(0.0);
-                }
-                //accumCol *= skyColour(rayDirection, pc.lightDir, pc.intensity);
+                // if (dot(rayDirection, pc.lightDir) > 0.9) {
+                //     accumCol *= float3(pc.intensity);
+                // } else {
+                //     accumCol *= float3(0.0);
+                // }
+                accumCol *= skyColour(rayDirection, pc.lightDir, pc.intensity);
                 summedPixelCol += accumCol;
                 
                 break;
