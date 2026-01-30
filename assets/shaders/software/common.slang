@@ -52,14 +52,6 @@ public struct InstanceLUT {
 // Sampler of the written-to image
 [[vk::binding(7, 0)]] public SamplerState sampler;
 
-// Write access to StorageImages
-[vk_image_format("rgba32f")]
-[[vk::binding(8, 0)]] public RWTexture2D<float4> outImage[2];
-
-// Sample access to StorageImages
-[vk_image_format("rgba32f")]
-[[vk::binding(9, 0)]] public Texture2D<float4> renderTextures[2];
-
 // Sampler for texture array
 [[vk::binding(0, 1)]] public SamplerState textureSampler;
 

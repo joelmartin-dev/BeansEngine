@@ -2535,8 +2535,10 @@ impl Engine
       // Compute Output Image Sampler
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLER).descriptor_count(descriptor_count),
       // Compute Output Writable Image
+      #[cfg(feature = "hardware")]
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(descriptor_count * render_texture_views.len() as u32),
+      #[cfg(feature = "hardware")]
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLED_IMAGE)
         .descriptor_count(descriptor_count * render_texture_views.len() as u32),
       // Material Texture Sampler
@@ -2583,6 +2585,8 @@ impl Engine
     let colour_buffer = vertex_data.colour_buffer.0;
     let uv_buffer = vertex_data.uv_buffer.0;
     let normal_buffer = vertex_data.nrm_buffer.0;
+
+    #[cfg(feature = "hardware")]
     #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
     let (instance_luts, instance_lut_buffer) = {
       (
@@ -2593,8 +2597,11 @@ impl Engine
     // STANDARD 3D MODELS
     // Shader Resources
     // [value; num_of_copies]
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
     let views_count = render_texture_views.len();
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
     let variable_counts = [views_count as u32; MAX_FRAMES_IN_FLIGHT];
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
     let mut variable_count_info = vk::DescriptorSetVariableDescriptorCountAllocateInfo::default()
       .descriptor_counts(&variable_counts);
     
@@ -2602,10 +2609,12 @@ impl Engine
     let global_layouts = [descriptor_set_layout_global; MAX_FRAMES_IN_FLIGHT];
 
     // Collate the relevant info (DescriptorPool and DescriptorSetLayouts)
-    let global_alloc_info = vk::DescriptorSetAllocateInfo::default()
-      .push_next(&mut variable_count_info)
+    let mut global_alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(descriptor_pool)
       .set_layouts(&global_layouts);
+
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+    global_alloc_info.push_next(&mut variable_count_info);
 
     let global_descriptor_sets = unsafe {
         device.allocate_descriptor_sets(&global_alloc_info)
@@ -2669,12 +2678,12 @@ impl Engine
         .dst_set(global_descriptor_sets[i]).dst_binding(5).dst_array_element(0)
         .descriptor_count(1).descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR);
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+#[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
       let instance_lut_buffer_info = [vk::DescriptorBufferInfo::default()
         .buffer(instance_lut_buffer).offset(0)
         .range(size_of::<InstanceLUT>() as vk::DeviceSize * instance_luts.len() as vk::DeviceSize)];
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+#[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
       let instance_lut_write = vk::WriteDescriptorSet::default()
         .dst_set(global_descriptor_sets[i]).dst_binding(6).dst_array_element(0)
         .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
@@ -2689,28 +2698,36 @@ impl Engine
         .descriptor_count(1).descriptor_type(vk::DescriptorType::SAMPLER)
         .image_info(&sampler_info);
 
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
       let mut storage_image_infos: Vec<vk::DescriptorImageInfo> = vec![];
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
       storage_image_infos.reserve(views_count);
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
       for view in 0..views_count {
         let image_info = vk::DescriptorImageInfo::default()
           .image_view(render_texture_views[view]).image_layout(vk::ImageLayout::GENERAL);
         storage_image_infos.push(image_info);
       }
 
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
       let storage_image_write = vk::WriteDescriptorSet::default()
         .dst_set(global_descriptor_sets[i]).dst_binding(8).dst_array_element(0)
         .descriptor_count(storage_image_infos.len().try_into().unwrap())
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .image_info(&storage_image_infos);
 
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
       let mut sampled_image_infos: Vec<vk::DescriptorImageInfo> = vec![];
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
       sampled_image_infos.reserve(views_count);
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
       for view in 0..views_count {
         let image_info = vk::DescriptorImageInfo::default()
           .image_view(render_texture_views[view]).image_layout(vk::ImageLayout::GENERAL);
         sampled_image_infos.push(image_info);
       }
 
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
       let sampled_image_write = vk::WriteDescriptorSet::default()
         .dst_set(global_descriptor_sets[i]).dst_binding(9).dst_array_element(0)
         .descriptor_count(sampled_image_infos.len().try_into().unwrap())
@@ -2724,12 +2741,15 @@ impl Engine
         uvs_write,
         norms_write,
 #[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] 
-        #[cfg(feature = "hardware")] as_write,
+        as_write,
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
         instance_lut_write,
         sampler_write,
+
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
         storage_image_write,
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
         sampled_image_write
       ];
 

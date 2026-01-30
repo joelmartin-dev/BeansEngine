@@ -14,11 +14,19 @@ VSOutput vertMain(VSInput input) {
     return output;
 }
 
+// Write access to StorageImages
+[vk_image_format("rgba32f")]
+[[vk::binding(8, 0)]] public RWTexture2D<float4> outImage;
+
+// Sample access to StorageImages
+[vk_image_format("rgba32f")]
+[[vk::binding(9, 0)]] public Texture2D<float4> renderTextures;
+
 // Sample the StorageImage using fullscreen triangle
 [shader("fragment")]
 float4 fragMain(VSOutput vertIn) : SV_TARGET {
     // return float4(vertIn.fragTexCoord, 0.0, 1.0);
-    return renderTextures[0].Sample(textureSampler, vertIn.fragTexCoord);
+    return renderTextures.Sample(textureSampler, vertIn.fragTexCoord);
 }
 
 // Constantly-changing small data
@@ -106,7 +114,7 @@ void compMain(uint3 threadIdx: SV_DispatchThreadID)
     
     // Get StorageImage's resolution
     uint2 imgSize;
-    outImage[0].GetDimensions(imgSize.x, imgSize.y);
+    outImage.GetDimensions(imgSize.x, imgSize.y);
     
     // if this pixel is not in the image, don't do the work
     if (pixelCoords.x >= imgSize.x || pixelCoords.y >= imgSize.y) return;
