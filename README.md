@@ -18,6 +18,7 @@
 Add `--release` for release target (long compilation time).
 ## Requirements
 - **rustup**: Rust language toolchain manager (includes **cargo**: https://rust-lang.org/tools/install/)
+- **LLVM**: C++ toolchain (for shader-slang-sys)
 - **ShaderSlang**: required to generate bindings for shader-slang-sys, can be in **VulkanSDK** if opted for at install
 
 ### Recommended

@@ -62,7 +62,7 @@ impl ApplicationHandler for App {
             },
             PhysicalKey::Code(KeyCode::KeyA) => {
               if event.state == ElementState::Pressed && !event.repeat && self.modifiers_state.alt_key() {
-                engine.rebuild_acceleration_structures();
+                #[cfg(feature = "hardware")] engine.rebuild_acceleration_structures();
               }
             }
             _ => ()

@@ -5,7 +5,8 @@ mod app_methods;
 use std::u32;
 use std::ffi::CStr;
 
-use ash::khr::{acceleration_structure, surface, swapchain};
+use ash::khr::{surface, swapchain};
+#[cfg(feature = "hardware")] use ash::khr::acceleration_structure;
 //====== Vulkan Types and Functions ======//
 use ash::{Device, Instance, vk};
 use ash::Entry;
@@ -41,6 +42,7 @@ use shader_slang as slang;
 //============================== User-Defined Structs ==============================//
 use crate::camera::Camera; // Provides a global MVP matrix a.k.a. Camera
 use crate::vertex::Vertex; // Hashable Vertex primitive, with position, colour and uvs
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
 use crate::buffer_structs::InstanceLUT; // Structs for passing data to shaders
 use crate::buffer_structs::SubMesh;
 
@@ -64,9 +66,14 @@ const WORKGROUP_SIZE: [u32; 2] = [8, 8];
 // Stochastic approaches only use 1 render texture
 #[cfg(not(feature = "radiance_cascades"))] const MAX_RENDER_TEXTURES: u32 = 1;
 
+const TEXTURES_DESCRIPTOR_ARRAY_LENGTH: u32 = 32;
+
 // Default asset paths
 #[cfg(feature = "sponza")] const DEFAULT_MODEL_PATH: &'static str = "assets/sponza/Sponza.gltf";
 #[cfg(not(feature = "sponza"))] const DEFAULT_MODEL_PATH: &'static str = "assets/suzanne/SuzanneCornell_Opt.gltf";
+
+#[cfg(feature = "hardware")] const SHADER_ROOT_PATH: &'static str = "assets/shaders/hardware";
+#[cfg(not(feature = "hardware"))] const SHADER_ROOT_PATH: &'static str = "assets/shaders/software";
 
 #[cfg(feature = "reference")]
 const DEFAULT_SLANG_PATH: &'static str = "assets/shaders/reference.slang";
@@ -76,6 +83,7 @@ const DEFAULT_SLANG_PATH: &'static str = "assets/shaders/radiance_cascades.slang
 const DEFAULT_SLANG_PATH: &'static str = "assets/shaders/raster.slang";
 
 const DEFAULT_SPIRV_PATH: &'static str = "assets/shaders/shader.spv";
+const FALLBACK_TEXTURE_PATH: &'static str = "assets/fallback.png";
 
 /*===================================================== Terminology ==================================================//
        Surface: an abstraction of an image, something a framebuffer can present to
@@ -152,8 +160,8 @@ pub struct EngineContext {
   command_pool: vk::CommandPool,
   swapchain: swapchain::Device,
   swapchain_khr: vk::SwapchainKHR,
-  as_device: acceleration_structure::Device,
   global_session: slang::GlobalSession,
+  #[cfg(feature = "hardware")] as_device: acceleration_structure::Device,
 }
 
 pub struct DebugGuiContext {
@@ -168,6 +176,44 @@ pub struct DebugGuiContext {
   delta: u128,
 }
 
+#[cfg(feature = "hardware")]
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[derive(Default)]
+pub struct RayTraceData {
+  blas_handles: Vec<vk::AccelerationStructureKHR>,
+  blas_instance_buffer: (vk::Buffer, vk::DeviceMemory),
+  
+  tlas_handle: vk::AccelerationStructureKHR,
+  tlas_buffer: (vk::Buffer, vk::DeviceMemory),
+  
+  blas_instance_luts: Vec<InstanceLUT>,
+  blas_instance_lut_buffer: (vk::Buffer, vk::DeviceMemory),
+}
+
+#[cfg(not(feature = "hardware"))]
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[derive(Default)]
+pub struct RayTraceData {
+  instance_luts: Vec<InstanceLUT>,
+  instance_lut_buffer: (vk::Buffer, vk::DeviceMemory)
+}
+
+#[derive(Default)]
+pub struct VertexData {
+  vertex_buffer: (vk::Buffer, vk::DeviceMemory),
+  index_buffer: (vk::Buffer, vk::DeviceMemory),
+  colour_buffer: (vk::Buffer, vk::DeviceMemory),
+  uv_buffer: (vk::Buffer, vk::DeviceMemory),
+  nrm_buffer: (vk::Buffer, vk::DeviceMemory),
+}
+
+#[derive(Default)]
+pub struct ImageData {
+  images: Vec<(vk::Image, vk::DeviceMemory)>,
+  views: Vec<vk::ImageView>,
+  sampler: Option<vk::Sampler>,
+}
+
 #[derive(Default)]
 pub struct Engine {
   context: Option<EngineContext>,
@@ -177,11 +223,9 @@ pub struct Engine {
   
   swapchain_extent: vk::Extent2D,
   swapchain_present_mode: vk::PresentModeKHR,
-  swapchain_images: Vec<vk::Image>,
-  swapchain_image_views: Vec<vk::ImageView>,
+  swapchain_image_data: ImageData,
   
-  depth_image: (vk::Image, vk::DeviceMemory),
-  depth_image_view: vk::ImageView,
+  depth_image_data: ImageData,
   
   draw_command_buffers: Vec<vk::CommandBuffer>,
   compute_command_buffers: Vec<vk::CommandBuffer>,
@@ -198,13 +242,13 @@ pub struct Engine {
   compute_pipeline: (vk::PipelineLayout, vk::Pipeline),
   
   mvp_buffers: Vec<(vk::Buffer, vk::DeviceMemory)>,
+
+  fallback_texture_data: ImageData,
   
   vertices: Vec<Vertex>,
   indices: Vec<u32>,
   submeshes: Vec<SubMesh>,
-  base_texture_images: Vec<(vk::Image, vk::DeviceMemory)>,
-  base_texture_image_views: Vec<vk::ImageView>,
-  base_texture_sampler: vk::Sampler,
+  gltf_textures_data: ImageData,
   
   vertex_buffer: (vk::Buffer, vk::DeviceMemory),
   #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_vertex_buffer: (vk::Buffer, vk::DeviceMemory),
@@ -217,14 +261,8 @@ pub struct Engine {
   nrm_buffer: (vk::Buffer, vk::DeviceMemory),
 
   // Acceleration Structures
-  blas_handles: Vec<vk::AccelerationStructureKHR>,
-  blas_instance_buffer: (vk::Buffer, vk::DeviceMemory),
-  
-  tlas_handle: vk::AccelerationStructureKHR,
-  tlas_buffer: (vk::Buffer, vk::DeviceMemory),
-  
-  blas_instance_luts: Vec<InstanceLUT>,
-  blas_instance_lut_buffer: (vk::Buffer, vk::DeviceMemory),
+  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+  ray_trace_data: RayTraceData,
   
   // create_indirect_commands
   // indirect_commands: Vec<vk::DrawIndexedIndirectCommand>,
@@ -232,9 +270,7 @@ pub struct Engine {
   
   // create_render_texture
   initial_render_texture_extent: vk::Extent2D,
-  render_textures: Vec<(vk::Image, vk::DeviceMemory)>,
-  render_texture_views: Vec<vk::ImageView>,
-  render_texture_sampler: vk::Sampler,
+  render_textures_data: ImageData,
   
   // create_descriptor_pools
   descriptor_pool: vk::DescriptorPool,

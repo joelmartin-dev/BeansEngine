@@ -12,15 +12,15 @@ pub struct MVP {
   pub inv_proj: glm::Mat4
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct CubeTransforms {
-  pub model: glm::Mat4,
-  pub view: glm::Mat4,
-  pub inv_view: glm::Mat4,
-  pub proj: glm::Mat4,
-  pub inv_proj: glm::Mat4
-}
+// #[repr(C)]
+// #[derive(Clone, Copy)]
+// pub struct CubeTransforms {
+//   pub model: glm::Mat4,
+//   pub view: glm::Mat4,
+//   pub inv_view: glm::Mat4,
+//   pub proj: glm::Mat4,
+//   pub inv_proj: glm::Mat4
+// }
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
@@ -37,7 +37,6 @@ pub struct PathTracePushConstant {
 #[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
 pub struct RasterPushConstant {
   pub material_index: u32,
-  pub instance_id: u32
 }
 
 #[repr(C)]
@@ -72,6 +71,7 @@ pub struct SubMesh {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
 pub struct InstanceLUT {
   pub material_id: u32,
   pub index_buffer_offset: u32
