@@ -49,15 +49,15 @@ use crate::buffer_structs::SubMesh;
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 // Screen resolution defaults
-const RES: [u32; 2] = [1440, 900];
+const RES: [u32; 2] = [800, 600];
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
 const WORKGROUP_SIZE: [u32; 2] = [8, 8];
 
 // Maximum number of cascades to calculate, less is permitted. Used to iteratively instantiate render textures
-#[cfg(feature = "radiance_cascades")] const MAX_RENDER_TEXTURES: u32 = 8;
+#[cfg(feature = "radiance_cascades")] const MAX_RENDER_TEXTURES: u32 = 4;
 // Number of probes in Cascade 0, given as width and height
-#[cfg(feature = "radiance_cascades")] const CASCADE_0_PROBES: [u32; 2] = [1440, 900];
+#[cfg(feature = "radiance_cascades")] const CASCADE_0_PROBES: [u32; 2] = [800, 600];
 // Cascade 0 Probes are always square, just define a side length > 1
 #[cfg(feature = "radiance_cascades")] const CASCADE_0_RAYS: u32 = 16;
 
@@ -70,11 +70,9 @@ const WORKGROUP_SIZE: [u32; 2] = [8, 8];
 
 #[cfg(feature = "reference")]
 const DEFAULT_SLANG_PATH: &'static str = "assets/shaders/reference.slang";
-#[cfg(feature = "restir")]
-const DEFAULT_SLANG_PATH: &'static str = "assets/shaders/restir.slang";
 #[cfg(feature = "radiance_cascades")]
 const DEFAULT_SLANG_PATH: &'static str = "assets/shaders/radiance_cascades.slang";
-#[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
+#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
 const DEFAULT_SLANG_PATH: &'static str = "assets/shaders/raster.slang";
 
 const DEFAULT_SPIRV_PATH: &'static str = "assets/shaders/shader.spv";
@@ -209,10 +207,10 @@ pub struct Engine {
   base_texture_sampler: vk::Sampler,
   
   vertex_buffer: (vk::Buffer, vk::DeviceMemory),
-  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] triangle_vertex_buffer: (vk::Buffer, vk::DeviceMemory),
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_vertex_buffer: (vk::Buffer, vk::DeviceMemory),
   
   index_buffer: (vk::Buffer, vk::DeviceMemory),
-  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] triangle_index_buffer: (vk::Buffer, vk::DeviceMemory),
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_index_buffer: (vk::Buffer, vk::DeviceMemory),
   
   colour_buffer: (vk::Buffer, vk::DeviceMemory),
   uv_buffer: (vk::Buffer, vk::DeviceMemory),

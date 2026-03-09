@@ -8,9 +8,8 @@ use std::{u64, f32};
 
 use crate::buffer_structs::{CubeTransforms, InstanceLUT, MVP, SubMesh};
 #[cfg(feature = "reference")] use crate::buffer_structs::PathTracePushConstant;
-#[cfg(feature = "restir")]  use crate::buffer_structs::ReSTIRPushConstant;
 #[cfg(feature = "radiance_cascades")] use crate::buffer_structs::RadianceCascadesPushConstant;
-#[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] 
+#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))] 
 use crate::buffer_structs::RasterPushConstant;
 
 use crate::engine::{
@@ -18,12 +17,12 @@ use crate::engine::{
   DebugGuiContext, ENABLE_VALIDATION_LAYERS, Engine, EngineContext, 
   MAX_FRAMES_IN_FLIGHT, MAX_RENDER_TEXTURES, RES, VALIDATION_LAYERS
 };
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
 use crate::engine::WORKGROUP_SIZE;
 #[cfg(feature = "radiance_cascades")] use crate::engine::{CASCADE_0_PROBES, CASCADE_0_RAYS};
 use crate::camera::Camera;
 //use crate::model::CUBE;
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
 use crate::model::TRIANGLE;
 use crate::vertex::Vertex;
 use ash::util::Align;
@@ -63,7 +62,9 @@ unsafe extern "system" fn debug_callback(
   // If msg_severity is error, print error else print warning
   let severity = 
     if msg_severity & vk::DebugUtilsMessageSeverityFlagsEXT::ERROR == msg_severity { "error" } 
-    else { "warning" };
+    else if msg_severity & vk::DebugUtilsMessageSeverityFlagsEXT::WARNING == msg_severity { "warning" } 
+    else if msg_severity & vk::DebugUtilsMessageSeverityFlagsEXT::INFO == msg_severity { "info" }
+    else { "verbose" };
 
   println!("validation layer: type {} msg: {}", severity,
     // The message is passed as a pointer to a CStr. Reconstruct the message and convert it to a UTF-8 str slice
@@ -108,7 +109,7 @@ impl Engine
     let required_device_extensions = vec![
       vk::KHR_SWAPCHAIN_NAME, vk::KHR_SPIRV_1_4_NAME, vk::KHR_SYNCHRONIZATION2_NAME, vk::KHR_CREATE_RENDERPASS2_NAME, 
       vk::KHR_ACCELERATION_STRUCTURE_NAME, vk::KHR_BUFFER_DEVICE_ADDRESS_NAME, vk::KHR_DEFERRED_HOST_OPERATIONS_NAME, 
-      vk::KHR_RAY_QUERY_NAME, vk::NV_COMPUTE_SHADER_DERIVATIVES_NAME, // will become KHR in ash v0.39.0
+      vk::KHR_RAY_QUERY_NAME
     ];
 
     // Select a physical device
@@ -223,7 +224,7 @@ impl Engine
     let mvp_buffers = Self::create_uniform_buffers(&context);
 
     let vertex_buffer = Self::create_vertex_buffer(&context, &vertices);
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
     // The triangle that the render texture is rendered to
     let triangle_vertex_buffer = Self::create_vertex_buffer(&context, &TRIANGLE.vertices);
     
@@ -231,7 +232,7 @@ impl Engine
       vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER |
       vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
     );
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
     let triangle_index_buffer = Self::create_index_buffer(&context, &TRIANGLE.indices, vk::BufferUsageFlags::default());
     
     let colour_buffer = Self::create_colour_buffer(&context, &vertices);
@@ -290,8 +291,8 @@ impl Engine
       base_texture_sampler,
       vertex_buffer,
       index_buffer,
-      #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] triangle_vertex_buffer,
-      #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] triangle_index_buffer,
+      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_vertex_buffer,
+      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_index_buffer,
       colour_buffer,
       uv_buffer,
       nrm_buffer,
@@ -356,7 +357,7 @@ impl Engine
       if !layer_is_available { panic!("Required layer {:?} not available", required_layer); }
     });
 
-    let mut extension_names: Vec<*const i8> = vec![];
+    let mut extension_names: Vec<*const i8> = vec![vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME.as_ptr()];
     extension_names.extend_from_slice(
       ash_window::enumerate_required_extensions(window.display_handle().unwrap().into()
     ).unwrap());
@@ -449,7 +450,6 @@ impl Engine
           available_extension.extension_name_as_c_str().unwrap() == extension)
       );
 
-      let mut compute_shader_derivatives_features = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default();
       let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
       let mut acceleration_structure_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
       let mut extended_dynamic_state_features = vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT::default();
@@ -458,9 +458,7 @@ impl Engine
 
       // Build the pNext chain (in reverse order)
       // Each structure's pNext points to the next one in the chain
-      compute_shader_derivatives_features.p_next = std::ptr::null_mut();
-      ray_query_features.p_next = 
-        &mut compute_shader_derivatives_features as *mut _ as *mut c_void;
+      ray_query_features.p_next = std::ptr::null_mut();
       acceleration_structure_features.p_next = 
         &mut ray_query_features as *mut _ as *mut c_void;
       extended_dynamic_state_features.p_next = 
@@ -502,9 +500,7 @@ impl Engine
         vulkan_12_features.timeline_semaphore != vk::FALSE &&
         acceleration_structure_features.acceleration_structure != vk::FALSE &&
         acceleration_structure_features.descriptor_binding_acceleration_structure_update_after_bind != vk::FALSE &&
-        ray_query_features.ray_query != vk::FALSE &&
-        // Allows linear sampling in compute shader stage
-        compute_shader_derivatives_features.compute_derivative_group_quads != vk::FALSE;
+        ray_query_features.ray_query != vk::FALSE;
           
       // If all true, this physical device is fit for purpose and we can stop checking
       return supports_vulkan_1_3 &&
@@ -563,14 +559,12 @@ impl Engine
       .descriptor_binding_acceleration_structure_update_after_bind(true);
     let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default()
       .ray_query(true);
-    let mut compute_shader_derivatives_features = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default()
-      .compute_derivative_group_quads(true);
 
     // Build the pNext chain (in reverse order)
     // Each structure's pNext points to the next one in the chain
-    compute_shader_derivatives_features.p_next = std::ptr::null_mut();
-    ray_query_features.p_next = 
-        &mut compute_shader_derivatives_features as *mut _ as *mut c_void;
+    // compute_shader_derivatives_features.p_next = std::ptr::null_mut();
+    ray_query_features.p_next = std::ptr::null_mut();
+        // &mut compute_shader_derivatives_features as *mut _ as *mut c_void;
     acceleration_structure_features.p_next = 
         &mut ray_query_features as *mut _ as *mut c_void;
     extended_dynamic_state_features.p_next = 
@@ -1206,7 +1200,7 @@ impl Engine
       .mip_lod_bias(0.0).anisotropy_enable(false)
       .compare_enable(false).compare_op(vk::CompareOp::ALWAYS)
       .min_lod(0.0).max_lod(vk::LOD_CLAMP_NONE)
-      .anisotropy_enable(cfg!(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))))
+      .anisotropy_enable(cfg!(not(any(feature = "reference", feature = "radiance_cascades"))))
       .max_anisotropy(anisotropy);
 
     let base_texture_sampler = unsafe {
@@ -2647,8 +2641,8 @@ impl Engine
 
   fn setup_imgui_frame(
     debug_gui_context: &mut DebugGuiContext, camera: &mut Camera, 
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] mut intensity: &mut f32, 
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] sun_direction: &mut glm::Vec3,
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] mut intensity: &mut f32, 
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] sun_direction: &mut glm::Vec3,
     #[cfg(feature = "radiance_cascades")] mut interval: &mut f32,
     window: &Window
   )
@@ -2695,7 +2689,7 @@ impl Engine
 
         ui.spacing();
 
-        #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] {
+        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] {
           ui.text_wrapped("Light Direction");
           ui.slider("Intensity", 0.0, 100.0, &mut intensity);
           ui.slider("LX", -1.0, 1.0, &mut sun_direction.x);
@@ -2746,12 +2740,12 @@ impl Engine
     let camera = &mut self.camera;
     Self::setup_imgui_frame(
       debug_gui_context, camera,
-      #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] &mut self.sun_intensity,
-      #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] &mut self.sun_dir,
+      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] &mut self.sun_intensity,
+      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] &mut self.sun_dir,
       #[cfg(feature = "radiance_cascades")] &mut self.interval,
       window
     );
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] {
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] {
       if self.sun_intensity != self.old_sun_intensity { self.old_sun_intensity = self.sun_intensity; self.frame = 0; }
       if self.sun_dir != self.old_sun_dir { self.old_sun_dir = self.sun_dir; self.frame = 0; }
     }
@@ -2822,7 +2816,12 @@ impl Engine
 
       Self::record_compute_command_buffers(
         context, compute_command_buffer, compute_pipeline, global_descriptor_set, material_descriptor_set,
-        #[cfg(feature = "reference")] self.initial_render_texture_extent, #[cfg(feature = "reference")] &push_constant);
+        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] self.initial_render_texture_extent, 
+        #[cfg(feature = "reference")] &push_constant,
+        #[cfg(feature = "radiance_cascades")] self.interval, 
+        #[cfg(feature = "radiance_cascades")] self.sun_intensity, 
+        #[cfg(feature = "radiance_cascades")] self.sun_dir, 
+      );
       let command_buffers = [compute_command_buffer];
 
       // Submission will wait for computeWaitValue
@@ -2851,10 +2850,13 @@ impl Engine
       Self::record_command_buffers(
         context, renderer, draw_data, draw_command_buffer, pipeline, image, view, swapchain_extent, 
         depth_image, depth_view, global_descriptor_set, material_descriptor_set,
-        #[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] 
+        #[cfg(not(any(feature = "reference", feature = "radiance_cascades")))] 
         (self.vertex_buffer.0, self.index_buffer.0, &self.submeshes),
-        #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-        (self.triangle_vertex_buffer.0, self.triangle_index_buffer.0)
+        #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
+        (self.triangle_vertex_buffer.0, self.triangle_index_buffer.0),
+        #[cfg(feature = "radiance_cascades")] self.interval, 
+        #[cfg(feature = "radiance_cascades")] self.sun_intensity, 
+        #[cfg(feature = "radiance_cascades")] self.sun_dir
       );
 
       // Would ideally be in record_command_buffer, but requires mutable reference to object in self
@@ -3069,11 +3071,9 @@ impl Engine
       offset: 0,
 #[cfg(feature = "reference")]
       size: size_of::<PathTracePushConstant>().try_into().unwrap(),
-#[cfg(feature = "restir")]
-      size: size_of::<ReSTIRPushConstant>().try_into().unwrap(),
 #[cfg(feature = "radiance_cascades")]
       size: size_of::<RadianceCascadesPushConstant>().try_into().unwrap(),
-#[cfg(all(not(feature = "reference"), not(feature = "restir"), not(feature = "radiance_cascades")))]
+#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
       size: size_of::<RasterPushConstant>().try_into().unwrap(),
     }];
 
@@ -3138,11 +3138,9 @@ impl Engine
       offset: 0,
 #[cfg(feature = "reference")]
       size: size_of::<PathTracePushConstant>().try_into().unwrap(),
-#[cfg(feature = "restir")]
-      size: size_of::<ReSTIRPushConstant>().try_into().unwrap(),
 #[cfg(feature = "radiance_cascades")]
       size: size_of::<RadianceCascadesPushConstant>().try_into().unwrap(),
-#[cfg(all(not(feature = "reference"), not(feature = "restir"), not(feature = "radiance_cascades")))]
+#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
       size: size_of::<RasterPushConstant>().try_into().unwrap(),
     }];
 
@@ -3277,8 +3275,7 @@ impl Engine
       .matrix_layout_column(true)
       .emit_spirv_directly(true)
       .capability(global_session.find_capability("vk_mem_model"))
-      .capability(global_session.find_capability("spvRayQueryKHR"))
-      .capability(global_session.find_capability("ComputeDerivativeGroupQuadsKHR"));
+      .capability(global_session.find_capability("SPV_NV_compute_shader_derivatives"));
 
     // Slang likes to look for the files by itself, even if you pass in an absolute path, so direct it to look in the
     // parent directory of src
@@ -3330,7 +3327,7 @@ impl Engine
     }
   }
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
   fn cleanup_textures(context: &EngineContext, sampler: vk::Sampler, views: &Vec<vk::ImageView>, images: &Vec<(vk::Image, vk::DeviceMemory)>)
   {
     let device = &context.device;
@@ -3341,7 +3338,7 @@ impl Engine
     }
   }
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
   fn cleanup_descriptor_sets(context: &EngineContext, descriptor_pool: vk::DescriptorPool, descriptor_sets: &Vec<&Vec<vk::DescriptorSet>>)
   {
     let device = &context.device;
@@ -3380,12 +3377,12 @@ impl Engine
       self.descriptor_set_layout_global, self.descriptor_set_layout_material
     );
     
-  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] {
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))] {
       Self::cleanup_textures(context, self.render_texture_sampler, &self.render_texture_views, &self.render_textures);
       Self::cleanup_descriptor_sets(
         context, self.descriptor_pool, &vec![&self.global_descriptor_sets, &self.material_descriptor_sets]);
       let (initial_render_texture_extent, render_textures, render_texture_views, render_texture_sampler) = 
-        Self::create_render_texture(context, self.swapchain_extent);
+        Self::create_render_texture(context, #[cfg(not(feature = "radiance_cascades"))] self.swapchain_extent);
       
       let (global_descriptor_sets, material_descriptor_sets) = Self::create_descriptor_sets(
         context, &render_texture_views, &self.base_texture_image_views,
@@ -3442,11 +3439,11 @@ impl Engine
   fn record_compute_command_buffers(
     context: &EngineContext, command_buffer: vk::CommandBuffer, pipeline: (vk::PipelineLayout, vk::Pipeline),
     global_descriptor_set: vk::DescriptorSet, material_descriptor_set: vk::DescriptorSet,
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
-    initial_render_texture_extent: vk::Extent2D,
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] initial_render_texture_extent: vk::Extent2D,
     #[cfg(feature = "reference")] push_constant: &PathTracePushConstant, 
-    #[cfg(feature = "restir")] push_constant: &ReSTIRPushConstant,
-    #[cfg(feature = "radiance_cascades")] push_constant: &RadianceCascadesPushConstant,
+    #[cfg(feature = "radiance_cascades")] interval: f32,
+    #[cfg(feature = "radiance_cascades")] sun_intensity: f32,
+    #[cfg(feature = "radiance_cascades")] sun_dir: glm::Vec3,
   )
   {
     let device = &context.device;
@@ -3463,28 +3460,14 @@ impl Engine
     }
 #[cfg(not(feature = "radiance_cascades"))] {
 #[cfg(feature = "reference")] {
-      unsafe {
-        let push_constants =  
-          std::slice::from_raw_parts(push_constant as *const _ as *const u8, size_of::<PathTracePushConstant>());
+        unsafe {
+          let push_constants =  
+            std::slice::from_raw_parts(push_constant as *const _ as *const u8, size_of::<PathTracePushConstant>());
 
-        device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::COMPUTE, 0, push_constants);
-        device.cmd_dispatch(command_buffer, initial_render_texture_extent.width  / WORKGROUP_SIZE[0] + 1, 
-                                            initial_render_texture_extent.height / WORKGROUP_SIZE[1] + 1, 1);
-      } 
-    }
-
-
-#[cfg(feature = "restir")] {
-        let push_constant = ReSTIRPushConstant {};
-
-        let push_constants = unsafe { 
-            std::slice::from_raw_parts(&push_constant as *const _ as *const u8, size_of::<ReSTIRPushConstant>()) };
-
-        unsafe { 
           device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::COMPUTE, 0, push_constants);
-          device.cmd_dispatch(command_buffer, self.initial_render_texture_extent.width  / WORKGROUP_SIZE[0] + 1, 
-                                              self.initial_render_texture_extent.height / WORKGROUP_SIZE[1] + 1, 1)
-        };
+          device.cmd_dispatch(command_buffer, initial_render_texture_extent.width  / WORKGROUP_SIZE[0] + 1, 
+                                              initial_render_texture_extent.height / WORKGROUP_SIZE[1] + 1, 1);
+        } 
       }
     }
 
@@ -3502,9 +3485,9 @@ impl Engine
           level: level,
           max_level: highest_cascade,
           base_ray_count: CASCADE_0_RAYS,
-          interval: self.interval,
-          intensity: self.sun_intensity,
-          light_dir: glm::normalize(&self.sun_dir)
+          interval: interval,
+          intensity: sun_intensity,
+          light_dir: glm::normalize(&sun_dir)
         };
         unsafe {
         let push_constants =  
@@ -3513,8 +3496,8 @@ impl Engine
 
           device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::COMPUTE, 0, push_constants);
           device.cmd_dispatch(command_buffer, 
-            (self.initial_render_texture_extent.width >> level) / WORKGROUP_SIZE[0] + 1, 
-             self.initial_render_texture_extent.height          / WORKGROUP_SIZE[1] + 1, 1)
+            (initial_render_texture_extent.width >> level) / WORKGROUP_SIZE[0] + 1, 
+             initial_render_texture_extent.height          / WORKGROUP_SIZE[1] + 1, 1)
         };
       }
     }
@@ -3528,10 +3511,13 @@ impl Engine
     pipeline: (vk::PipelineLayout, vk::Pipeline), image: vk::Image, view: vk::ImageView, extent: vk::Extent2D, 
     depth_image: vk::Image, depth_view: vk::ImageView,
     global_descriptor_set: vk::DescriptorSet, material_descriptor_set: vk::DescriptorSet,
-    #[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
+    #[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
     model_data: (vk::Buffer, vk::Buffer, &Vec<SubMesh>),
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-    triangle_data: (vk::Buffer, vk::Buffer)
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
+    triangle_data: (vk::Buffer, vk::Buffer),
+    #[cfg(feature = "radiance_cascades")] interval: f32,
+    #[cfg(feature = "radiance_cascades")] sun_intensity: f32,
+    #[cfg(feature = "radiance_cascades")] sun_dir: glm::Vec3
   )
   {
     let device = &context.device;
@@ -3612,7 +3598,7 @@ impl Engine
     };
 
   // STATIC MODELS
-#[cfg(all(not(feature = "reference"), not(feature = "restir"), not(feature = "radiance_cascades")))]
+#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
     {
       unsafe {
         device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.1);
@@ -3639,7 +3625,7 @@ impl Engine
     }
     // COMPUTE RESULTS
     // render these after model as we want them in front without needing the depth buffer
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
     {
       unsafe { 
         device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.1);
@@ -3663,13 +3649,13 @@ impl Engine
           level: 0,
           max_level: highest_cascade,
           base_ray_count: CASCADE_0_RAYS,
-          interval: self.interval,
-          intensity: self.sun_intensity,
-          light_dir: glm::normalize(&self.sun_dir)
+          interval: interval,
+          intensity: sun_intensity,
+          light_dir: glm::normalize(&sun_dir)
         };
         let push_constants = unsafe {std::slice::from_raw_parts(
           &push_constant as *const _ as *const u8, size_of::<RadianceCascadesPushConstant>())};
-        unsafe { self.device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::FRAGMENT, 0, push_constants) };
+        unsafe { device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::FRAGMENT, 0, push_constants) };
       }
 
       unsafe { device.cmd_draw_indexed(command_buffer, 3, 1, 0, 0, 0) };
