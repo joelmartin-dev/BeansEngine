@@ -27,7 +27,6 @@ VSOutput vertMain(VSInput input) {
 // Constantly-changing small data
 struct PushConstant {
     uint materialID;
-    uint instanceID;
 };
 [push_constant] PushConstant pc;
 

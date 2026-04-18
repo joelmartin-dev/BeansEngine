@@ -6,7 +6,7 @@ use std::u32;
 use std::ffi::CStr;
 
 use ash::khr::{surface, swapchain};
-#[cfg(feature = "hardware")] use ash::khr::acceleration_structure;
+use ash::khr::acceleration_structure;
 //====== Vulkan Types and Functions ======//
 use ash::{Device, Instance, vk};
 use ash::Entry;
@@ -72,15 +72,14 @@ const TEXTURES_DESCRIPTOR_ARRAY_LENGTH: u32 = 32;
 #[cfg(feature = "sponza")] const DEFAULT_MODEL_PATH: &'static str = "assets/sponza/Sponza.gltf";
 #[cfg(not(feature = "sponza"))] const DEFAULT_MODEL_PATH: &'static str = "assets/suzanne/SuzanneCornell_Opt.gltf";
 
-#[cfg(feature = "hardware")] const SHADER_ROOT_PATH: &'static str = "assets/shaders/hardware";
-#[cfg(not(feature = "hardware"))] const SHADER_ROOT_PATH: &'static str = "assets/shaders/software";
+const SHADER_ROOT_PATH: &'static str = "assets/shaders/hardware";
 
 #[cfg(feature = "reference")]
-const DEFAULT_SLANG_PATH: &'static str = "assets/shaders/reference.slang";
+const DEFAULT_SLANG_PATH: &'static str = "reference.slang";
 #[cfg(feature = "radiance_cascades")]
-const DEFAULT_SLANG_PATH: &'static str = "assets/shaders/radiance_cascades.slang";
+const DEFAULT_SLANG_PATH: &'static str = "radiance_cascades.slang";
 #[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
-const DEFAULT_SLANG_PATH: &'static str = "assets/shaders/raster.slang";
+const DEFAULT_SLANG_PATH: &'static str = "raster.slang";
 
 const DEFAULT_SPIRV_PATH: &'static str = "assets/shaders/shader.spv";
 const FALLBACK_TEXTURE_PATH: &'static str = "assets/fallback.png";
@@ -161,7 +160,7 @@ pub struct EngineContext {
   swapchain: swapchain::Device,
   swapchain_khr: vk::SwapchainKHR,
   global_session: slang::GlobalSession,
-  #[cfg(feature = "hardware")] as_device: acceleration_structure::Device,
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))] as_device: acceleration_structure::Device,
 }
 
 pub struct DebugGuiContext {
@@ -176,8 +175,7 @@ pub struct DebugGuiContext {
   delta: u128,
 }
 
-#[cfg(feature = "hardware")]
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
 #[derive(Default)]
 pub struct RayTraceData {
   blas_handles: Vec<vk::AccelerationStructureKHR>,
@@ -188,14 +186,6 @@ pub struct RayTraceData {
   
   blas_instance_luts: Vec<InstanceLUT>,
   blas_instance_lut_buffer: (vk::Buffer, vk::DeviceMemory),
-}
-
-#[cfg(not(feature = "hardware"))]
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-#[derive(Default)]
-pub struct RayTraceData {
-  instance_luts: Vec<InstanceLUT>,
-  instance_lut_buffer: (vk::Buffer, vk::DeviceMemory)
 }
 
 #[derive(Default)]
@@ -250,18 +240,14 @@ pub struct Engine {
   submeshes: Vec<SubMesh>,
   gltf_textures_data: ImageData,
   
-  vertex_buffer: (vk::Buffer, vk::DeviceMemory),
+  vertex_data: VertexData,
   #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_vertex_buffer: (vk::Buffer, vk::DeviceMemory),
   
-  index_buffer: (vk::Buffer, vk::DeviceMemory),
   #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_index_buffer: (vk::Buffer, vk::DeviceMemory),
   
-  colour_buffer: (vk::Buffer, vk::DeviceMemory),
-  uv_buffer: (vk::Buffer, vk::DeviceMemory),
-  nrm_buffer: (vk::Buffer, vk::DeviceMemory),
 
   // Acceleration Structures
-  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
   ray_trace_data: RayTraceData,
   
   // create_indirect_commands
