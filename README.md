@@ -12,9 +12,9 @@
 
 # Compiling
 ## Example Build:
-`cargo build --bin global_illumination -F reference,sponza` (build only)\
+`cargo build -F sponza` (build only)\
 **OR**\
-`cargo run --bin global_illumination -F reference,sponza` (run after build)\
+`cargo run -F sponza` (run after build)\
 Add `--release` for release target (long compilation time).
 ## Requirements
 - **rustup**: Rust language toolchain manager (includes **cargo**: https://rust-lang.org/tools/install/)
@@ -27,9 +27,6 @@ without it. **v1.3.281** is the Vulkan API version of Ash v0.38.0.
 
 ## Features
 ### Modes
-- **reference**: progressive Monte-Carlo path tracer
-- **restir**: progressive ReSTIR path tracer (not implemented)
-- **radiance_cascades**: single-shot Radiance Cascades implementation
 - **default**: unlit rasterizer
 
 ### Scenes
@@ -39,16 +36,8 @@ without it. **v1.3.281** is the Vulkan API version of Ash v0.38.0.
 ### Other
 - **measure**: disables validation layers in any target, only prints comma-separated frame times in microseconds
 
-Running `cargo run --bin global_illumination` will compile and run the Cornell Box with Blender Suzanne scene as unlit 
+Running `cargo run` will compile and run the Cornell Box with Blender Suzanne scene as unlit 
 rasterized.
-
-## Executable names
-- global_illumination
-- reference
-- restir
-- radiance_cascades
-
-Must specify in build line, only impacts executable's name
 
 # Reproducing Measurements
 In the `Measuring` folder, there is a script that automates measurements collection, processing, and presentation 
@@ -63,5 +52,5 @@ To run the automation script:
 4. Activate the virtual environment with `source .venv/bin/activate`
 5. Install the required Python packages with `pip install -r requirements.txt`
 6. Deactivate the virtual environment with `deactivate`
-7. Ensure your targets are built: `cargo build --bin reference -F reference,sponza --release`, etc.
+7. Ensure your targets are built: `cargo build -F sponza --release`, etc.
 8. Run `sh automated_testing.sh`
