@@ -2,31 +2,20 @@ use std::ffi::{CStr, CString, c_void};
 use std::fs::{self, File};
 use std::io::{Write};
 use std::path::{Path, PathBuf};
-use std::ptr::null_mut;
 use std::sync::{Arc, Mutex};
 use tokio::task;
 use std::{u64, f32};
 
 use crate::buffer_structs::{MVP, SubMesh};
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-use crate::buffer_structs::InstanceLUT;
-#[cfg(feature = "reference")] use crate::buffer_structs::PathTracePushConstant;
-#[cfg(feature = "radiance_cascades")] use crate::buffer_structs::RadianceCascadesPushConstant;
-#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))] 
 use crate::buffer_structs::RasterPushConstant;
 
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-use crate::engine::RayTraceData;
 use crate::engine::{
-  DEFAULT_MODEL_PATH, DEFAULT_SLANG_PATH, DEFAULT_SPIRV_PATH, DebugGuiContext, ENABLE_VALIDATION_LAYERS, Engine, EngineContext, FALLBACK_TEXTURE_PATH, ImageData, MAX_FRAMES_IN_FLIGHT, MAX_RENDER_TEXTURES, RES, SHADER_ROOT_PATH, TEXTURES_DESCRIPTOR_ARRAY_LENGTH, VALIDATION_LAYERS, VertexData
+  DEFAULT_MODEL_PATH, DEFAULT_SLANG_PATH, DEFAULT_SPIRV_PATH, DebugGuiContext, ENABLE_VALIDATION_LAYERS, 
+  Engine, EngineContext, FALLBACK_TEXTURE_PATH, ImageData, MAX_FRAMES_IN_FLIGHT, RES, 
+  SHADER_ROOT_PATH, TEXTURES_DESCRIPTOR_ARRAY_LENGTH, VALIDATION_LAYERS, VertexData
 };
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
-use crate::engine::WORKGROUP_SIZE;
-#[cfg(feature = "radiance_cascades")] use crate::engine::{CASCADE_0_PROBES, CASCADE_0_RAYS};
 use crate::camera::Camera;
 //use crate::model::CUBE;
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
-use crate::model::TRIANGLE;
 use crate::vertex::Vertex;
 use ash::util::Align;
 use futures::{StreamExt, stream};
@@ -41,13 +30,10 @@ use mugltf::{
   Gltf, GltfAsset, GltfResourceFileLoader, GltfResourceLoader, 
   LoadGltfResourceError, LoadGltfResourceErrorKind
 };
-//use rand::Rng;
 use shader_slang::{self as slang, Downcast};
 
 use ash::ext::debug_utils;
 use ash::khr::{surface, swapchain};
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-use ash::khr::acceleration_structure;
 use ash::{Entry, Instance, Device, vk};
 
 use nalgebra_glm::{self as glm};
@@ -146,11 +132,7 @@ impl Engine
       sampler: None
     };
     // Establish command pool for command buffer allocation
-    let command_pool = Self::create_command_pool(&device, qfi);    
-    
-    // Load acceleration structure functions
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-    let as_device = acceleration_structure::Device::new(&instance, &device);
+    let command_pool = Self::create_command_pool(&device, qfi);
     
     // Initialise Shader-Slang Compilation API
     let global_session = Self::init_slang(); // Compile shaders
@@ -158,8 +140,7 @@ impl Engine
     // Everything needed for any given Vulkan operation
     let context = EngineContext {
       _entry: entry, instance, surface, surface_khr, physical_device, device, 
-      queue, command_pool, swapchain, swapchain_khr, global_session, 
-      #[cfg(any(feature = "reference", feature = "radiance_cascades"))]as_device
+      queue, command_pool, swapchain, swapchain_khr, global_session
     };
     
     // Set up ImGui
@@ -218,20 +199,6 @@ impl Engine
     //   base_texture_image_views.extend(extra_base_texture_image_views);
     // }
 
-    // The texture/textures the compute shader writes to/fragment shader reads from
-    let (initial_render_texture_extent, render_textures_data) = {
-      let (initial_render_texture_extent, render_textures, render_texture_views, render_texture_sampler) = 
-        Self::create_render_texture(&context, #[cfg(not(feature = "radiance_cascades"))] swapchain_extent);
-      (
-        initial_render_texture_extent, 
-        ImageData { 
-          images: render_textures, 
-          views: render_texture_views, 
-          sampler: Some(render_texture_sampler) 
-        }
-      )
-    };
-
     // Create the depth stencil
     let depth_image_data = {
       let (depth_image, depth_image_view) = Self::create_depth_resources(&context, swapchain_extent);
@@ -244,7 +211,7 @@ impl Engine
 
     // Define how data is organised in descriptor sets
     let (descriptor_set_layout_global, descriptor_set_layout_material) = 
-      Self::create_descriptor_set_layouts(&context, &gltf_textures_data, &render_textures_data);
+      Self::create_descriptor_set_layouts(&context, &gltf_textures_data);
     
     // Create the draw-time GPU synchronisation objects
     let (timeline_semaphore, in_flight_fences) = Self::create_sync_objects(&context);
@@ -268,16 +235,11 @@ impl Engine
     let mvp_buffers = Self::create_uniform_buffers(&context);
 
     let vertex_buffer = Self::create_vertex_buffer(&context, &vertices);
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-    // The triangle that the render texture is rendered to
-    let triangle_vertex_buffer = Self::create_vertex_buffer(&context, &TRIANGLE.vertices);
     
     let index_buffer = Self::create_index_buffer(&context, &indices,
       vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER |
       vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
     );
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-    let triangle_index_buffer = Self::create_index_buffer(&context, &TRIANGLE.indices, vk::BufferUsageFlags::default());
     
     let colour_buffer = Self::create_colour_buffer(&context, &vertices);
     let uv_buffer = Self::create_uv_buffer(&context, &vertices);
@@ -285,32 +247,14 @@ impl Engine
 
     let vertex_data = VertexData { vertex_buffer, index_buffer, colour_buffer, uv_buffer, nrm_buffer };
 
-    // Create the acceleration structures
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-    let ray_trace_data = {
-      let (blas_handles, blas_instance_buffer, tlas_buffer, tlas_handle, blas_instance_luts) = 
-        Self::create_acceleration_structures(&context, &vertex_data, &submeshes);
-      let blas_instance_lut_buffer = Self::create_blas_instance_lut_buffer(&context, &blas_instance_luts);
-      
-      let ray_trace_data = RayTraceData { 
-        blas_handles, blas_instance_buffer, 
-        tlas_buffer, tlas_handle, 
-        blas_instance_luts, blas_instance_lut_buffer 
-      };
-
-      ray_trace_data
-    };
-    
     // Set limits on the number of descriptor sets that can be allocated at any time
-    let descriptor_pool = Self::create_descriptor_pools(&context, &gltf_textures_data, &render_textures_data);
+    let descriptor_pool = Self::create_descriptor_pools(&context, &gltf_textures_data);
       
     // Organise buffers so that they are accessible on the GPU
     let (global_descriptor_sets, material_descriptor_sets) = Self::create_descriptor_sets(
-      &context, &fallback_texture_data, &gltf_textures_data, &render_textures_data, 
+      &context, &fallback_texture_data, &gltf_textures_data, 
       descriptor_set_layout_global, descriptor_set_layout_material, descriptor_pool, &mvp_buffers, 
-      &vertices, &indices, &vertex_data, 
-      #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-      &ray_trace_data
+      &vertices, &indices, &vertex_data
     );
 
     let camera = Camera::new(
@@ -345,13 +289,8 @@ impl Engine
       submeshes,
       gltf_textures_data,
       vertex_data,
-      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_vertex_buffer,
-      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_index_buffer,
-      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] ray_trace_data,
       // indirect_commands: Default::default(),
       // indirect_commands_buffer: Default::default(),
-      initial_render_texture_extent,
-      render_textures_data,
       descriptor_pool,
       global_descriptor_sets,
       material_descriptor_sets,
@@ -1258,7 +1197,7 @@ impl Engine
       .mip_lod_bias(0.0).anisotropy_enable(false)
       .compare_enable(false).compare_op(vk::CompareOp::ALWAYS)
       .min_lod(0.0).max_lod(vk::LOD_CLAMP_NONE)
-      .anisotropy_enable(cfg!(not(any(feature = "reference", feature = "radiance_cascades"))))
+      .anisotropy_enable(true)
       .max_anisotropy(anisotropy);
 
     let base_texture_sampler = unsafe {
@@ -1657,95 +1596,14 @@ impl Engine
     };
   }
 
-  fn create_render_texture_sampler(context: &EngineContext) -> vk::Sampler
-  {
-    let device = &context.device;
-    let sampler_info = vk::SamplerCreateInfo::default()
-      .mag_filter(vk::Filter::LINEAR).min_filter(vk::Filter::LINEAR)
-      .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-      .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-      .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-      .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-      .anisotropy_enable(false)
-      .compare_enable(false)
-      .min_lod(0.0).max_lod(vk::LOD_CLAMP_NONE);
-
-    let render_texture_sampler = unsafe { 
-      device.create_sampler(&sampler_info, None).expect("failed to create render texture sampler!") 
-    };
-    return render_texture_sampler;
-  }
-
-  // For Path-Tracing Reference, create a read-write Image of the same resolution as the initial framebuffers
-  fn create_render_texture(
-    context: &EngineContext, #[cfg(not(feature = "radiance_cascades"))] swapchain_extent: vk::Extent2D
-  ) -> (vk::Extent2D, Vec<(vk::Image, vk::DeviceMemory)>, Vec<vk::ImageView>, vk::Sampler)
-  {
-    // Use the whole screen for stochastic, cascading resolutions for RC
-#[cfg(not(feature = "radiance_cascades"))]
-    let initial_render_texture_extent = 
-      vk::Extent2D::default().width(swapchain_extent.width).height(swapchain_extent.height);
-#[cfg(feature = "radiance_cascades")]
-    // Dimensions of Cascade 0's render texture
-    let initial_render_texture_extent = 
-      vk::Extent2D::default().width(CASCADE_0_PROBES[0]).height(CASCADE_0_PROBES[1]);
-
-    // Store the currentRenderTexture, whose X axis is halved every iteration
-    let mut current_render_texture_extent = initial_render_texture_extent;
-
-#[cfg(feature = "radiance_cascades")]
-    let render_texture_count = u32::min(f32::log2((CASCADE_0_PROBES[0] + 1) as f32) as u32, MAX_RENDER_TEXTURES);
-
-#[cfg(not(feature = "radiance_cascades"))]
-    let render_texture_count = MAX_RENDER_TEXTURES;
-
-    let mut render_textures: Vec<(vk::Image, vk::DeviceMemory)> = vec![];
-    let mut render_texture_views: Vec<vk::ImageView> = vec![];
-
-    let instance = &context.instance;
-    let device = &context.device;
-    let physical_device = context.physical_device;
-
-    for _i in 0..render_texture_count {
-      // Create the Image on the GPU
-      let render_texture = Self::create_image(
-        instance, device, physical_device,
-        current_render_texture_extent.width, current_render_texture_extent.height, 1,
-        vk::Format::R32G32B32A32_SFLOAT, vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL
-      );
-
-      // We want the image in the General layout for read-write operations
-      let command_buffer = Self::begin_single_time_commands(device, context.command_pool);
-      Self::transition_image_layout(
-        device, command_buffer, render_texture.0, vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL, 1);
-      Self::end_single_time_commands(device, context.queue, command_buffer);
-
-      // Create a view for the Image
-      render_texture_views.push(Self::create_image_view(
-        device, render_texture.0, vk::Format::R32G32B32A32_SFLOAT, vk::ImageAspectFlags::COLOR, 1));
-
-      render_textures.push(render_texture);
-      let next_render_texture_extent = vk::Extent2D::default()
-        .width( current_render_texture_extent.width  >> 1)
-        .height(current_render_texture_extent.height >> 1);
-      current_render_texture_extent = next_render_texture_extent;
-    }
-    
-    let render_texture_sampler = Self::create_render_texture_sampler(context);
-    return (initial_render_texture_extent, render_textures, render_texture_views, render_texture_sampler);
-  }
-
   // Each pipeline needs to know what structures will be passed to the GPU during its lifetime. Not specific data, but
   // just the expected layout of the data once it exists
   fn create_descriptor_set_layouts(
-    context: &EngineContext, gltf_textures_data: &ImageData, render_textures_data: &ImageData
+    context: &EngineContext, gltf_textures_data: &ImageData
   ) -> (vk::DescriptorSetLayout, vk::DescriptorSetLayout)
   {
     let device = &context.device;
     let gltf_texture_views = &gltf_textures_data.views;
-    let render_texture_views = &render_textures_data.views;
     // STANDARD 3D MODELS
     // Descriptor bindings are like slots in descriptor sets
     let global_bindings = [
@@ -1770,28 +1628,10 @@ impl Engine
       vk::DescriptorSetLayoutBinding::default().binding(4)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE),
-      // TLAS
-      vk::DescriptorSetLayoutBinding::default().binding(5)
-        .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR).descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::COMPUTE),
-      // BLAS Lookup Table Buffer
-      vk::DescriptorSetLayoutBinding::default().binding(6)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::COMPUTE),
       // Storage Image read-only Sampler
-      vk::DescriptorSetLayoutBinding::default().binding(7)
+      vk::DescriptorSetLayoutBinding::default().binding(5)
         .descriptor_type(vk::DescriptorType::SAMPLER).descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-      // Storage Image Write
-      vk::DescriptorSetLayoutBinding::default().binding(8)
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-        .descriptor_count(render_texture_views.len().try_into().unwrap())
-        .stage_flags(vk::ShaderStageFlags::COMPUTE),
-      // Storage Image Sample
-      vk::DescriptorSetLayoutBinding::default().binding(9)
-        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .descriptor_count(render_texture_views.len().try_into().unwrap())
-        .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)
     ];
 
     let binding_flags = [
@@ -1800,11 +1640,7 @@ impl Engine
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-      vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-      vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-      vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-      vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-      vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND | vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT
+      vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
     ];
 
     let mut flags_create_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
@@ -1906,483 +1742,6 @@ impl Engine
     return mvp_buffers;
   }
 
-  /*================================================= BLAS and TLAS ==================================================//
-    There are two Acceleration Structure types: Bottom Level and Top Level. A scene's geometry is split up into BLAS
-    blasInstances and traversed using a TLAS. On an abstract level, a BLAS lets rays test directly against geometry 
-    and a TLAS lets rays test against bounding boxes whose contents can then be looked up.
-
-    A Bottom Level Acceleration Structure (BLAS) contains geometry data for a ray to test against.
-    A Top Level Acceleration Structure contains opaque handles to BLAS blasInstances that a ray can test against the 
-    bounding box of while traversing the scene.
-
-    They have the same relationship as vertices and indices. Vertices store the attributes, indices act as instances 
-    of those vertices.
-  */
-  #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-  fn cleanup_acceleration_structures(
-    context: &EngineContext, ray_trace_data: &RayTraceData
-  )
-  {
-    let device = &context.device; let as_device = &context.as_device;
-    let blas_handles = &ray_trace_data.blas_handles;
-    let blas_instance_buffer = ray_trace_data.blas_instance_buffer;
-    let tlas_handle = ray_trace_data.tlas_handle;
-    let tlas_buffer = ray_trace_data.tlas_buffer;
-
-    unsafe { device.device_wait_idle().expect("failed to wait for device idle!"); }
-
-    unsafe {
-      blas_handles.iter().for_each(|&handle| as_device.destroy_acceleration_structure(handle, None));
-      device.destroy_buffer(blas_instance_buffer.0, None);
-      device.free_memory(blas_instance_buffer.1, None);
-
-      as_device.destroy_acceleration_structure(tlas_handle, None);
-      device.destroy_buffer(tlas_buffer.0, None);
-      device.free_memory(tlas_buffer.1, None);
-    };
-  }
-
-  #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-  pub fn rebuild_acceleration_structures(&mut self)
-  {
-    let context = self.context.as_ref().unwrap();
-    
-    Self::cleanup_acceleration_structures(
-      context, &self.ray_trace_data);
-    
-    let vertex_data = &self.vertex_data; let submeshes = &self.submeshes;
-    let (blas_handles, blas_instance_buffer, tlas_buffer, tlas_handle, blas_instance_luts) = 
-      Self::create_acceleration_structures(context, vertex_data, &submeshes);
-
-    let blas_instance_lut_buffer = Self::create_blas_instance_lut_buffer(context, &blas_instance_luts);
-
-    self.ray_trace_data = RayTraceData { 
-      blas_handles, blas_instance_buffer, 
-      tlas_handle, tlas_buffer, 
-      blas_instance_luts, blas_instance_lut_buffer 
-    };
-
-    self.reload_shaders();
-  }
-
-  // Create the BLAS and TLAS for the scene
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-  fn create_acceleration_structures(
-    context: &EngineContext, vertex_data: &VertexData, submeshes: &Vec<SubMesh>
-  ) -> (
-    Vec<vk::AccelerationStructureKHR>, (vk::Buffer, vk::DeviceMemory), (vk::Buffer, vk::DeviceMemory), 
-    vk::AccelerationStructureKHR, Vec<InstanceLUT>
-  )
-  {
-    let instance = &context.instance;
-    let device = &context.device;
-    let physical_device = context.physical_device;
-    let command_pool = context.command_pool;
-    let queue = context.queue;
-    let as_device = &context.as_device;
-    let vertex_buffer = vertex_data.vertex_buffer.0;
-    let index_buffer = vertex_data.index_buffer.0;
-    // Used to query the calculated size of a compacted buffer after the creation of uncompacted buffer
-    let query_pool_create_info = vk::QueryPoolCreateInfo::default()
-      .query_type(vk::QueryType::ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR)
-      .query_count(1);
-
-    let query_pool = unsafe {
-        device.create_query_pool(&query_pool_create_info, None).expect("failed to create query pool!")};
-    unsafe { device.reset_query_pool(query_pool, 0, 1) };
-
-    //================================================== BOTTOM LEVEL ==================================================//
-    // The BLAS instances require handles to the address + offset of vertices and indices
-    let vert_addr = vk::DeviceOrHostAddressConstKHR { 
-      device_address: unsafe { 
-        device.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(vertex_buffer))}
-    };
-    let idx_addr = unsafe { 
-      device.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(index_buffer))};
-
-    let mut blas_handles = Vec::with_capacity(submeshes.len());
-    let mut blas_instances = Vec::with_capacity(submeshes.len());
-    let mut blas_instance_luts = Vec::with_capacity(submeshes.len());
-    
-    // We perform no additional transformations on the acceleration structures, leave as identity
-    let identity_mat: [f32; 12] = 
-      glm::Mat4x3::identity().as_slice().try_into().expect("failed to convert identity matrix to 1D array!");
-    let identity = vk::TransformMatrixKHR {matrix: identity_mat};
-
-    // Almost the entire scene is static, so we want to compact the data suitably
-    // Read in the Vertices and Indices of a submesh + opaqueness
-    // Build an initial BLAS using that geometry data
-    // Query the calculated size if the BLAS were to be compacted
-    // Create the compacted BLAS by copying the initial BLAS into a smaller buffer
-    for submesh in submeshes {
-      // Similar to a combination of the PipelineVertexInputStateCreateInfo and PipelineInputAssemblyStateCreateInfo 
-      // structs used in Pipeline creation
-      let vertex_format = Vertex::get_attribute_descriptions()[0].format;
-      let vertex_stride = Vertex::get_binding_description().stride;
-      let triangles_data = vk::AccelerationStructureGeometryTrianglesDataKHR::default()
-        .vertex_format(vertex_format).vertex_data(vert_addr)
-        .vertex_stride((vertex_stride).into()).max_vertex(submesh.max_vertex)
-        .index_type(vk::IndexType::UINT32)
-        .index_data(vk::DeviceOrHostAddressConstKHR {
-          device_address: idx_addr + (submesh.index_offset as usize * size_of::<u32>()) as u64
-        });
-      
-      let geometry_data = vk::AccelerationStructureGeometryDataKHR { triangles: triangles_data };
-
-      // Make the triangles readable for BLAS building, and if the geometry contains transparency
-      let blas_geometry_flags = if submesh.alpha_cut == vk::TRUE {
-        vk::GeometryFlagsKHR::empty()
-      } else {
-        vk::GeometryFlagsKHR::OPAQUE
-      };
-      
-      let blas_geometry = [vk::AccelerationStructureGeometryKHR::default()
-        .geometry_type(vk::GeometryTypeKHR::TRIANGLES).geometry(geometry_data).flags(blas_geometry_flags)];
-
-      // Build a BLAS from the geometry info
-      let mut blas_build_geometry_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-        .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL).mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-        .flags(vk::BuildAccelerationStructureFlagsKHR::ALLOW_COMPACTION |
-               vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-        .geometries(&blas_geometry);
-
-      // Vertices are in TriangleList (no index sharing), three indices for every triangle
-      let primitive_count = submesh.index_count / 3;
-      let mut blas_build_sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
-      
-      unsafe {
-        as_device.get_acceleration_structure_build_sizes(
-          vk::AccelerationStructureBuildTypeKHR::DEVICE, &blas_build_geometry_info, 
-          &[primitive_count], &mut blas_build_sizes)
-      };
-
-      // Create a scratch buffer for the BLAS, this will hold temporary data during the build process
-      // Note the non-specific StorageBuffer flag. We just need the data somewhere, sort of like a void*
-      let scratch_buffer = Self::create_buffer(
-        instance, device, physical_device, blas_build_sizes.build_scratch_size,
-        vk::BufferUsageFlags::STORAGE_BUFFER | 
-        vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL
-      );
-
-      // Save the scratch buffer address in the build info structure
-      let scratch_addr = vk::DeviceOrHostAddressKHR { device_address: unsafe { 
-        device.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(scratch_buffer.0)) }};
-      
-      blas_build_geometry_info.scratch_data = scratch_addr;
-
-      // Create a buffer for the BLAS itself now that we know the required size
-      let initial_buffer = Self::create_buffer(
-        instance, device, physical_device, blas_build_sizes.acceleration_structure_size,
-        vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR |
-        vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
-        vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL
-      );
-
-      // Store the initial BLAS handle. 
-      // A Handle is a resource identifier with minimal information about the resource.
-      // In this case, we only need to know the buffer's location, the offset, the size and the type of AS
-      let blas_create_info = vk::AccelerationStructureCreateInfoKHR::default()
-        .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL).buffer(initial_buffer.0)
-        .size(blas_build_sizes.acceleration_structure_size).offset(0);
-      let initial_handle = unsafe {
-          as_device.create_acceleration_structure(&blas_create_info, None)
-          .expect("failed to create acceleration structure!")
-      };
-
-      // Pass the BLAS handle to the build info structure
-      blas_build_geometry_info.dst_acceleration_structure = initial_handle;
-
-      // Prepare the build range for the BLAS
-      let blas_range_info = vk::AccelerationStructureBuildRangeInfoKHR::default()
-        .primitive_count(primitive_count).primitive_offset(0)
-        .first_vertex(submesh.first_vertex).transform_offset(0);
-
-      // Build the initial BLAS
-      {
-        let command_buffer = Self::begin_single_time_commands(device, command_pool);
-        unsafe {
-          as_device.cmd_build_acceleration_structures(command_buffer, &[blas_build_geometry_info], &[&[blas_range_info]])
-        };
-        Self::end_single_time_commands(device, queue, command_buffer);
-      }
-
-      // Query the compact size
-      {
-        let command_buffer = Self::begin_single_time_commands(device, command_pool);
-        unsafe {
-          as_device.cmd_write_acceleration_structures_properties(
-            command_buffer, &[initial_handle], vk::QueryType::ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR, query_pool, 0)
-        };
-        Self::end_single_time_commands(device, queue, command_buffer);
-      }
-      
-      // Store the compacted size
-      let mut compacted_size = [vk::DeviceSize::default()];
-      unsafe {
-          device.get_query_pool_results(query_pool, 0, &mut compacted_size, 
-            vk::QueryResultFlags::WAIT | vk::QueryResultFlags::TYPE_64)
-          .expect("failed to get query pool results!")
-      };
-      
-      // Create a buffer for the BLAS itself now that we know the required size
-      let blas_buffer = Self::create_buffer(
-        instance, device, physical_device, compacted_size[0],
-        vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR |
-        vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
-        vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL
-      );
-
-      // Create and store the persisted BLAS handle
-      let compact_create_info = vk::AccelerationStructureCreateInfoKHR::default()
-        .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-        .buffer(blas_buffer.0)
-        .size(compacted_size[0]).offset(0);
-
-      let blas_handle = unsafe {
-        as_device.create_acceleration_structure(&compact_create_info, None)
-          .expect("failed to create compacted acceleration structure!")
-      };
-
-      // Copying from the initialHandle to the persisted blasHandle
-      let copy_info = vk::CopyAccelerationStructureInfoKHR::default()
-        .src(initial_handle).dst(blas_handle)
-        .mode(vk::CopyAccelerationStructureModeKHR::COMPACT);
-
-      // Perform the data copy
-      {
-        let command_buffer = Self::begin_single_time_commands(device, command_pool);
-        unsafe { as_device.cmd_copy_acceleration_structure(command_buffer, &copy_info) };
-        Self::end_single_time_commands(device, queue, command_buffer);
-      }
-
-      blas_handles.push(blas_handle);
-
-      unsafe { 
-        as_device.destroy_acceleration_structure(initial_handle, None);
-        device.destroy_buffer(initial_buffer.0, None);
-        device.free_memory(initial_buffer.1, None);
-        device.destroy_buffer(scratch_buffer.0, None);
-        device.free_memory(scratch_buffer.1, None);
-      }
-
-      // Store the BLAS as an instance, ready for TLAS building
-      let addr_info = vk::AccelerationStructureDeviceAddressInfoKHR::default().acceleration_structure(blas_handle);
-
-      let blas_device_addr = vk::AccelerationStructureReferenceKHR { 
-        device_handle: unsafe {as_device.get_acceleration_structure_device_address(&addr_info)}
-      };
-
-      // Assign the transform and a mask to the instance. A mask is like channels for an instance's visibility to rays
-      let blas_instance = vk::AccelerationStructureInstanceKHR {
-        transform: identity, 
-        instance_custom_index_and_mask: vk::Packed24_8::new((blas_instances.len()).try_into().unwrap(), 0xFF),
-        acceleration_structure_reference: blas_device_addr, 
-        instance_shader_binding_table_record_offset_and_flags: 
-          vk::Packed24_8::new(0, vk::GeometryInstanceFlagsKHR::empty().as_raw().try_into().unwrap())
-      };
-      blas_instances.push(blas_instance);
-
-      blas_instance_luts.push(InstanceLUT {
-        material_id: submesh.material_id.try_into().unwrap(), index_buffer_offset: submesh.index_offset
-      });
-
-      unsafe { device.reset_query_pool(query_pool, 0, 1) };
-    }
-
-    // A key difference to our normal buffer creation steps: no moving to DEVICE_LOCAL-only memory.
-    // In a dynamic scene, the BLAS will need to be updated for any dynamic instances e.g. an animated mesh. Because
-    // of this constant updating we need the buffer to maintain host visibility and coherency
-    let buffer_size: vk::DeviceSize = 
-      (size_of::<vk::AccelerationStructureInstanceKHR>() * blas_instances.len()).try_into().unwrap();
-    
-    let blas_instance_buffer = Self::create_buffer(
-      instance, device, physical_device, buffer_size,
-      vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
-      vk::BufferUsageFlags::TRANSFER_DST |
-      vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-      vk::MemoryPropertyFlags::HOST_VISIBLE |
-      vk::MemoryPropertyFlags::HOST_COHERENT
-    );
-
-    // Map and Copy Buffer
-    unsafe {
-      let data = device.map_memory(
-        blas_instance_buffer.1, 0, buffer_size, vk::MemoryMapFlags::default()).expect("failed to map blas!");
-      let mut align = 
-        ash::util::Align::new(data, align_of::<vk::AccelerationStructureInstanceKHR>() as vk::DeviceSize, buffer_size);
-      align.copy_from_slice(&blas_instances);
-      device.unmap_memory(blas_instance_buffer.1);
-    };
-
-    //==================================================== TOP LEVEL ===================================================//
-    // Same flow as the BLAS creation
-    // Same as how the BLAS requires the address + offset of the vertices and indices, the TLAS requires the address +
-    // offset of the BLAS instances
-    let instance_addr_info = vk::BufferDeviceAddressInfo::default().buffer(blas_instance_buffer.0);
-    let instance_addr = vk::DeviceOrHostAddressConstKHR { 
-      device_address: unsafe { device.get_buffer_device_address(&instance_addr_info) }
-    };
-
-    // Prepare the BLAS instances
-    let blas_instances_data = vk::AccelerationStructureGeometryInstancesDataKHR::default()
-      .array_of_pointers(false).data(instance_addr);
-    let geometry_data = vk::AccelerationStructureGeometryDataKHR { instances: blas_instances_data };
-
-    let tlas_geometry = [vk::AccelerationStructureGeometryKHR::default()
-      .geometry_type(vk::GeometryTypeKHR::INSTANCES).geometry(geometry_data)];
-
-    // We only have one BLAS instances buffer, equivalent to 1 geometryCount
-    let mut tlas_build_geometry_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-      .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-      .flags(vk::BuildAccelerationStructureFlagsKHR::ALLOW_COMPACTION | 
-             vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-      .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-      .geometries(&tlas_geometry);
-
-    // Query the memory sizes that will be needed for this TLAS
-    let primitive_count = blas_instances.len() as u32;
-
-    let mut tlas_build_sizes = vk::AccelerationStructureBuildSizesInfoKHR::default();
-    unsafe {
-      as_device.get_acceleration_structure_build_sizes(
-        vk::AccelerationStructureBuildTypeKHR::DEVICE, 
-        &tlas_build_geometry_info, &[primitive_count], &mut tlas_build_sizes
-      )
-    };
-
-    // Create a scratch buffer for the TLAS, this will hold temporary data during the build process
-    let tlas_scratch_buffer = Self::create_buffer(
-      instance, device, physical_device, tlas_build_sizes.build_scratch_size,
-      vk::BufferUsageFlags::STORAGE_BUFFER |
-      vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-      vk::MemoryPropertyFlags::DEVICE_LOCAL
-    );
-
-    // Save the scratch buffer address in the build info structure
-    let scratch_addr = unsafe { 
-      device.get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(tlas_scratch_buffer.0))
-    };
-    tlas_build_geometry_info.scratch_data.device_address = scratch_addr;
-
-    // Create a buffer for the TLAS itself now that we now the required size
-    let initial_buffer = Self::create_buffer(
-      instance, device, physical_device, tlas_build_sizes.acceleration_structure_size,
-      vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR |
-      vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
-      vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-      vk::MemoryPropertyFlags::DEVICE_LOCAL
-    );
-
-    // Create and store the TLAS handle
-    let initial_create_info = vk::AccelerationStructureCreateInfoKHR::default()
-      .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-      .buffer(initial_buffer.0)
-      .size(tlas_build_sizes.acceleration_structure_size).offset(0);
-
-    let initial_handle = unsafe {
-      as_device.create_acceleration_structure(&initial_create_info, None)
-        .expect("failed to create acceleration structure!")
-    };
-
-    // Save the TLAS handle in the build info structure
-    tlas_build_geometry_info.dst_acceleration_structure = initial_handle;
-
-    // Prepare the build range for the TLAS
-    let tlas_range_info = vk::AccelerationStructureBuildRangeInfoKHR::default()
-      .primitive_count(primitive_count).primitive_offset(0)
-      .first_vertex(0).transform_offset(0);
-
-    // Build the TLAS
-    {
-      let command_buffer = Self::begin_single_time_commands(device, command_pool);
-      unsafe {
-        as_device.cmd_build_acceleration_structures(
-          command_buffer, &mut [tlas_build_geometry_info], &[&[tlas_range_info]])
-      };
-      Self::end_single_time_commands(device, queue, command_buffer);
-    }
-
-    // Query the compacted size
-    {
-      let command_buffer = Self::begin_single_time_commands(device, command_pool);
-      unsafe {
-        as_device.cmd_write_acceleration_structures_properties(
-          command_buffer, &[initial_handle], vk::QueryType::ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR, query_pool, 0)
-      };
-      Self::end_single_time_commands(device, queue, command_buffer);
-    }
-
-    // Store the compacted size
-    let mut compacted_size = [vk::DeviceSize::default()];
-    unsafe {
-      device.get_query_pool_results(query_pool, 0, &mut compacted_size, 
-        vk::QueryResultFlags::WAIT | vk::QueryResultFlags::TYPE_64)
-        .expect("failed to get query pool results!")
-    };
-    
-    // Create a buffer for the BLAS itself now that we now the required size
-    let tlas_buffer = Self::create_buffer(
-      instance, device, physical_device, compacted_size[0],
-      vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR |
-      vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
-      vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-      vk::MemoryPropertyFlags::DEVICE_LOCAL
-    );
-
-    // Create and store the compact TLAS' handle
-    let tlas_create_info = vk::AccelerationStructureCreateInfoKHR::default()
-      .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-      .buffer(tlas_buffer.0)
-      .size(compacted_size[0]).offset(0);
-
-    let tlas_handle = unsafe {
-      as_device.create_acceleration_structure(&tlas_create_info, None).expect("failed to create tlas!")
-    };
-
-    // Copy the TLAS from the initial to the compact buffer
-    let copy_info = vk::CopyAccelerationStructureInfoKHR::default()
-      .src(initial_handle).dst(tlas_handle)
-      .mode(vk::CopyAccelerationStructureModeKHR::COMPACT);
-
-    // Perform the copy
-    {
-      let command_buffer = Self::begin_single_time_commands(device, command_pool);
-      unsafe {
-        as_device.cmd_copy_acceleration_structure(command_buffer, &copy_info);
-      };
-      Self::end_single_time_commands(device, queue, command_buffer);
-    }
-
-    unsafe { 
-      as_device.destroy_acceleration_structure(initial_handle, None);
-      device.destroy_buffer(initial_buffer.0, None);
-      device.free_memory(initial_buffer.1, None);
-      device.destroy_buffer(tlas_scratch_buffer.0, None);
-      device.free_memory(tlas_scratch_buffer.1, None);
-
-      device.destroy_query_pool(query_pool, None);
-    }
-
-    return (
-      blas_handles, blas_instance_buffer, tlas_buffer, 
-      tlas_handle, blas_instance_luts
-    );
-  }
-
-  #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-  fn create_blas_instance_lut_buffer(
-    context: &EngineContext, blas_instance_luts: &Vec<InstanceLUT>
-  ) -> (vk::Buffer, vk::DeviceMemory)
-  {
-    return Self::create_buffer_from_vector(
-      context, blas_instance_luts, 
-      vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST
-    );
-  }
-
   // fn create_indirect_commands(device: &Device, submeshes: Vec<SubMesh>) -> (vk::Buffer, vk::DeviceMemory)
   // {
   //   let indirect_commands: Vec<DrawIndexedIndirectCommand> = vec![]; indirect_commands.reserve(submeshes.len());
@@ -2408,12 +1767,11 @@ impl Engine
   // Create DescriptorPools that can allocate DescriptorSets. It's like a check making sure not too many descriptors of
   // some type are allocated, as it does not take layouts into account
   fn create_descriptor_pools(
-    context: &EngineContext, gltf_textures_data: &ImageData, render_textures_data: &ImageData
+    context: &EngineContext, gltf_textures_data: &ImageData
   ) -> vk::DescriptorPool
   {
     let device = &context.device;
     let gltf_texture_views = &gltf_textures_data.views;
-    let render_texture_views = &render_textures_data.views;
     // It's possible that a driver allows overallocation from pool, avoiding VK_ERROR_OUT_OF_POOL_MEMORY when allocating
     // for more descriptor sets than the descriptor pool sizes "allow". In these cases it may not seem like the
     // descriptorCount member has any effect, but it will for some other drivers.
@@ -2433,18 +1791,8 @@ impl Engine
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(descriptor_count),
       // Normal Buffer
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(descriptor_count),
-      // TLAS
-      vk::DescriptorPoolSize::default().ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-        .descriptor_count(descriptor_count),
-      // BLAS LUT Buffer
-      vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(descriptor_count),
       // Compute Output Image Sampler
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLER).descriptor_count(descriptor_count),
-      // Compute Output Writable Image
-      vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_IMAGE)
-        .descriptor_count(descriptor_count * render_texture_views.len() as u32),
-      vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLED_IMAGE)
-        .descriptor_count(descriptor_count * render_texture_views.len() as u32),
       // Material Texture Sampler
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLER).descriptor_count(descriptor_count),
       // Textures
@@ -2471,43 +1819,24 @@ impl Engine
   // Collation of Descriptors for shaders
   fn create_descriptor_sets(
     context: &EngineContext, fallback_texture_data: &ImageData,
-    gltf_textures_data: &ImageData, render_textures_data: &ImageData,
+    gltf_textures_data: &ImageData,
     descriptor_set_layout_global: vk::DescriptorSetLayout, descriptor_set_layout_material: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool, mvp_buffers: &Vec<(vk::Buffer, vk::DeviceMemory)>,
-    vertices: &Vec<Vertex>, indices: &Vec<u32>, vertex_data: &VertexData, 
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
-    ray_trace_data: &RayTraceData
+    vertices: &Vec<Vertex>, indices: &Vec<u32>, vertex_data: &VertexData
   ) -> (Vec<vk::DescriptorSet>, Vec<vk::DescriptorSet>)
   {
     let device = &context.device;
     let fallback_texture_view = fallback_texture_data.views[0];
     let gltf_texture_views = &gltf_textures_data.views;
     let gltf_texture_sampler = gltf_textures_data.sampler.unwrap();
-    let render_texture_views = &render_textures_data.views;
-    let render_texture_sampler = render_textures_data.sampler.unwrap();
     let index_buffer = vertex_data.index_buffer.0;
     let colour_buffer = vertex_data.colour_buffer.0;
     let uv_buffer = vertex_data.uv_buffer.0;
     let normal_buffer = vertex_data.nrm_buffer.0;
 
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
-    let (tlas_handle, blas_instance_luts, blas_instance_lut_buffer) = {
-      (
-        ray_trace_data.tlas_handle,
-        &ray_trace_data.blas_instance_luts,
-        ray_trace_data.blas_instance_lut_buffer.0
-      )
-    };
     // STANDARD 3D MODELS
     // Shader Resources
     // [value; num_of_copies]
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-    let (views_count, variable_counts) = {
-      (render_texture_views.len(), [render_texture_views.len() as u32; MAX_FRAMES_IN_FLIGHT])
-    };
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-    let mut variable_count_info = vk::DescriptorSetVariableDescriptorCountAllocateInfo::default()
-      .descriptor_counts(&variable_counts);
     
     // MAX_FRAMES_IN_FLIGHT copies of DescriptorSetLayout
     let global_layouts = [descriptor_set_layout_global; MAX_FRAMES_IN_FLIGHT];
@@ -2515,9 +1844,6 @@ impl Engine
     // Collate the relevant info (DescriptorPool and DescriptorSetLayouts)
     let mut global_alloc_info = vk::DescriptorSetAllocateInfo::default()
       .descriptor_pool(descriptor_pool).set_layouts(&global_layouts);
-
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-    global_alloc_info.push_next(&mut variable_count_info);
 
     let global_descriptor_sets = unsafe {
       device.allocate_descriptor_sets(&global_alloc_info)
@@ -2555,66 +1881,12 @@ impl Engine
         )
       };
 
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
-      let acc_structs = [tlas_handle];
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
-      let mut as_info = 
-        vk::WriteDescriptorSetAccelerationStructureKHR::default().acceleration_structures(&acc_structs);
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-      let as_write = vk::WriteDescriptorSet::default().push_next(&mut as_info)
-        .dst_set(global_descriptor_sets[i]).dst_binding(5).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR);
-
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-      let instance_lut_buffer_info = [vk::DescriptorBufferInfo::default().buffer(blas_instance_lut_buffer)
-        .offset(0).range(size_of::<InstanceLUT>() as vk::DeviceSize * blas_instance_luts.len() as vk::DeviceSize)];
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-      let instance_lut_write = vk::WriteDescriptorSet::default().buffer_info(&instance_lut_buffer_info)
-        .dst_set(global_descriptor_sets[i]).dst_binding(6).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER);
-
-      let sampler_info = [vk::DescriptorImageInfo::default().sampler(render_texture_sampler)];
-      let sampler_write = vk::WriteDescriptorSet::default().image_info(&sampler_info)
-        .dst_set(global_descriptor_sets[i]).dst_binding(7).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::SAMPLER);
-
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-      let (storage_image_infos, sampled_image_infos) = {
-        let mut storage_image_infos: Vec<vk::DescriptorImageInfo> = Vec::with_capacity(views_count);
-        let mut sampled_image_infos: Vec<vk::DescriptorImageInfo> = Vec::with_capacity(views_count);
-        for view in 0..views_count {
-          storage_image_infos.push(vk::DescriptorImageInfo::default()
-            .image_view(render_texture_views[view]).image_layout(vk::ImageLayout::GENERAL));
-          sampled_image_infos.push(vk::DescriptorImageInfo::default()
-            .image_view(render_texture_views[view]).image_layout(vk::ImageLayout::GENERAL));
-        }
-        (storage_image_infos, sampled_image_infos)
-      };
-
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-      let storage_image_write = vk::WriteDescriptorSet::default().image_info(&storage_image_infos)
-        .dst_set(global_descriptor_sets[i]).dst_binding(8).dst_array_element(0)
-        .descriptor_count(storage_image_infos.len().try_into().unwrap())
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE);
-
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-      let sampled_image_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(9).dst_array_element(0)
-        .descriptor_count(sampled_image_infos.len().try_into().unwrap())
-        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .image_info(&sampled_image_infos);
-
       let descriptor_writes = [
         mvp_write,
         colours_write,
         indices_write, 
         uvs_write,
-        norms_write,
-        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] as_write,
-        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] instance_lut_write,
-        sampler_write,
-        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] storage_image_write,
-        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] sampled_image_write
+        norms_write
       ];
 
       // Write the descriptor sets to the GPU
@@ -2659,11 +1931,7 @@ impl Engine
 
 
   fn setup_imgui_frame(
-    debug_gui_context: &mut DebugGuiContext, camera: &mut Camera, 
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] mut intensity: &mut f32, 
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] sun_direction: &mut glm::Vec3,
-    #[cfg(feature = "radiance_cascades")] mut interval: &mut f32,
-    window: &Window
+    debug_gui_context: &mut DebugGuiContext, camera: &mut Camera, window: &Window
   )
   {
     let imgui = &mut debug_gui_context.imgui;
@@ -2705,21 +1973,6 @@ impl Engine
 
         ui.slider("Speed Mod", 0.01, 4.0, &mut camera.shift_speed);
         // ImGui::SliderInt("Delta Mult", &deltaExp, 0, 32);
-
-        ui.spacing();
-
-        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] {
-          ui.text_wrapped("Light Direction");
-          ui.slider("Intensity", 0.0, 100.0, &mut intensity);
-          ui.slider("LX", -1.0, 1.0, &mut sun_direction.x);
-          ui.slider("LY", -1.0, 1.0, &mut sun_direction.y);
-          ui.slider("LZ", -1.0, 1.0, &mut sun_direction.z);
-        }
-
-        ui.spacing();
-
-        #[cfg(feature = "radiance_cascades")]
-        ui.slider("Interval Size", 0.0, 100.0, &mut interval);
       };
 
     if let Some(_) = ui
@@ -2757,17 +2010,7 @@ impl Engine
 
     let debug_gui_context = self.debug_gui_context.as_mut().unwrap();
     let camera = &mut self.camera;
-    Self::setup_imgui_frame(
-      debug_gui_context, camera,
-      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] &mut self.sun_intensity,
-      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] &mut self.sun_dir,
-      #[cfg(feature = "radiance_cascades")] &mut self.interval,
-      window
-    );
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] {
-      if self.sun_intensity != self.old_sun_intensity { self.old_sun_intensity = self.sun_intensity; self.frame = 0; }
-      if self.sun_dir != self.old_sun_dir { self.old_sun_dir = self.sun_dir; self.frame = 0; }
-    }
+    Self::setup_imgui_frame(debug_gui_context, camera, window);
     
     let imgui = &mut debug_gui_context.imgui;
     let draw_data = imgui.render();
@@ -2828,18 +2071,8 @@ impl Engine
       let compute_command_buffer = self.compute_command_buffers[self.current_frame];
       let compute_pipeline = self.compute_pipeline;
 
-      #[cfg(feature = "reference")]
-      let push_constant = PathTracePushConstant { 
-        light_dir: self.sun_dir, intensity: self.sun_intensity, frame: self.frame, time: self.runtime as f32
-      };
-
       Self::record_compute_command_buffers(
-        context, compute_command_buffer, compute_pipeline, global_descriptor_set, material_descriptor_set,
-        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] self.initial_render_texture_extent, 
-        #[cfg(feature = "reference")] &push_constant,
-        #[cfg(feature = "radiance_cascades")] self.interval, 
-        #[cfg(feature = "radiance_cascades")] self.sun_intensity, 
-        #[cfg(feature = "radiance_cascades")] self.sun_dir, 
+        context, compute_command_buffer, compute_pipeline, global_descriptor_set, material_descriptor_set
       );
       let command_buffers = [compute_command_buffer];
 
@@ -2869,20 +2102,9 @@ impl Engine
       Self::record_command_buffers(
         context, renderer, draw_data, draw_command_buffer, pipeline, image, view, swapchain_extent, 
         depth_image, depth_view, global_descriptor_set, material_descriptor_set,
-        #[cfg(not(any(feature = "reference", feature = "radiance_cascades")))] &self.vertex_data, 
-        #[cfg(not(any(feature = "reference", feature = "radiance_cascades")))] &self.submeshes,
-        #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-        (self.triangle_vertex_buffer.0, self.triangle_index_buffer.0),
-        #[cfg(feature = "radiance_cascades")] self.interval, 
-        #[cfg(feature = "radiance_cascades")] self.sun_intensity, 
-        #[cfg(feature = "radiance_cascades")] self.sun_dir
+        &self.vertex_data, &self.submeshes
       );
 
-      // Would ideally be in record_command_buffer, but requires mutable reference to object in self
-      // (only one mutable reference can exist at one time)
-      {
-
-      }
       let command_buffers = [draw_command_buffer];
 
       // Submission will wait for graphicsWaitValue
@@ -3088,14 +2310,8 @@ impl Engine
       .attachments(&color_blend_attachment);
 
     let push_constant_range = [vk::PushConstantRange {
-      stage_flags: vk::ShaderStageFlags::FRAGMENT,
-      offset: 0,
-#[cfg(feature = "reference")]
-      size: size_of::<PathTracePushConstant>().try_into().unwrap(),
-#[cfg(feature = "radiance_cascades")]
-      size: size_of::<RadianceCascadesPushConstant>().try_into().unwrap(),
-#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
-      size: size_of::<RasterPushConstant>().try_into().unwrap(),
+      stage_flags: vk::ShaderStageFlags::FRAGMENT, offset: 0, 
+      size: size_of::<RasterPushConstant>().try_into().unwrap()
     }];
 
     // Which DescriptorSetLayouts will be used by this pipeline
@@ -3155,14 +2371,8 @@ impl Engine
     let descriptor_set_layouts = [descriptor_set_layout_global, descriptor_set_layout_material];
 
     let push_constant_range = [vk::PushConstantRange {
-      stage_flags: vk::ShaderStageFlags::COMPUTE,
-      offset: 0,
-#[cfg(feature = "reference")]
-      size: size_of::<PathTracePushConstant>().try_into().unwrap(),
-#[cfg(feature = "radiance_cascades")]
-      size: size_of::<RadianceCascadesPushConstant>().try_into().unwrap(),
-#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
-      size: size_of::<RasterPushConstant>().try_into().unwrap(),
+      stage_flags: vk::ShaderStageFlags::COMPUTE, offset: 0,
+      size: size_of::<RasterPushConstant>().try_into().unwrap()
     }];
 
     // Which DescriptorSetLayouts will be used by this pipeline
@@ -3348,31 +2558,6 @@ impl Engine
     }
   }
 
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-  fn cleanup_textures(context: &EngineContext, image_data: &ImageData)
-  {
-    let sampler = image_data.sampler;
-    let views = &image_data.views;
-    let images = &image_data.images;
-    let device = &context.device;
-    unsafe {
-      if !sampler.is_none() { device.destroy_sampler(sampler.unwrap(), None); }
-      views.iter().for_each(|&view| device.destroy_image_view(view, None));
-      images.iter().for_each(|image| {device.destroy_image(image.0, None); device.free_memory(image.1, None);});
-    }
-  }
-
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-  fn cleanup_descriptor_sets(context: &EngineContext, descriptor_pool: vk::DescriptorPool, descriptor_sets: &Vec<&Vec<vk::DescriptorSet>>)
-  {
-    let device = &context.device;
-    unsafe {
-      descriptor_sets.iter().for_each(|&sets| {
-        device.free_descriptor_sets(descriptor_pool, sets).expect("failed to free descriptor sets!");
-      });
-    }
-  }
-
   // Recreate all the pipelines if the SPIR-V is valid
   pub fn reload_shaders(&mut self)
   {
@@ -3400,28 +2585,6 @@ impl Engine
       context, &Path::new(&self.spirv_path), 
       self.descriptor_set_layout_global, self.descriptor_set_layout_material
     );
-    
-  #[cfg(any(feature = "reference", feature = "radiance_cascades"))] {
-      Self::cleanup_textures(context, &self.render_textures_data);
-      Self::cleanup_descriptor_sets(
-        context, self.descriptor_pool, &vec![&self.global_descriptor_sets, &self.material_descriptor_sets]);
-      let (initial_render_texture_extent, render_textures, render_texture_views, render_texture_sampler) = 
-        Self::create_render_texture(context, #[cfg(not(feature = "radiance_cascades"))] self.swapchain_extent);
-      
-      let (global_descriptor_sets, material_descriptor_sets) = Self::create_descriptor_sets(
-        context, &self.fallback_texture_data, &self.gltf_textures_data, &self.render_textures_data,
-        self.descriptor_set_layout_global, self.descriptor_set_layout_material,
-        self.descriptor_pool, &self.mvp_buffers, &self.vertices, &self.indices, &self.vertex_data,
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
-        &self.ray_trace_data
-      );
-
-      self.initial_render_texture_extent = initial_render_texture_extent;
-      self.render_textures_data = ImageData { 
-        images: render_textures, views: render_texture_views, sampler: Some(render_texture_sampler) };
-      self.global_descriptor_sets = global_descriptor_sets;
-      self.material_descriptor_sets = material_descriptor_sets;
-    }
 
     self.frame = 0;
     self.graphics_pipeline = graphics_pipeline;
@@ -3460,12 +2623,7 @@ impl Engine
   // Record commands for compute (dispatching)
   fn record_compute_command_buffers(
     context: &EngineContext, command_buffer: vk::CommandBuffer, pipeline: (vk::PipelineLayout, vk::Pipeline),
-    global_descriptor_set: vk::DescriptorSet, material_descriptor_set: vk::DescriptorSet,
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] initial_render_texture_extent: vk::Extent2D,
-    #[cfg(feature = "reference")] push_constant: &PathTracePushConstant, 
-    #[cfg(feature = "radiance_cascades")] interval: f32,
-    #[cfg(feature = "radiance_cascades")] sun_intensity: f32,
-    #[cfg(feature = "radiance_cascades")] sun_dir: glm::Vec3,
+    global_descriptor_set: vk::DescriptorSet, material_descriptor_set: vk::DescriptorSet
   )
   {
     let device = &context.device;
@@ -3480,49 +2638,7 @@ impl Engine
       device.cmd_bind_descriptor_sets(
         command_buffer, vk::PipelineBindPoint::COMPUTE, pipeline.0, 1, &[material_descriptor_set], &[]);
     }
-#[cfg(not(feature = "radiance_cascades"))] {
-#[cfg(feature = "reference")] {
-        unsafe {
-          let push_constants =  
-            std::slice::from_raw_parts(push_constant as *const _ as *const u8, size_of::<PathTracePushConstant>());
 
-          device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::COMPUTE, 0, push_constants);
-          device.cmd_dispatch(command_buffer, initial_render_texture_extent.width  / WORKGROUP_SIZE[0] + 1, 
-                                              initial_render_texture_extent.height / WORKGROUP_SIZE[1] + 1, 1);
-        } 
-      }
-    }
-
-#[cfg(feature = "radiance_cascades")] {
-      let highest_cascade = if f32::log2((CASCADE_0_PROBES[0] + 1) as f32) as u32 > MAX_RENDER_TEXTURES {
-        MAX_RENDER_TEXTURES
-      } else {
-        f32::log2((CASCADE_0_PROBES[0] + 1) as f32) as u32
-      };
-      
-      for level in 0..highest_cascade {
-        use crate::engine::CASCADE_0_RAYS;
-
-        let push_constant = RadianceCascadesPushConstant {
-          level: level,
-          max_level: highest_cascade,
-          base_ray_count: CASCADE_0_RAYS,
-          interval: interval,
-          intensity: sun_intensity,
-          light_dir: glm::normalize(&sun_dir)
-        };
-        unsafe {
-        let push_constants =  
-          std::slice::from_raw_parts(
-            &push_constant as *const _ as *const u8, size_of::<RadianceCascadesPushConstant>());
-
-          device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::COMPUTE, 0, push_constants);
-          device.cmd_dispatch(command_buffer, 
-            (initial_render_texture_extent.width >> level) / WORKGROUP_SIZE[0] + 1, 
-             initial_render_texture_extent.height          / WORKGROUP_SIZE[1] + 1, 1)
-        };
-      }
-    }
     // For path tracing, dispatch(WIDTH, HEIGHT, 1) lets the shader use the threadID as pixel coordinates for writing
     unsafe { device.end_command_buffer(command_buffer).expect("failed to end compute command buffer!") };
   }
@@ -3533,15 +2649,7 @@ impl Engine
     pipeline: (vk::PipelineLayout, vk::Pipeline), image: vk::Image, view: vk::ImageView, extent: vk::Extent2D, 
     depth_image: vk::Image, depth_view: vk::ImageView,
     global_descriptor_set: vk::DescriptorSet, material_descriptor_set: vk::DescriptorSet,
-    #[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
-    vertex_data: &VertexData,
-    #[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
-    submeshes: &Vec<SubMesh>,
-    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-    triangle_data: (vk::Buffer, vk::Buffer),
-    #[cfg(feature = "radiance_cascades")] interval: f32,
-    #[cfg(feature = "radiance_cascades")] sun_intensity: f32,
-    #[cfg(feature = "radiance_cascades")] sun_dir: glm::Vec3
+    vertex_data: &VertexData, submeshes: &Vec<SubMesh>
   )
   {
     let device = &context.device;
@@ -3622,7 +2730,6 @@ impl Engine
     };
 
   // STATIC MODELS
-#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
     {
       unsafe {
         device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.1);
@@ -3648,42 +2755,6 @@ impl Engine
     }
     // COMPUTE RESULTS
     // render these after model as we want them in front without needing the depth buffer
-#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
-    {
-      unsafe { 
-        device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.1);
-
-        device.cmd_bind_vertex_buffers(command_buffer, 0, &[triangle_data.0], &[0]);
-        device.cmd_bind_index_buffer(command_buffer, triangle_data.1, 0, vk::IndexType::UINT32);
-        device.cmd_bind_descriptor_sets(
-          command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.0, 0, &[global_descriptor_set], &[]);
-        device.cmd_bind_descriptor_sets(
-          command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.0, 1, &[material_descriptor_set], &[])
-      };
-
-#[cfg(feature = "radiance_cascades")] {
-        let highest_cascade = if f32::log2((CASCADE_0_PROBES[0] + 1) as f32) as u32 > MAX_RENDER_TEXTURES {
-          MAX_RENDER_TEXTURES as u32
-        } else {
-          f32::log2((CASCADE_0_PROBES[0] + 1) as f32) as u32
-        };
-
-        let push_constant = RadianceCascadesPushConstant {
-          level: 0,
-          max_level: highest_cascade,
-          base_ray_count: CASCADE_0_RAYS,
-          interval: interval,
-          intensity: sun_intensity,
-          light_dir: glm::normalize(&sun_dir)
-        };
-        let push_constants = unsafe {std::slice::from_raw_parts(
-          &push_constant as *const _ as *const u8, size_of::<RadianceCascadesPushConstant>())};
-        unsafe { device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::FRAGMENT, 0, push_constants) };
-      }
-
-      unsafe { device.cmd_draw_indexed(command_buffer, 3, 1, 0, 0, 0) };
-    }
-
     renderer.cmd_draw(command_buffer, draw_data).expect("failed to record ImGui draw commands!");    
 
     // All done dealing with rendering

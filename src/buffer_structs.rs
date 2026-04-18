@@ -23,39 +23,9 @@ pub struct MVP {
 // }
 
 #[repr(C)]
-#[derive(Default, Clone, Copy)]
-#[cfg(feature = "reference")]
-pub struct PathTracePushConstant {
-  pub light_dir: glm::Vec3,
-  pub intensity: f32,
-  pub time: f32,
-  pub frame: u32,
-}
-
-#[repr(C)]
 #[derive(Clone, Copy)]
-#[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
 pub struct RasterPushConstant {
   pub material_index: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-#[cfg(feature = "radiance_cascades")]
-pub struct RadianceCascadesPushConstant {
-  pub level: u32,
-  pub max_level: u32,
-  pub base_ray_count: u32,
-  pub interval: f32,
-  pub intensity: f32,
-  pub light_dir: glm::Vec3
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-#[cfg(feature = "restir")]
-pub struct ReSTIRPushConstant {
-
 }
 
 #[repr(C)]
@@ -67,12 +37,4 @@ pub struct SubMesh {
   pub first_vertex: u32,
   pub max_vertex: u32,
   pub alpha_cut: Bool32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-pub struct InstanceLUT {
-  pub material_id: u32,
-  pub index_buffer_offset: u32
 }
