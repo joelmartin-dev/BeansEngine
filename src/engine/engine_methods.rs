@@ -8,25 +8,24 @@ use tokio::task;
 use std::{u64, f32};
 
 use crate::buffer_structs::{MVP, SubMesh};
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
 use crate::buffer_structs::InstanceLUT;
 #[cfg(feature = "reference")] use crate::buffer_structs::PathTracePushConstant;
-#[cfg(feature = "restir")]  use crate::buffer_structs::ReSTIRPushConstant;
 #[cfg(feature = "radiance_cascades")] use crate::buffer_structs::RadianceCascadesPushConstant;
-#[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] 
+#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))] 
 use crate::buffer_structs::RasterPushConstant;
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
 use crate::engine::RayTraceData;
 use crate::engine::{
   DEFAULT_MODEL_PATH, DEFAULT_SLANG_PATH, DEFAULT_SPIRV_PATH, DebugGuiContext, ENABLE_VALIDATION_LAYERS, Engine, EngineContext, FALLBACK_TEXTURE_PATH, ImageData, MAX_FRAMES_IN_FLIGHT, MAX_RENDER_TEXTURES, RES, SHADER_ROOT_PATH, TEXTURES_DESCRIPTOR_ARRAY_LENGTH, VALIDATION_LAYERS, VertexData
 };
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
 use crate::engine::WORKGROUP_SIZE;
 #[cfg(feature = "radiance_cascades")] use crate::engine::{CASCADE_0_PROBES, CASCADE_0_RAYS};
 use crate::camera::Camera;
 //use crate::model::CUBE;
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
 use crate::model::TRIANGLE;
 use crate::vertex::Vertex;
 use ash::util::Align;
@@ -47,7 +46,7 @@ use shader_slang::{self as slang, Downcast};
 
 use ash::ext::debug_utils;
 use ash::khr::{surface, swapchain};
-#[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
 use ash::khr::acceleration_structure;
 use ash::{Entry, Instance, Device, vk};
 
@@ -68,7 +67,9 @@ unsafe extern "system" fn debug_callback(
   // If msg_severity is error, print error else print warning
   let severity = 
     if msg_severity & vk::DebugUtilsMessageSeverityFlagsEXT::ERROR == msg_severity { "error" } 
-    else { "warning" };
+    else if msg_severity & vk::DebugUtilsMessageSeverityFlagsEXT::WARNING == msg_severity { "warning" } 
+    else if msg_severity & vk::DebugUtilsMessageSeverityFlagsEXT::INFO == msg_severity { "info" }
+    else { "verbose" };
 
   println!("validation layer: type {} msg: {}", severity,
     // The message is passed as a pointer to a CStr. Reconstruct the message and convert it to a UTF-8 str slice
@@ -110,16 +111,11 @@ impl Engine
     Self::setup_debug_messenger(&entry, &instance);
     
     // The device extensions required by the application at some point during runtime
-    let mut required_device_extensions = vec![
-      vk::KHR_SWAPCHAIN_NAME, vk::KHR_SYNCHRONIZATION2_NAME, vk::KHR_CREATE_RENDERPASS2_NAME, 
-      vk::KHR_SPIRV_1_4_NAME, vk::KHR_DEFERRED_HOST_OPERATIONS_NAME,
+    let required_device_extensions = vec![
+      vk::KHR_SWAPCHAIN_NAME, vk::KHR_SPIRV_1_4_NAME, vk::KHR_SYNCHRONIZATION2_NAME, vk::KHR_CREATE_RENDERPASS2_NAME, 
+      vk::KHR_ACCELERATION_STRUCTURE_NAME, vk::KHR_BUFFER_DEVICE_ADDRESS_NAME, vk::KHR_DEFERRED_HOST_OPERATIONS_NAME, 
+      vk::KHR_RAY_QUERY_NAME
     ];
-
-#[cfg(feature = "hardware")] 
-    required_device_extensions.extend(vec![
-      vk::EXT_DESCRIPTOR_INDEXING_NAME, vk::KHR_BUFFER_DEVICE_ADDRESS_NAME, 
-      vk::KHR_ACCELERATION_STRUCTURE_NAME, vk::KHR_RAY_QUERY_NAME
-    ]);
 
     // Select a physical device
     let physical_device = Self::pick_physical_device(&instance, &required_device_extensions);
@@ -153,7 +149,7 @@ impl Engine
     let command_pool = Self::create_command_pool(&device, qfi);    
     
     // Load acceleration structure functions
-#[cfg(feature = "hardware")]
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
     let as_device = acceleration_structure::Device::new(&instance, &device);
     
     // Initialise Shader-Slang Compilation API
@@ -162,8 +158,8 @@ impl Engine
     // Everything needed for any given Vulkan operation
     let context = EngineContext {
       _entry: entry, instance, surface, surface_khr, physical_device, device, 
-      queue, command_pool, swapchain, swapchain_khr, global_session,
-      #[cfg(feature = "hardware")] as_device
+      queue, command_pool, swapchain, swapchain_khr, global_session, 
+      #[cfg(any(feature = "reference", feature = "radiance_cascades"))]as_device
     };
     
     // Set up ImGui
@@ -271,47 +267,35 @@ impl Engine
     // Per-frame camera-based transformations
     let mvp_buffers = Self::create_uniform_buffers(&context);
 
-    let vertex_data = {
-      let vertex_buffer = Self::create_vertex_buffer(&context, &vertices);
-      #[cfg(feature = "hardware")]
-      let index_buffer = Self::create_index_buffer(&context, &indices,
-        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
-        vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-      );
-      #[cfg(not(feature = "hardware"))]
-      let index_buffer = Self::create_index_buffer(&context, &indices, vk::BufferUsageFlags::STORAGE_BUFFER);
-      let colour_buffer = Self::create_colour_buffer(&context, &vertices);
-      let uv_buffer = Self::create_uv_buffer(&context, &vertices);
-      let nrm_buffer = Self::create_normal_buffer(&context, &vertices);
-
-      VertexData { vertex_buffer, index_buffer, colour_buffer, uv_buffer, nrm_buffer }
-    };
-
+    let vertex_buffer = Self::create_vertex_buffer(&context, &vertices);
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
     // The triangle that the render texture is rendered to
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-    let (triangle_vertex_buffer, triangle_index_buffer) = {(
-      Self::create_vertex_buffer(&context, &TRIANGLE.vertices), 
-      Self::create_index_buffer(&context, &TRIANGLE.indices, vk::BufferUsageFlags::default())
-    )};
+    let triangle_vertex_buffer = Self::create_vertex_buffer(&context, &TRIANGLE.vertices);
     
+    let index_buffer = Self::create_index_buffer(&context, &indices,
+      vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER |
+      vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+    );
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
+    let triangle_index_buffer = Self::create_index_buffer(&context, &TRIANGLE.indices, vk::BufferUsageFlags::default());
+    
+    let colour_buffer = Self::create_colour_buffer(&context, &vertices);
+    let uv_buffer = Self::create_uv_buffer(&context, &vertices);
+    let nrm_buffer = Self::create_normal_buffer(&context, &vertices);
+
+    let vertex_data = VertexData { vertex_buffer, index_buffer, colour_buffer, uv_buffer, nrm_buffer };
+
     // Create the acceleration structures
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
     let ray_trace_data = {
-      #[cfg(feature = "hardware")]
-      let (blas_handles, blas_instance_buffer, tlas_buffer, tlas_handle, instance_luts) = 
+      let (blas_handles, blas_instance_buffer, tlas_buffer, tlas_handle, blas_instance_luts) = 
         Self::create_acceleration_structures(&context, &vertex_data, &submeshes);
-      #[cfg(not(feature = "hardware"))] let instance_luts = 
-        Self::create_acceleration_structures(&submeshes);
-      let instance_lut_buffer = Self::create_blas_instance_lut_buffer(&context, &instance_luts);
+      let blas_instance_lut_buffer = Self::create_blas_instance_lut_buffer(&context, &blas_instance_luts);
       
-      #[cfg(feature = "hardware")] let ray_trace_data = RayTraceData { 
+      let ray_trace_data = RayTraceData { 
         blas_handles, blas_instance_buffer, 
         tlas_buffer, tlas_handle, 
-        instance_luts, instance_lut_buffer 
-      };
-
-      #[cfg(not(feature = "hardware"))] let ray_trace_data = RayTraceData {
-        instance_luts, instance_lut_buffer
+        blas_instance_luts, blas_instance_lut_buffer 
       };
 
       ray_trace_data
@@ -325,7 +309,7 @@ impl Engine
       &context, &fallback_texture_data, &gltf_textures_data, &render_textures_data, 
       descriptor_set_layout_global, descriptor_set_layout_material, descriptor_pool, &mvp_buffers, 
       &vertices, &indices, &vertex_data, 
-      #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+      #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
       &ray_trace_data
     );
 
@@ -361,9 +345,9 @@ impl Engine
       submeshes,
       gltf_textures_data,
       vertex_data,
-      #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] triangle_vertex_buffer,
-      #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] triangle_index_buffer,
-      #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] ray_trace_data,
+      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_vertex_buffer,
+      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_index_buffer,
+      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] ray_trace_data,
       // indirect_commands: Default::default(),
       // indirect_commands_buffer: Default::default(),
       initial_render_texture_extent,
@@ -417,7 +401,7 @@ impl Engine
       if !layer_is_available { panic!("Required layer {:?} not available", required_layer); }
     });
 
-    let mut extension_names: Vec<*const i8> = vec![];
+    let mut extension_names: Vec<*const i8> = vec![vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME.as_ptr()];
     extension_names.extend_from_slice(
       ash_window::enumerate_required_extensions(window.display_handle().unwrap().into()
     ).unwrap());
@@ -516,7 +500,6 @@ impl Engine
       );
       if !supports_all_required_extensions { println!("{:?} does not support required extensions", *physical_device); return false; }
 
-      let mut compute_shader_derivatives_features = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default();
       let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
       let mut acceleration_structure_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
       let mut extended_dynamic_state_features = vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT::default();
@@ -525,9 +508,7 @@ impl Engine
 
       // Build the pNext chain (in reverse order)
       // Each structure's pNext points to the next one in the chain
-      compute_shader_derivatives_features.p_next = std::ptr::null_mut();
-      ray_query_features.p_next = 
-        &mut compute_shader_derivatives_features as *mut _ as *mut c_void;
+      ray_query_features.p_next = std::ptr::null_mut();
       acceleration_structure_features.p_next = 
         &mut ray_query_features as *mut _ as *mut c_void;
       extended_dynamic_state_features.p_next = 
@@ -561,7 +542,6 @@ impl Engine
       if !supports_required_min_spec_features { 
         println!("{:?} does not support required features", *physical_device); return false; }
 
-      #[cfg(feature = "hardware")] 
       let supports_required_hardware_features =
         vulkan_12_features.descriptor_binding_uniform_buffer_update_after_bind != vk::FALSE &&
         vulkan_12_features.descriptor_binding_sampled_image_update_after_bind != vk::FALSE &&
@@ -576,19 +556,7 @@ impl Engine
         acceleration_structure_features.acceleration_structure != vk::FALSE &&
         acceleration_structure_features.descriptor_binding_acceleration_structure_update_after_bind != vk::FALSE &&
         ray_query_features.ray_query != vk::FALSE;
-        
-      #[cfg(feature = "hardware")] if !supports_required_hardware_features { 
-        println!("{:?} does not support required features", *physical_device); return false; }
 
-      // If all true, this physical device is fit for purpose and we can stop checking
-      #[cfg(not(feature = "hardware"))] 
-      return supports_vulkan_1_3 &&
-        supports_sampler_anisotropy &&
-        supports_graphics_compute && 
-        supports_all_required_extensions &&
-        supports_required_min_spec_features;
-
-      #[cfg(feature = "hardware")] 
       return supports_vulkan_1_3 &&
         supports_sampler_anisotropy &&
         supports_graphics_compute && 
@@ -624,7 +592,6 @@ impl Engine
     // Find the index of the Graphics Compute queue family that we know exists on the physical device
     let qfi = Self::find_queue_families(instance, physical_device);
 
-    #[cfg(feature = "hardware")] 
     let mut vulkan_12_features = vk::PhysicalDeviceVulkan12Features::default()
       .descriptor_binding_uniform_buffer_update_after_bind(true)
       .descriptor_binding_sampled_image_update_after_bind(true)
@@ -637,34 +604,26 @@ impl Engine
       .host_query_reset(true)
       .buffer_device_address(true)
       .timeline_semaphore(true);
-    #[cfg(not(feature = "hardware"))] 
-    let mut vulkan_12_features = vk::PhysicalDeviceVulkan12Features::default()
-      .timeline_semaphore(true);
     let mut vulkan_13_features = vk::PhysicalDeviceVulkan13Features::default()
       .synchronization2(true)
       .dynamic_rendering(true);
     let mut extended_dynamic_state_features = vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT::default()
       .extended_dynamic_state(true);
-    #[cfg(feature = "hardware")] 
     let mut acceleration_structure_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
       .acceleration_structure(true)
       .descriptor_binding_acceleration_structure_update_after_bind(true);
-    #[cfg(feature = "hardware")] 
     let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default()
       .ray_query(true);
 
     // Build the pNext chain (in reverse order)
     // Each structure's pNext points to the next one in the chain
-    #[cfg(feature = "hardware")] {
-      ray_query_features.p_next = null_mut();
-      acceleration_structure_features.p_next = 
+    // compute_shader_derivatives_features.p_next = std::ptr::null_mut();
+    ray_query_features.p_next = std::ptr::null_mut();
+        // &mut compute_shader_derivatives_features as *mut _ as *mut c_void;
+    acceleration_structure_features.p_next = 
         &mut ray_query_features as *mut _ as *mut c_void;
       extended_dynamic_state_features.p_next = 
         &mut acceleration_structure_features as *mut _ as *mut c_void;
-    }
-    #[cfg(not(feature = "hardware"))] {
-      extended_dynamic_state_features.p_next = null_mut();
-    }
     vulkan_13_features.p_next = 
       &mut extended_dynamic_state_features as *mut _ as *mut c_void;
     vulkan_12_features.p_next = 
@@ -1299,7 +1258,7 @@ impl Engine
       .mip_lod_bias(0.0).anisotropy_enable(false)
       .compare_enable(false).compare_op(vk::CompareOp::ALWAYS)
       .min_lod(0.0).max_lod(vk::LOD_CLAMP_NONE)
-      .anisotropy_enable(cfg!(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))))
+      .anisotropy_enable(cfg!(not(any(feature = "reference", feature = "radiance_cascades"))))
       .max_anisotropy(anisotropy);
 
     let base_texture_sampler = unsafe {
@@ -1792,70 +1751,49 @@ impl Engine
     let global_bindings = [
       // Binding for the Model View Projection matrix from the Camera, used exclusively by the vertex shader
       // Model-View-Projection Buffer
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(0)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .descriptor_count(1)
+      vk::DescriptorSetLayoutBinding::default().binding(0)
+        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::COMPUTE),
       // Index Buffer
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(1)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .descriptor_count(1)
+      vk::DescriptorSetLayoutBinding::default().binding(1)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE),
       // Vertex Colour Buffer
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(2)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .descriptor_count(1)
+      vk::DescriptorSetLayoutBinding::default().binding(2)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
       // UV Buffer
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(3)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .descriptor_count(1)
+      vk::DescriptorSetLayoutBinding::default().binding(3)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
       // Normals Buffer
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(4)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .descriptor_count(1)
+      vk::DescriptorSetLayoutBinding::default().binding(4)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE),
       // TLAS
-      #[cfg(feature = "hardware")]
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(5)
-        .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-        .descriptor_count(1)
+      vk::DescriptorSetLayoutBinding::default().binding(5)
+        .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR).descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE),
       // BLAS Lookup Table Buffer
-      #[cfg(feature = "hardware")]
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(6)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .descriptor_count(1)
+      vk::DescriptorSetLayoutBinding::default().binding(6)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE),
       // Storage Image read-only Sampler
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(7)
-        .descriptor_type(vk::DescriptorType::SAMPLER)
-        .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
+      vk::DescriptorSetLayoutBinding::default().binding(7)
+        .descriptor_type(vk::DescriptorType::SAMPLER).descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
       // Storage Image Write
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(8)
+      vk::DescriptorSetLayoutBinding::default().binding(8)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(render_texture_views.len().try_into().unwrap())
         .stage_flags(vk::ShaderStageFlags::COMPUTE),
       // Storage Image Sample
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(9)
+      vk::DescriptorSetLayoutBinding::default().binding(9)
         .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
         .descriptor_count(render_texture_views.len().try_into().unwrap())
         .stage_flags(vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::FRAGMENT),
     ];
 
-    #[cfg(feature = "hardware")] 
     let binding_flags = [
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
@@ -1865,64 +1803,49 @@ impl Engine
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-      vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
       vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
-      vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT | 
-        vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+      vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND | vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT
     ];
-    #[cfg(not(feature = "hardware"))] let binding_flags = vec![vk::DescriptorBindingFlags::default(); global_bindings.len()];
 
-    let mut flags_create_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
-      .binding_flags(&binding_flags);
+    let mut flags_create_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&binding_flags);
 
     // Copy the bindings into the layout info
-    let global_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-      .push_next(&mut flags_create_info)
-      .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
-      .bindings(&global_bindings);
+    let global_layout_info = vk::DescriptorSetLayoutCreateInfo::default().push_next(&mut flags_create_info)
+      .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL).bindings(&global_bindings);
 
     // Initialise
     let descriptor_set_layout_global = unsafe {
         device.create_descriptor_set_layout(&global_layout_info, None)
-        .expect("failed to create global descriptor set layouts")
+          .expect("failed to create global descriptor set layouts")
     };
 
     let material_bindings = [
       // Binding for a texture (colloquial), used exclusively by the fragment shader
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(0)
-        .descriptor_type(vk::DescriptorType::SAMPLER)
-        .descriptor_count(1)
+      vk::DescriptorSetLayoutBinding::default().binding(0)
+        .descriptor_type(vk::DescriptorType::SAMPLER).descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE),
 
-      vk::DescriptorSetLayoutBinding::default()
-        .binding(1)
-        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-        .descriptor_count(TEXTURES_DESCRIPTOR_ARRAY_LENGTH)
+      vk::DescriptorSetLayoutBinding::default().binding(1)
+        .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE).descriptor_count(gltf_texture_views.len() as u32)
         .stage_flags(vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE)
     ];
 
-    #[cfg(feature = "hardware")]
     let mat_binding_flags = [
       vk::DescriptorBindingFlags::UPDATE_AFTER_BIND,
       vk::DescriptorBindingFlags::PARTIALLY_BOUND | 
         vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT | 
         vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
     ];
-    #[cfg(not(feature = "hardware"))] 
-    let mat_binding_flags = [vk::DescriptorBindingFlags::default(), vk::DescriptorBindingFlags::default()];
-
+ 
     let mut mat_flags_create_info = vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
       .binding_flags(&mat_binding_flags);
 
-    let mat_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
-      .push_next(&mut mat_flags_create_info)
-      .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
-      .bindings(&material_bindings);
+    let mat_layout_info = vk::DescriptorSetLayoutCreateInfo::default().push_next(&mut mat_flags_create_info)
+      .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL).bindings(&material_bindings);
 
     let descriptor_set_layout_material = unsafe {
         device.create_descriptor_set_layout(&mat_layout_info, None)
-        .expect("failed to create material descriptor set layouts!")
+          .expect("failed to create material descriptor set layouts!")
     };
 
     return (descriptor_set_layout_global, descriptor_set_layout_material);
@@ -1966,7 +1889,7 @@ impl Engine
     let instance = &context.instance;
     let device = &context.device;
     let physical_device = context.physical_device;
-    let mut mvp_buffers: Vec<(vk::Buffer, vk::DeviceMemory)> = vec![];
+    let mut mvp_buffers: Vec<(vk::Buffer, vk::DeviceMemory)> = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
 
     // General breakdown:
     // 1. Create a buffer with sizeof(UserStruct) in DeviceMemory with accessor userStructBuffer
@@ -1975,13 +1898,10 @@ impl Engine
 
     for _i in 0..MAX_FRAMES_IN_FLIGHT {
       let mvp_buffer_size: vk::DeviceSize = size_of::<MVP>().try_into().unwrap();
-      let (mvp_buffer, mvp_buffer_memory) = 
-        Self::create_buffer(
-          instance, device, physical_device, mvp_buffer_size, 
-          vk::BufferUsageFlags::UNIFORM_BUFFER, 
-          vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT
-        );
-      mvp_buffers.push((mvp_buffer, mvp_buffer_memory));
+      mvp_buffers.push(Self::create_buffer(
+        instance, device, physical_device, mvp_buffer_size, vk::BufferUsageFlags::UNIFORM_BUFFER, 
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT
+      ));
     }
     return mvp_buffers;
   }
@@ -1998,16 +1918,16 @@ impl Engine
     They have the same relationship as vertices and indices. Vertices store the attributes, indices act as instances 
     of those vertices.
   */
-#[cfg(feature = "hardware")]
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
   fn cleanup_acceleration_structures(
-    context: &EngineContext, acceleration_structure_data: &AccelerationStructureData
+    context: &EngineContext, ray_trace_data: &RayTraceData
   )
   {
     let device = &context.device; let as_device = &context.as_device;
-    let blas_handles = &acceleration_structure_data.blas_handles;
-    let blas_instance_buffer = acceleration_structure_data.blas_instance_buffer;
-    let tlas_handle = acceleration_structure_data.tlas_handle;
-    let tlas_buffer = acceleration_structure_data.tlas_buffer;
+    let blas_handles = &ray_trace_data.blas_handles;
+    let blas_instance_buffer = ray_trace_data.blas_instance_buffer;
+    let tlas_handle = ray_trace_data.tlas_handle;
+    let tlas_buffer = ray_trace_data.tlas_buffer;
 
     unsafe { device.device_wait_idle().expect("failed to wait for device idle!"); }
 
@@ -2022,13 +1942,13 @@ impl Engine
     };
   }
 
-#[cfg(feature = "hardware")]
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
   pub fn rebuild_acceleration_structures(&mut self)
   {
     let context = self.context.as_ref().unwrap();
     
     Self::cleanup_acceleration_structures(
-      context, &self.acceleration_structure_data);
+      context, &self.ray_trace_data);
     
     let vertex_data = &self.vertex_data; let submeshes = &self.submeshes;
     let (blas_handles, blas_instance_buffer, tlas_buffer, tlas_handle, blas_instance_luts) = 
@@ -2036,7 +1956,7 @@ impl Engine
 
     let blas_instance_lut_buffer = Self::create_blas_instance_lut_buffer(context, &blas_instance_luts);
 
-    self.acceleration_structure_data = AccelerationStructureData { 
+    self.ray_trace_data = RayTraceData { 
       blas_handles, blas_instance_buffer, 
       tlas_handle, tlas_buffer, 
       blas_instance_luts, blas_instance_lut_buffer 
@@ -2045,20 +1965,8 @@ impl Engine
     self.reload_shaders();
   }
 
-#[cfg(not(feature = "hardware"))]
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-  fn create_acceleration_structures(submeshes: &Vec<SubMesh>) -> Vec<InstanceLUT>
-  {
-    let instance_luts: Vec<InstanceLUT> = submeshes.iter().map(|submesh| InstanceLUT {
-      material_id: submesh.material_id.try_into().unwrap(), 
-      index_buffer_offset: submesh.index_offset
-    }).collect();
-    return instance_luts;
-  }
-
   // Create the BLAS and TLAS for the scene
-#[cfg(feature = "hardware")]
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
   fn create_acceleration_structures(
     context: &EngineContext, vertex_data: &VertexData, submeshes: &Vec<SubMesh>
   ) -> (
@@ -2464,7 +2372,7 @@ impl Engine
     );
   }
 
-  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
   fn create_blas_instance_lut_buffer(
     context: &EngineContext, blas_instance_luts: &Vec<InstanceLUT>
   ) -> (vk::Buffer, vk::DeviceMemory)
@@ -2526,26 +2434,22 @@ impl Engine
       // Normal Buffer
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(descriptor_count),
       // TLAS
-      #[cfg(feature = "hardware")]
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
         .descriptor_count(descriptor_count),
       // BLAS LUT Buffer
-      #[cfg(feature = "hardware")]
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(descriptor_count),
       // Compute Output Image Sampler
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLER).descriptor_count(descriptor_count),
       // Compute Output Writable Image
-      #[cfg(feature = "hardware")]
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(descriptor_count * render_texture_views.len() as u32),
-      #[cfg(feature = "hardware")]
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLED_IMAGE)
         .descriptor_count(descriptor_count * render_texture_views.len() as u32),
       // Material Texture Sampler
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLER).descriptor_count(descriptor_count),
       // Textures
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLED_IMAGE)
-        .descriptor_count(TEXTURES_DESCRIPTOR_ARRAY_LENGTH)
+        .descriptor_count(gltf_texture_views.len() as u32)
     ];
 
     let pool_info = vk::DescriptorPoolCreateInfo::default()
@@ -2571,7 +2475,7 @@ impl Engine
     descriptor_set_layout_global: vk::DescriptorSetLayout, descriptor_set_layout_material: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool, mvp_buffers: &Vec<(vk::Buffer, vk::DeviceMemory)>,
     vertices: &Vec<Vertex>, indices: &Vec<u32>, vertex_data: &VertexData, 
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
     ray_trace_data: &RayTraceData
   ) -> (Vec<vk::DescriptorSet>, Vec<vk::DescriptorSet>)
   {
@@ -2586,22 +2490,22 @@ impl Engine
     let uv_buffer = vertex_data.uv_buffer.0;
     let normal_buffer = vertex_data.nrm_buffer.0;
 
-    #[cfg(feature = "hardware")]
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
-    let (instance_luts, instance_lut_buffer) = {
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
+    let (tlas_handle, blas_instance_luts, blas_instance_lut_buffer) = {
       (
-        &ray_trace_data.instance_luts,
-        ray_trace_data.instance_lut_buffer.0
+        ray_trace_data.tlas_handle,
+        &ray_trace_data.blas_instance_luts,
+        ray_trace_data.blas_instance_lut_buffer.0
       )
     };
     // STANDARD 3D MODELS
     // Shader Resources
     // [value; num_of_copies]
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-    let views_count = render_texture_views.len();
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-    let variable_counts = [views_count as u32; MAX_FRAMES_IN_FLIGHT];
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
+    let (views_count, variable_counts) = {
+      (render_texture_views.len(), [render_texture_views.len() as u32; MAX_FRAMES_IN_FLIGHT])
+    };
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
     let mut variable_count_info = vk::DescriptorSetVariableDescriptorCountAllocateInfo::default()
       .descriptor_counts(&variable_counts);
     
@@ -2610,124 +2514,90 @@ impl Engine
 
     // Collate the relevant info (DescriptorPool and DescriptorSetLayouts)
     let mut global_alloc_info = vk::DescriptorSetAllocateInfo::default()
-      .descriptor_pool(descriptor_pool)
-      .set_layouts(&global_layouts);
+      .descriptor_pool(descriptor_pool).set_layouts(&global_layouts);
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
     global_alloc_info.push_next(&mut variable_count_info);
 
     let global_descriptor_sets = unsafe {
-        device.allocate_descriptor_sets(&global_alloc_info)
-          .expect("failed to allocate descriptor sets for descriptor_set_layout_global!")
+      device.allocate_descriptor_sets(&global_alloc_info)
+        .expect("failed to allocate descriptor sets for descriptor_set_layout_global!")
     };
 
     for i in 0..(MAX_FRAMES_IN_FLIGHT as usize) {
-      // MVP Buffer
-      let mvp_buffer_info = [vk::DescriptorBufferInfo::default()
-        .buffer(mvp_buffers[i].0).offset(0).range(size_of::<MVP>().try_into().unwrap())];
+      let (mvp_buffer_info, index_buffer_info, colour_buffer_info, uv_buffer_info, norms_buffer_info) = {
+        (
+          [vk::DescriptorBufferInfo::default().buffer(mvp_buffers[i].0)
+            .offset(0).range(size_of::<MVP>().try_into().unwrap())],
+          [vk::DescriptorBufferInfo::default().buffer(index_buffer)
+            .offset(0).range(size_of::<u32>() as vk::DeviceSize * indices.len() as vk::DeviceSize)],
+          [vk::DescriptorBufferInfo::default().buffer(colour_buffer)
+            .offset(0).range(size_of::<glm::Vec4>() as vk::DeviceSize * vertices.len() as vk::DeviceSize)],
+          [vk::DescriptorBufferInfo::default().buffer(uv_buffer)
+            .offset(0).range(size_of::<glm::Vec2>() as vk::DeviceSize * vertices.len() as vk::DeviceSize)],
+          [vk::DescriptorBufferInfo::default().buffer(normal_buffer)
+            .offset(0).range(size_of::<glm::Vec4>() as vk::DeviceSize * vertices.len() as vk::DeviceSize)]
+        )
+      };
+          
+      let (mvp_write, indices_write, colours_write, uvs_write, norms_write) = {
+        (
+          vk::WriteDescriptorSet::default().dst_set(global_descriptor_sets[i]).dst_binding(0).dst_array_element(0)
+            .descriptor_count(1).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER).buffer_info(&mvp_buffer_info),
+          vk::WriteDescriptorSet::default().dst_set(global_descriptor_sets[i]).dst_binding(1).dst_array_element(0)
+            .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&index_buffer_info),
+          vk::WriteDescriptorSet::default().dst_set(global_descriptor_sets[i]).dst_binding(2).dst_array_element(0)
+            .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&colour_buffer_info),
+          vk::WriteDescriptorSet::default().dst_set(global_descriptor_sets[i]).dst_binding(3).dst_array_element(0)
+            .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&uv_buffer_info),
+          vk::WriteDescriptorSet::default().dst_set(global_descriptor_sets[i]).dst_binding(4).dst_array_element(0)
+            .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER).buffer_info(&norms_buffer_info)
+        )
+      };
 
-      let mvp_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(0).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-        .buffer_info(&mvp_buffer_info);
-
-      let index_buffer_info = [vk::DescriptorBufferInfo::default()
-        .buffer(index_buffer).offset(0).range(size_of::<u32>() as vk::DeviceSize * indices.len() as vk::DeviceSize)];
-
-      let indices_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(1).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(&index_buffer_info);
-
-      let colour_buffer_info = [vk::DescriptorBufferInfo::default()
-        .buffer(colour_buffer).offset(0)
-        .range(size_of::<glm::Vec4>() as vk::DeviceSize * vertices.len() as vk::DeviceSize)];
-      
-      let colours_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(2).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(&colour_buffer_info);
-
-      let uv_buffer_info = [vk::DescriptorBufferInfo::default()
-        .buffer(uv_buffer).offset(0)
-        .range(size_of::<glm::Vec2>() as vk::DeviceSize * vertices.len() as vk::DeviceSize)];
-    
-      let uvs_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(3).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(&uv_buffer_info);
-
-      let norms_buffer_info = [vk::DescriptorBufferInfo::default()
-        .buffer(normal_buffer).offset(0)
-        .range(size_of::<glm::Vec4>() as vk::DeviceSize * vertices.len() as vk::DeviceSize)];
-
-      let norms_write = vk::WriteDescriptorSet::default()
-        .dst_set(global_descriptor_sets[i]).dst_binding(4).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(&norms_buffer_info);
-
-#[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] 
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
       let acc_structs = [tlas_handle];
-#[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] 
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
       let mut as_info = 
         vk::WriteDescriptorSetAccelerationStructureKHR::default().acceleration_structures(&acc_structs);
-
-#[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
-      let as_write = vk::WriteDescriptorSet::default()
-        .push_next(&mut as_info)
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
+      let as_write = vk::WriteDescriptorSet::default().push_next(&mut as_info)
         .dst_set(global_descriptor_sets[i]).dst_binding(5).dst_array_element(0)
         .descriptor_count(1).descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR);
 
-#[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
-      let instance_lut_buffer_info = [vk::DescriptorBufferInfo::default()
-        .buffer(instance_lut_buffer).offset(0)
-        .range(size_of::<InstanceLUT>() as vk::DeviceSize * instance_luts.len() as vk::DeviceSize)];
-
-#[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
-      let instance_lut_write = vk::WriteDescriptorSet::default()
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
+      let instance_lut_buffer_info = [vk::DescriptorBufferInfo::default().buffer(blas_instance_lut_buffer)
+        .offset(0).range(size_of::<InstanceLUT>() as vk::DeviceSize * blas_instance_luts.len() as vk::DeviceSize)];
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
+      let instance_lut_write = vk::WriteDescriptorSet::default().buffer_info(&instance_lut_buffer_info)
         .dst_set(global_descriptor_sets[i]).dst_binding(6).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(&instance_lut_buffer_info);
+        .descriptor_count(1).descriptor_type(vk::DescriptorType::STORAGE_BUFFER);
 
-      // Samplable interface for image
       let sampler_info = [vk::DescriptorImageInfo::default().sampler(render_texture_sampler)];
-      
-      // Image as CombinedImageSampler
-      let sampler_write = vk::WriteDescriptorSet::default()
+      let sampler_write = vk::WriteDescriptorSet::default().image_info(&sampler_info)
         .dst_set(global_descriptor_sets[i]).dst_binding(7).dst_array_element(0)
-        .descriptor_count(1).descriptor_type(vk::DescriptorType::SAMPLER)
-        .image_info(&sampler_info);
+        .descriptor_count(1).descriptor_type(vk::DescriptorType::SAMPLER);
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-      let mut storage_image_infos: Vec<vk::DescriptorImageInfo> = vec![];
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-      storage_image_infos.reserve(views_count);
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-      for view in 0..views_count {
-        let image_info = vk::DescriptorImageInfo::default()
-          .image_view(render_texture_views[view]).image_layout(vk::ImageLayout::GENERAL);
-        storage_image_infos.push(image_info);
-      }
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
+      let (storage_image_infos, sampled_image_infos) = {
+        let mut storage_image_infos: Vec<vk::DescriptorImageInfo> = Vec::with_capacity(views_count);
+        let mut sampled_image_infos: Vec<vk::DescriptorImageInfo> = Vec::with_capacity(views_count);
+        for view in 0..views_count {
+          storage_image_infos.push(vk::DescriptorImageInfo::default()
+            .image_view(render_texture_views[view]).image_layout(vk::ImageLayout::GENERAL));
+          sampled_image_infos.push(vk::DescriptorImageInfo::default()
+            .image_view(render_texture_views[view]).image_layout(vk::ImageLayout::GENERAL));
+        }
+        (storage_image_infos, sampled_image_infos)
+      };
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-      let storage_image_write = vk::WriteDescriptorSet::default()
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
+      let storage_image_write = vk::WriteDescriptorSet::default().image_info(&storage_image_infos)
         .dst_set(global_descriptor_sets[i]).dst_binding(8).dst_array_element(0)
         .descriptor_count(storage_image_infos.len().try_into().unwrap())
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-        .image_info(&storage_image_infos);
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE);
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-      let mut sampled_image_infos: Vec<vk::DescriptorImageInfo> = vec![];
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-      sampled_image_infos.reserve(views_count);
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-      for view in 0..views_count {
-        let image_info = vk::DescriptorImageInfo::default()
-          .image_view(render_texture_views[view]).image_layout(vk::ImageLayout::GENERAL);
-        sampled_image_infos.push(image_info);
-      }
-
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
       let sampled_image_write = vk::WriteDescriptorSet::default()
         .dst_set(global_descriptor_sets[i]).dst_binding(9).dst_array_element(0)
         .descriptor_count(sampled_image_infos.len().try_into().unwrap())
@@ -2740,17 +2610,11 @@ impl Engine
         indices_write, 
         uvs_write,
         norms_write,
-#[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] 
-        as_write,
-
-#[cfg(all(feature = "hardware", any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
-        instance_lut_write,
+        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] as_write,
+        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] instance_lut_write,
         sampler_write,
-
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-        storage_image_write,
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-        sampled_image_write
+        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] storage_image_write,
+        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] sampled_image_write
       ];
 
       // Write the descriptor sets to the GPU
@@ -2763,48 +2627,30 @@ impl Engine
     let mut mat_variable_count_info = vk::DescriptorSetVariableDescriptorCountAllocateInfo::default()
       .descriptor_counts(&mat_variable_counts);
 
-    #[cfg(feature = "hardware")]
-    let mat_alloc_info = vk::DescriptorSetAllocateInfo::default()
-      .push_next(&mut mat_variable_count_info)
-      .descriptor_pool(descriptor_pool)
-      .set_layouts(&mat_layouts);
-
-    #[cfg(not(feature = "hardware"))]
-    let mat_alloc_info = vk::DescriptorSetAllocateInfo::default().descriptor_pool(descriptor_pool).set_layouts(&mat_layouts);
+    let mat_alloc_info = vk::DescriptorSetAllocateInfo::default().push_next(&mut mat_variable_count_info)
+      .descriptor_pool(descriptor_pool).set_layouts(&mat_layouts);
 
     let material_descriptor_sets = unsafe { 
       device.allocate_descriptor_sets(&mat_alloc_info).expect("failed to create material descriptor sets!") };
 
     let mat_sampler_info = [vk::DescriptorImageInfo::default().sampler(gltf_texture_sampler)];
 
-    let mat_sampler_write = vk::WriteDescriptorSet::default()
+    let mat_sampler_write = vk::WriteDescriptorSet::default().image_info(&mat_sampler_info)
       .dst_set(material_descriptor_sets[0]).dst_binding(0).dst_array_element(0)
-      .descriptor_count(1).descriptor_type(vk::DescriptorType::SAMPLER)
-      .image_info(&mat_sampler_info);
+      .descriptor_count(1).descriptor_type(vk::DescriptorType::SAMPLER);
 
     unsafe { device.update_descriptor_sets(&[mat_sampler_write], &[]) };
 
-    let mut mat_image_infos: Vec<vk::DescriptorImageInfo> = vec![];
-    mat_image_infos.reserve(gltf_texture_views.len());
+    let mut mat_image_infos: Vec<vk::DescriptorImageInfo> = Vec::with_capacity(gltf_texture_views.len());
     for view in 0..gltf_texture_views.len() {
-      let image_info = vk::DescriptorImageInfo::default()
-        .image_view(gltf_texture_views[view]).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-      mat_image_infos.push(image_info);
+      mat_image_infos.push(vk::DescriptorImageInfo::default()
+        .image_view(gltf_texture_views[view]).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL));
     }
 
-    // Fill remainder of buffer with fallback textures
-    #[cfg(not(feature = "hardware"))]
-    if (mat_image_infos.len() as u32) < TEXTURES_DESCRIPTOR_ARRAY_LENGTH {
-      let image_info = vk::DescriptorImageInfo::default()
-        .image_view(fallback_texture_view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-      mat_image_infos.extend(vec![image_info; (TEXTURES_DESCRIPTOR_ARRAY_LENGTH as usize) - mat_image_infos.len()]);
-    }
-
-    let material_write = vk::WriteDescriptorSet::default()
+    let material_write = vk::WriteDescriptorSet::default().image_info(&mat_image_infos)
       .dst_set(material_descriptor_sets[0]).dst_binding(1).dst_array_element(0)
       .descriptor_count(mat_image_infos.len().try_into().unwrap())
-      .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-      .image_info(&mat_image_infos);
+      .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE);
 
     unsafe { device.update_descriptor_sets(&[material_write], &[]) };
 
@@ -2814,8 +2660,8 @@ impl Engine
 
   fn setup_imgui_frame(
     debug_gui_context: &mut DebugGuiContext, camera: &mut Camera, 
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] mut intensity: &mut f32, 
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] sun_direction: &mut glm::Vec3,
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] mut intensity: &mut f32, 
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] sun_direction: &mut glm::Vec3,
     #[cfg(feature = "radiance_cascades")] mut interval: &mut f32,
     window: &Window
   )
@@ -2862,7 +2708,7 @@ impl Engine
 
         ui.spacing();
 
-        #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] {
+        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] {
           ui.text_wrapped("Light Direction");
           ui.slider("Intensity", 0.0, 100.0, &mut intensity);
           ui.slider("LX", -1.0, 1.0, &mut sun_direction.x);
@@ -2913,12 +2759,12 @@ impl Engine
     let camera = &mut self.camera;
     Self::setup_imgui_frame(
       debug_gui_context, camera,
-      #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] &mut self.sun_intensity,
-      #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] &mut self.sun_dir,
+      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] &mut self.sun_intensity,
+      #[cfg(any(feature = "reference", feature = "radiance_cascades"))] &mut self.sun_dir,
       #[cfg(feature = "radiance_cascades")] &mut self.interval,
       window
     );
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] {
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] {
       if self.sun_intensity != self.old_sun_intensity { self.old_sun_intensity = self.sun_intensity; self.frame = 0; }
       if self.sun_dir != self.old_sun_dir { self.old_sun_dir = self.sun_dir; self.frame = 0; }
     }
@@ -2989,7 +2835,12 @@ impl Engine
 
       Self::record_compute_command_buffers(
         context, compute_command_buffer, compute_pipeline, global_descriptor_set, material_descriptor_set,
-        #[cfg(feature = "reference")] self.initial_render_texture_extent, #[cfg(feature = "reference")] &push_constant);
+        #[cfg(any(feature = "reference", feature = "radiance_cascades"))] self.initial_render_texture_extent, 
+        #[cfg(feature = "reference")] &push_constant,
+        #[cfg(feature = "radiance_cascades")] self.interval, 
+        #[cfg(feature = "radiance_cascades")] self.sun_intensity, 
+        #[cfg(feature = "radiance_cascades")] self.sun_dir, 
+      );
       let command_buffers = [compute_command_buffer];
 
       // Submission will wait for computeWaitValue
@@ -3018,12 +2869,13 @@ impl Engine
       Self::record_command_buffers(
         context, renderer, draw_data, draw_command_buffer, pipeline, image, view, swapchain_extent, 
         depth_image, depth_view, global_descriptor_set, material_descriptor_set,
-        #[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] 
-        &self.vertex_data, 
-        #[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] 
-        &self.submeshes,
-        #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-        (self.triangle_vertex_buffer.0, self.triangle_index_buffer.0)
+        #[cfg(not(any(feature = "reference", feature = "radiance_cascades")))] &self.vertex_data, 
+        #[cfg(not(any(feature = "reference", feature = "radiance_cascades")))] &self.submeshes,
+        #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
+        (self.triangle_vertex_buffer.0, self.triangle_index_buffer.0),
+        #[cfg(feature = "radiance_cascades")] self.interval, 
+        #[cfg(feature = "radiance_cascades")] self.sun_intensity, 
+        #[cfg(feature = "radiance_cascades")] self.sun_dir
       );
 
       // Would ideally be in record_command_buffer, but requires mutable reference to object in self
@@ -3240,11 +3092,9 @@ impl Engine
       offset: 0,
 #[cfg(feature = "reference")]
       size: size_of::<PathTracePushConstant>().try_into().unwrap(),
-#[cfg(feature = "restir")]
-      size: size_of::<ReSTIRPushConstant>().try_into().unwrap(),
 #[cfg(feature = "radiance_cascades")]
       size: size_of::<RadianceCascadesPushConstant>().try_into().unwrap(),
-#[cfg(all(not(feature = "reference"), not(feature = "restir"), not(feature = "radiance_cascades")))]
+#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
       size: size_of::<RasterPushConstant>().try_into().unwrap(),
     }];
 
@@ -3309,11 +3159,9 @@ impl Engine
       offset: 0,
 #[cfg(feature = "reference")]
       size: size_of::<PathTracePushConstant>().try_into().unwrap(),
-#[cfg(feature = "restir")]
-      size: size_of::<ReSTIRPushConstant>().try_into().unwrap(),
 #[cfg(feature = "radiance_cascades")]
       size: size_of::<RadianceCascadesPushConstant>().try_into().unwrap(),
-#[cfg(all(not(feature = "reference"), not(feature = "restir"), not(feature = "radiance_cascades")))]
+#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
       size: size_of::<RasterPushConstant>().try_into().unwrap(),
     }];
 
@@ -3380,17 +3228,11 @@ impl Engine
   // We just need the vertices stored on the GPU. We will instruct the GPU on how to interpret the data later.
   fn create_vertex_buffer(context: &EngineContext, verts: &Vec<Vertex>) -> (vk::Buffer, vk::DeviceMemory)
   {
-    #[cfg(feature = "hardware")]
     let usage_flags = 
       vk::BufferUsageFlags::VERTEX_BUFFER | 
       vk::BufferUsageFlags::TRANSFER_DST | 
       vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
       vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
-
-    #[cfg(not(feature = "hardware"))]
-    let usage_flags = 
-      vk::BufferUsageFlags::VERTEX_BUFFER | 
-      vk::BufferUsageFlags::TRANSFER_DST;
 
     return Self::create_buffer_from_vector(context, verts, usage_flags);
   }
@@ -3450,21 +3292,12 @@ impl Engine
     let targets = [target_desc];
 
     // Some options that ensure proper output
-    #[cfg(feature = "hardware")]
-    let compiler_option_entries = slang::CompilerOptions::default()
-      .vulkan_use_entry_point_name(true)
-      .matrix_layout_column(true)
-      .emit_spirv_directly(true)
-      .capability(global_session.find_capability("vk_mem_model"))
-      .capability(global_session.find_capability("spvRayQueryKHR"));
-
-    #[cfg(not(feature = "hardware"))]
     let compiler_option_entries = slang::CompilerOptions::default()
       .vulkan_use_entry_point_name(true)
       .matrix_layout_column(true)
       .emit_spirv_directly(true)
       .capability(global_session.find_capability("vk_mem_model"));
-
+ 
     // Slang likes to look for the files by itself, even if you pass in an absolute path, so direct it to look in the
     // parent directory of src
     let search_path = CString::new(src.parent().unwrap().to_str().unwrap())
@@ -3515,7 +3348,7 @@ impl Engine
     }
   }
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
   fn cleanup_textures(context: &EngineContext, image_data: &ImageData)
   {
     let sampler = image_data.sampler;
@@ -3529,7 +3362,7 @@ impl Engine
     }
   }
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
   fn cleanup_descriptor_sets(context: &EngineContext, descriptor_pool: vk::DescriptorPool, descriptor_sets: &Vec<&Vec<vk::DescriptorSet>>)
   {
     let device = &context.device;
@@ -3568,18 +3401,18 @@ impl Engine
       self.descriptor_set_layout_global, self.descriptor_set_layout_material
     );
     
-  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] {
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))] {
       Self::cleanup_textures(context, &self.render_textures_data);
       Self::cleanup_descriptor_sets(
         context, self.descriptor_pool, &vec![&self.global_descriptor_sets, &self.material_descriptor_sets]);
       let (initial_render_texture_extent, render_textures, render_texture_views, render_texture_sampler) = 
-        Self::create_render_texture(context, self.swapchain_extent);
+        Self::create_render_texture(context, #[cfg(not(feature = "radiance_cascades"))] self.swapchain_extent);
       
       let (global_descriptor_sets, material_descriptor_sets) = Self::create_descriptor_sets(
         context, &self.fallback_texture_data, &self.gltf_textures_data, &self.render_textures_data,
         self.descriptor_set_layout_global, self.descriptor_set_layout_material,
         self.descriptor_pool, &self.mvp_buffers, &self.vertices, &self.indices, &self.vertex_data,
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
         &self.ray_trace_data
       );
 
@@ -3628,11 +3461,11 @@ impl Engine
   fn record_compute_command_buffers(
     context: &EngineContext, command_buffer: vk::CommandBuffer, pipeline: (vk::PipelineLayout, vk::Pipeline),
     global_descriptor_set: vk::DescriptorSet, material_descriptor_set: vk::DescriptorSet,
-    #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
-    initial_render_texture_extent: vk::Extent2D,
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))] initial_render_texture_extent: vk::Extent2D,
     #[cfg(feature = "reference")] push_constant: &PathTracePushConstant, 
-    #[cfg(feature = "restir")] push_constant: &ReSTIRPushConstant,
-    #[cfg(feature = "radiance_cascades")] push_constant: &RadianceCascadesPushConstant,
+    #[cfg(feature = "radiance_cascades")] interval: f32,
+    #[cfg(feature = "radiance_cascades")] sun_intensity: f32,
+    #[cfg(feature = "radiance_cascades")] sun_dir: glm::Vec3,
   )
   {
     let device = &context.device;
@@ -3649,28 +3482,14 @@ impl Engine
     }
 #[cfg(not(feature = "radiance_cascades"))] {
 #[cfg(feature = "reference")] {
-      unsafe {
-        let push_constants =  
-          std::slice::from_raw_parts(push_constant as *const _ as *const u8, size_of::<PathTracePushConstant>());
+        unsafe {
+          let push_constants =  
+            std::slice::from_raw_parts(push_constant as *const _ as *const u8, size_of::<PathTracePushConstant>());
 
-        device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::COMPUTE, 0, push_constants);
-        device.cmd_dispatch(command_buffer, initial_render_texture_extent.width  / WORKGROUP_SIZE[0] + 1, 
-                                            initial_render_texture_extent.height / WORKGROUP_SIZE[1] + 1, 1);
-      } 
-    }
-
-
-#[cfg(feature = "restir")] {
-        let push_constant = ReSTIRPushConstant {};
-
-        let push_constants = unsafe { 
-            std::slice::from_raw_parts(&push_constant as *const _ as *const u8, size_of::<ReSTIRPushConstant>()) };
-
-        unsafe { 
           device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::COMPUTE, 0, push_constants);
-          device.cmd_dispatch(command_buffer, self.initial_render_texture_extent.width  / WORKGROUP_SIZE[0] + 1, 
-                                              self.initial_render_texture_extent.height / WORKGROUP_SIZE[1] + 1, 1)
-        };
+          device.cmd_dispatch(command_buffer, initial_render_texture_extent.width  / WORKGROUP_SIZE[0] + 1, 
+                                              initial_render_texture_extent.height / WORKGROUP_SIZE[1] + 1, 1);
+        } 
       }
     }
 
@@ -3688,9 +3507,9 @@ impl Engine
           level: level,
           max_level: highest_cascade,
           base_ray_count: CASCADE_0_RAYS,
-          interval: self.interval,
-          intensity: self.sun_intensity,
-          light_dir: glm::normalize(&self.sun_dir)
+          interval: interval,
+          intensity: sun_intensity,
+          light_dir: glm::normalize(&sun_dir)
         };
         unsafe {
         let push_constants =  
@@ -3699,8 +3518,8 @@ impl Engine
 
           device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::COMPUTE, 0, push_constants);
           device.cmd_dispatch(command_buffer, 
-            (self.initial_render_texture_extent.width >> level) / WORKGROUP_SIZE[0] + 1, 
-             self.initial_render_texture_extent.height          / WORKGROUP_SIZE[1] + 1, 1)
+            (initial_render_texture_extent.width >> level) / WORKGROUP_SIZE[0] + 1, 
+             initial_render_texture_extent.height          / WORKGROUP_SIZE[1] + 1, 1)
         };
       }
     }
@@ -3714,10 +3533,15 @@ impl Engine
     pipeline: (vk::PipelineLayout, vk::Pipeline), image: vk::Image, view: vk::ImageView, extent: vk::Extent2D, 
     depth_image: vk::Image, depth_view: vk::ImageView,
     global_descriptor_set: vk::DescriptorSet, material_descriptor_set: vk::DescriptorSet,
-#[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] vertex_data: &VertexData, 
-#[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))] submeshes: &Vec<SubMesh>,
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-    triangle_data: (vk::Buffer, vk::Buffer)
+    #[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
+    vertex_data: &VertexData,
+    #[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
+    submeshes: &Vec<SubMesh>,
+    #[cfg(any(feature = "reference", feature = "radiance_cascades"))]
+    triangle_data: (vk::Buffer, vk::Buffer),
+    #[cfg(feature = "radiance_cascades")] interval: f32,
+    #[cfg(feature = "radiance_cascades")] sun_intensity: f32,
+    #[cfg(feature = "radiance_cascades")] sun_dir: glm::Vec3
   )
   {
     let device = &context.device;
@@ -3798,7 +3622,7 @@ impl Engine
     };
 
   // STATIC MODELS
-#[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
+#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
     {
       unsafe {
         device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.1);
@@ -3824,7 +3648,7 @@ impl Engine
     }
     // COMPUTE RESULTS
     // render these after model as we want them in front without needing the depth buffer
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
     {
       unsafe { 
         device.cmd_bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline.1);
@@ -3848,13 +3672,13 @@ impl Engine
           level: 0,
           max_level: highest_cascade,
           base_ray_count: CASCADE_0_RAYS,
-          interval: self.interval,
-          intensity: self.sun_intensity,
-          light_dir: glm::normalize(&self.sun_dir)
+          interval: interval,
+          intensity: sun_intensity,
+          light_dir: glm::normalize(&sun_dir)
         };
         let push_constants = unsafe {std::slice::from_raw_parts(
           &push_constant as *const _ as *const u8, size_of::<RadianceCascadesPushConstant>())};
-        unsafe { self.device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::FRAGMENT, 0, push_constants) };
+        unsafe { device.cmd_push_constants(command_buffer, pipeline.0, vk::ShaderStageFlags::FRAGMENT, 0, push_constants) };
       }
 
       unsafe { device.cmd_draw_indexed(command_buffer, 3, 1, 0, 0, 0) };

@@ -6,7 +6,7 @@ use std::u32;
 use std::ffi::CStr;
 
 use ash::khr::{surface, swapchain};
-#[cfg(feature = "hardware")] use ash::khr::acceleration_structure;
+use ash::khr::acceleration_structure;
 //====== Vulkan Types and Functions ======//
 use ash::{Device, Instance, vk};
 use ash::Entry;
@@ -51,15 +51,15 @@ use crate::buffer_structs::SubMesh;
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 // Screen resolution defaults
-const RES: [u32; 2] = [1440, 900];
+const RES: [u32; 2] = [800, 600];
 
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
 const WORKGROUP_SIZE: [u32; 2] = [8, 8];
 
 // Maximum number of cascades to calculate, less is permitted. Used to iteratively instantiate render textures
-#[cfg(feature = "radiance_cascades")] const MAX_RENDER_TEXTURES: u32 = 8;
+#[cfg(feature = "radiance_cascades")] const MAX_RENDER_TEXTURES: u32 = 4;
 // Number of probes in Cascade 0, given as width and height
-#[cfg(feature = "radiance_cascades")] const CASCADE_0_PROBES: [u32; 2] = [1440, 900];
+#[cfg(feature = "radiance_cascades")] const CASCADE_0_PROBES: [u32; 2] = [800, 600];
 // Cascade 0 Probes are always square, just define a side length > 1
 #[cfg(feature = "radiance_cascades")] const CASCADE_0_RAYS: u32 = 16;
 
@@ -72,16 +72,13 @@ const TEXTURES_DESCRIPTOR_ARRAY_LENGTH: u32 = 32;
 #[cfg(feature = "sponza")] const DEFAULT_MODEL_PATH: &'static str = "assets/sponza/Sponza.gltf";
 #[cfg(not(feature = "sponza"))] const DEFAULT_MODEL_PATH: &'static str = "assets/suzanne/SuzanneCornell_Opt.gltf";
 
-#[cfg(feature = "hardware")] const SHADER_ROOT_PATH: &'static str = "assets/shaders/hardware";
-#[cfg(not(feature = "hardware"))] const SHADER_ROOT_PATH: &'static str = "assets/shaders/software";
+const SHADER_ROOT_PATH: &'static str = "assets/shaders/hardware";
 
 #[cfg(feature = "reference")]
-const DEFAULT_SLANG_PATH: &'static str = "sw_reference.slang";
-#[cfg(feature = "restir")]
-const DEFAULT_SLANG_PATH: &'static str = "restir.slang";
+const DEFAULT_SLANG_PATH: &'static str = "reference.slang";
 #[cfg(feature = "radiance_cascades")]
 const DEFAULT_SLANG_PATH: &'static str = "radiance_cascades.slang";
-#[cfg(not(any(feature = "reference", feature = "restir", feature = "radiance_cascades")))]
+#[cfg(not(any(feature = "reference", feature = "radiance_cascades")))]
 const DEFAULT_SLANG_PATH: &'static str = "raster.slang";
 
 const DEFAULT_SPIRV_PATH: &'static str = "assets/shaders/shader.spv";
@@ -163,7 +160,7 @@ pub struct EngineContext {
   swapchain: swapchain::Device,
   swapchain_khr: vk::SwapchainKHR,
   global_session: slang::GlobalSession,
-  #[cfg(feature = "hardware")] as_device: acceleration_structure::Device,
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))] as_device: acceleration_structure::Device,
 }
 
 pub struct DebugGuiContext {
@@ -178,8 +175,7 @@ pub struct DebugGuiContext {
   delta: u128,
 }
 
-#[cfg(feature = "hardware")]
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
+#[cfg(any(feature = "reference", feature = "radiance_cascades"))]
 #[derive(Default)]
 pub struct RayTraceData {
   blas_handles: Vec<vk::AccelerationStructureKHR>,
@@ -190,14 +186,6 @@ pub struct RayTraceData {
   
   blas_instance_luts: Vec<InstanceLUT>,
   blas_instance_lut_buffer: (vk::Buffer, vk::DeviceMemory),
-}
-
-#[cfg(not(feature = "hardware"))]
-#[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))]
-#[derive(Default)]
-pub struct RayTraceData {
-  instance_luts: Vec<InstanceLUT>,
-  instance_lut_buffer: (vk::Buffer, vk::DeviceMemory)
 }
 
 #[derive(Default)]
@@ -253,13 +241,13 @@ pub struct Engine {
   gltf_textures_data: ImageData,
   
   vertex_data: VertexData,
-  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
-  triangle_vertex_buffer: (vk::Buffer, vk::DeviceMemory),
-  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
-  triangle_index_buffer: (vk::Buffer, vk::DeviceMemory),
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_vertex_buffer: (vk::Buffer, vk::DeviceMemory),
   
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))] triangle_index_buffer: (vk::Buffer, vk::DeviceMemory),
+  
+
   // Acceleration Structures
-  #[cfg(any(feature = "reference", feature = "restir", feature = "radiance_cascades"))] 
+  #[cfg(any(feature = "reference", feature = "radiance_cascades"))] 
   ray_trace_data: RayTraceData,
   
   // create_indirect_commands

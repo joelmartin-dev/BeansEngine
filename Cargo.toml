@@ -10,15 +10,7 @@ opt-level = 3
 codegen-units = 1
 
 [[bin]]
-name = "global_illumination"
-path = "src/main.rs"
-
-[[bin]]
 name = "reference"
-path = "src/main.rs"
-
-[[bin]]
-name = "restir"
 path = "src/main.rs"
 
 [[bin]]
@@ -49,8 +41,7 @@ tokio = { version = "1.48.0", features = ["macros", "rt", "rt-multi-thread"] }
 winit = "0.30.12"
 
 [features]
-default = ["reference"]
-hardware = []
+default = ["radiance_cascades"]
 sponza = []
 suzanne = []
 radiance_cascades = []
