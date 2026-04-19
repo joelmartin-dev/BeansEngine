@@ -12,9 +12,9 @@
 
 # Compiling
 ## Example Build:
-`cargo build -F sponza` (build only)\
+`cargo build` (build only)\
 **OR**\
-`cargo run -F sponza` (run after build)\
+`cargo run` (run after build)\
 Add `--release` for release target (long compilation time).
 ## Requirements
 - **rustup**: Rust language toolchain manager (includes **cargo**: https://rust-lang.org/tools/install/)
@@ -29,28 +29,5 @@ without it. **v1.3.281** is the Vulkan API version of Ash v0.38.0.
 ### Modes
 - **default**: unlit rasterizer
 
-### Scenes
-- **sponza**: CryEngine Sponza scene (quantized glTF with KTX2 UASTC textures)
-- **default/suzanne**: Cornell Box with Blender Suzanne (quantized glTF with PNG textures)
-
-### Other
-- **measure**: disables validation layers in any target, only prints comma-separated frame times in microseconds
-
 Running `cargo run` will compile and run the Cornell Box with Blender Suzanne scene as unlit 
 rasterized.
-
-# Reproducing Measurements
-In the `Measuring` folder, there is a script that automates measurements collection, processing, and presentation 
-through python scripts. Variables at the top of the file allow the editing of how many tests to run per implementation,
-how long each test runs for, and the executable name for each implementation. For the script to work the `Measuring`
-folder must be a sibling to the folder containing the executables and the `assets` folder. The initial bash script may 
-be ported to a Windows bat script in future.\
-To run the automation script:
-1. Install Python (initial testing was conducted using v3.13.11)
-2. Navigate to the `Measuring` folder in a terminal
-3. Create a virtual environment named `.venv` with `python -m venv .venv`
-4. Activate the virtual environment with `source .venv/bin/activate`
-5. Install the required Python packages with `pip install -r requirements.txt`
-6. Deactivate the virtual environment with `deactivate`
-7. Ensure your targets are built: `cargo build -F sponza --release`, etc.
-8. Run `sh automated_testing.sh`
