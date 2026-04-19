@@ -16,10 +16,10 @@ use imgui_winit_support::WinitPlatform;
 //==== Computer Graphics Mathematic Structures ====//
 use nalgebra_glm as glm;
 
-#[cfg(any(not(debug_assertions), feature = "measure"))]
+#[cfg(not(debug_assertions))]
 const ENABLE_VALIDATION_LAYERS: bool = false;
 
-#[cfg(all(debug_assertions, not(feature = "measure")))]
+#[cfg(debug_assertions)]
 const ENABLE_VALIDATION_LAYERS: bool = true;
 
 // Vulkan Validation Layers to enable in Debug mode

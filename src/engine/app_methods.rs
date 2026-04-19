@@ -80,9 +80,7 @@ impl ApplicationHandler for App {
           engine.camera.update((engine.delta as f32) / ((2 << delta_exp) as f32));
           engine.draw_frame(window);
           let mut frame_end = Instant::now();
-          #[cfg(feature = "measure")] print!("{},", frame_end.duration_since(frame_start).as_micros());
-          #[cfg(not(feature = "measure"))]
-            while frame_end.duration_since(frame_start).as_micros() < 16667 { frame_end = Instant::now() }
+          while frame_end.duration_since(frame_start).as_micros() < 16667 { frame_end = Instant::now() }
   
           engine.delta = frame_end.duration_since(frame_start).as_micros();
           engine.runtime += engine.delta;
