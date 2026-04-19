@@ -17,9 +17,6 @@ async fn main()
   let mut app = App::default();
   app.modifiers_state = ModifiersState::default();
 
-  // app.measurement_file_name = 
-  //   (std::filesystem::path("Measuring") / std::filesystem::path(argv[0]).stem()).string().append(".csv");
-
   event_loop.run_app(&mut app).unwrap();
 
   return;
