@@ -6,7 +6,6 @@
 | LeftShift    | Translation Speed Modifier      |
 | Arrow Keys   | Camera Rotation                 |
 | - +          | FOV                             |
-| Alt+A        | Rebuild acceleration structures |
 | Alt+C        | Recompile Shaders               |
 | Alt+R        | Reload Shaders                  |
 
