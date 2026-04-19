@@ -1,5 +1,101 @@
 pub struct Extension {}
-pub struct Accessor {}
+pub struct Extra {}
+pub enum ComponentType {
+  BYTE = 5120, // integer
+  UNSIGNED_BYTE = 5121, // integer
+  SHORT = 5122, // integer
+  UNSIGNED_SHORT = 5123, // integer
+  UNSIGNED_INT = 5125, // integer
+  FLOAT = 5126, // integer
+  INT = 5124 // integer, default
+}
+pub enum AccessorType {
+  SCALAR,
+  VEC2,
+  VEC3,
+  VEC4,
+  MAT2,
+  MAT3,
+  MAT4,
+  STRING
+}
+// An object pointing to a buffer view containing the indices of deviating accessor values. 
+// The number of indices is equal to `accessor.sparse.count`. Indices **MUST** strictly increase.
+pub struct AccessorSparseIndices {
+  // The index of the buffer view with sparse indices. 
+  // The referenced buffer view **MUST NOT** have its `target` or `byteStride` properties defined. 
+  // The buffer view and the optional `byteOffset` **MUST** be aligned to the `componentType` byte length.
+  buffer_view: i32, // min: 0
+  // The offset relative to the start of the buffer view in bytes.
+  byte_offset: Option<i32>, // min: 0, default: 0
+  // The indices data type.
+  component_type: ComponentType, // UNSIGNED_BYTE, UNSIGNED_SHORT, UNSIGNED_INT, or INT
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
+}
+
+pub struct AccessorSparseValues {
+  // The index of the bufferView with sparse values. 
+  // The referenced buffer view **MUST NOT** have its `target` or `byteStride` properties defined.
+  buffer_view: i32, // min: 0
+  // The offset relative to the start of the bufferView in bytes.
+  byte_offset: Option<i32>, // min: 0, default: 0
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
+}
+// Sparse storage of accessor values that deviate from their initialization value.
+pub struct AccessorSparse {
+  // Number of deviating accessor values stored in the sparse array.
+  count: i32, // min: 1
+  // An object pointing to a buffer view containing the indices of deviating accessor values. 
+  // The number of indices is equal to `count`. Indices **MUST** strictly increase.
+  indices: AccessorSparseIndices,
+  // An object pointing to a buffer view containing the deviating accessor values.
+  values: AccessorSparseValues,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
+}
+// A typed view into a buffer view that contains raw binary data.
+pub struct Accessor {
+  // The index of the buffer view. When undefined, the accessor **MUST** be initialized with zeros; 
+  // `sparse` property or extensions **MAY** override zeros with actual values.
+  buffer_view: Option<i32>, // min: 0
+  // The offset relative to the start of the buffer view in bytes.
+  // This **MUST** be a multiple of the size of the component datatype. 
+  // This property **MUST NOT** be defined when `bufferView` is undefined.
+  byte_offset: Option<i32>, // min: 0, default: 0
+  // The datatype of the accessor's components.
+  // UNSIGNED_INT type **MUST NOT** be used for any accessor that is not referenced by `mesh.primitive.indices`.
+  component_type: ComponentType, // Can be any ComponentType
+  // Specifies whether integer data values are normalized (`true`) to [0, 1] (for unsigned types) 
+  // or to [-1, 1] (for signed types) when they are accessed.
+  // This property **MUST NOT** be set to `true` for accessors with `FLOAT` or `UNSIGNED_INT` component type.
+  normalized: Option<bool>, // default: false
+  // The number of elements referenced by this accessor, 
+  // not to be confused with the number of bytes or number of components.
+  count: i32, // min: 1
+  // Specifies if the accessor's elements are scalars, vectors, or matrices.
+  ty: AccessorType,
+  // Maximum value of each component in this accessor.
+  // Array elements **MUST** be treated as having the same data type as accessor's `componentType`. 
+  // Both `min` and `max` arrays have the same length. 
+  // The length is determined by the value of the `type` property; it can be 1, 2, 3, 4, 9, or 16.
+  // `normalized` property has no effect on array values: they always correspond to the actual values stored in the buffer. 
+  // When the accessor is sparse, this property **MUST** contain maximum values of accessor data with sparse substitution applied.
+  max: Option<Vec<f32>>, // min_items: 1, max_items: 16
+  // Minimum value of each component in this accessor.
+  // Array elements **MUST** be treated as having the same data type as accessor's `componentType`.
+  // Both `min` and `max` arrays have the same length.
+  // The length is determined by the value of the `type` property; it can be 1, 2, 3, 4, 9, or 16.
+  // `normalized` property has no effect on array values: they always correspond to the actual values stored in the buffer. 
+  // When the accessor is sparse, this property **MUST** contain minimum values of accessor data with sparse substitution applied.
+  min: Option<Vec<f32>>, // min_items: 1, max_items: 16
+  // Sparse storage of elements that deviate from their initialization value.
+  sparse: Option<AccessorSparse>,
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
 pub struct Animation {}
 pub struct Asset {}
 pub struct Buffer {}
@@ -43,7 +139,7 @@ pub struct GltfLoader {
   // An array of samplers.
   samplers: Option<Vec<Sampler>>,
   // The index of the default scene.  This property **MUST NOT** be defined, when `scenes` is undefined.
-  scene: Option<i32>,
+  scene: Option<i32>, // min: 0
   // An array of scenes.
   scenes: Option<Vec<Scene>>,
   // An array of skins.  A skin is defined by joints and matrices.
