@@ -1,35 +1,27 @@
 use std::ffi::{CStr, CString, c_void};
 use std::fs::{self, File};
 use std::io::{Write};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use tokio::task;
+use std::path::{Path};
 use std::{u64, f32};
 
+use crate::app_options::AppOptions;
 use crate::buffer_structs::{MVP, SubMesh};
 use crate::buffer_structs::RasterPushConstant;
 
 use crate::engine::{
-  DEFAULT_MODEL_PATH, DEFAULT_SLANG_PATH, DEFAULT_SPIRV_PATH, DebugGuiContext, ENABLE_VALIDATION_LAYERS, 
-  Engine, EngineContext, FALLBACK_TEXTURE_PATH, ImageData, MAX_FRAMES_IN_FLIGHT, RES, 
-  SHADER_ROOT_PATH, TEXTURES_DESCRIPTOR_ARRAY_LENGTH, VALIDATION_LAYERS, VertexData
+  DEFAULT_SLANG_PATH, DEFAULT_SPIRV_PATH, DebugGuiContext, ENABLE_VALIDATION_LAYERS, 
+  Engine, EngineContext, FALLBACK_TEXTURE_PATH, ImageData, 
+  SHADER_ROOT_PATH, VALIDATION_LAYERS, VertexData
 };
 use crate::camera::Camera;
-//use crate::model::CUBE;
+use crate::model::CUBE;
 use crate::vertex::Vertex;
 use ash::util::Align;
-use futures::{StreamExt, stream};
 use image::EncodableLayout;
 use ::image::ImageReader;
 use imgui::{Condition, Context, DrawData};
 use imgui_rs_vulkan_renderer::{DynamicRendering, Options, Renderer};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use ktx2_rw::{Ktx2Texture, TranscodeFormat};
-use mugltf::{
-  Accessor, AccessorComponentType, AccessorType, 
-  Gltf, GltfAsset, GltfResourceFileLoader, GltfResourceLoader, 
-  LoadGltfResourceError, LoadGltfResourceErrorKind
-};
 use shader_slang::{self as slang, Downcast};
 
 use ash::ext::debug_utils;
@@ -68,7 +60,7 @@ unsafe extern "system" fn debug_callback(
 
 impl Engine
 {
-  pub fn new(window: &Window) -> Self
+  pub fn new(window: &Window, options: AppOptions) -> Self
   {
     /*============================================= INSTANTIATION ORDER ==============================================//
       SETUP VULKAN CONTEXT
@@ -151,53 +143,38 @@ impl Engine
     let depth_format = Self::find_depth_format(&context.instance, context.physical_device);
     let dynamic_rendering = DynamicRendering {
       color_attachment_format: surface_format.format, depth_attachment_format: Some(depth_format)};
-    let options = Options { in_flight_frames: MAX_FRAMES_IN_FLIGHT, ..Default::default() };
+    let imgui_options = Options { in_flight_frames: options.frames_in_flight, ..Default::default() };
 
     // Handles command buffer recording for DearImGui
     let renderer = Renderer::with_default_allocator(
       &context.instance, context.physical_device, context.device.clone(), 
-      queue, command_pool, dynamic_rendering, &mut imgui, Some(options)
+      queue, command_pool, dynamic_rendering, &mut imgui, Some(imgui_options)
     ).unwrap();
 
     // Initialise the data ImGui can change
-    let model_path = String::from(DEFAULT_MODEL_PATH);
     let slang_path = String::from(DEFAULT_SLANG_PATH);
     let spirv_path = String::from(DEFAULT_SPIRV_PATH);
     let delta = 0;
 
-    let debug_gui_context = DebugGuiContext { imgui, platform, renderer, model_path, slang_path, spirv_path, delta };
+    let debug_gui_context = DebugGuiContext { imgui, platform, renderer, slang_path, spirv_path, delta };
 
     let fallback_texture_data = {
       let command_buffer = Self::begin_single_time_commands(&context.device, context.command_pool);
-      let guarded_device = Mutex::new(context.device.clone());
       let (image, format, mip_levels) = Self::create_texture_image_from_png(
-        &context.instance, &context.device, &guarded_device, 
+        &context.instance, &context.device, 
         context.physical_device, command_buffer, &Path::new(FALLBACK_TEXTURE_PATH)
       );
       Self::end_single_time_commands(&context.device, context.queue, command_buffer);
       let view = Self::create_image_view(&context.device, image.0, format, vk::ImageAspectFlags::COLOR, mip_levels);
-      ImageData { images: vec![image], views: vec![view], sampler: None }
+      ImageData { images: vec![image], views: vec![view], sampler: Some(Self::create_texture_sampler(&context)) }
     };
 
-    // We need to know the number of textures BEFORE we create the descriptor set layouts
-    let (vertices, indices, submeshes, base_texture_images, base_texture_image_views, base_texture_sampler) = 
-      Self::load_gltf(&context, &Path::new(DEFAULT_MODEL_PATH), 0, 0, 0);
-
-    let gltf_textures_data = ImageData {
-      images: base_texture_images, views: base_texture_image_views, sampler: Some(base_texture_sampler) };
-
-    // Load any other glTF files
-    // {
-    //   let (
-    //     extra_vertices, extra_indices, extra_submeshes, extra_base_texture_images, extra_base_texture_image_views, _
-    //   ) = 
-    //     Self::load_gltf(&context, &Path::new(&String::from("path/to/gltf")), 
-    //       indices.len() as u32, vertices.len() as u32, base_texture_images.len() as u32);
-
-    //   vertices.extend(extra_vertices); indices.extend(extra_indices); submeshes.extend(extra_submeshes);
-    //   base_texture_images.extend(extra_base_texture_images); 
-    //   base_texture_image_views.extend(extra_base_texture_image_views);
-    // }
+    let vertices: Vec<Vertex> = CUBE.vertices.clone();
+    let indices: Vec<u32> = CUBE.indices.clone();
+    let submeshes = vec![SubMesh {
+      index_offset: 0, index_count: indices.len() as u32, material_id: 0, 
+      first_vertex: 0, max_vertex: vertices.len() as u32, alpha_cut: vk::FALSE
+    }];
 
     // Create the depth stencil
     let depth_image_data = {
@@ -211,13 +188,13 @@ impl Engine
 
     // Define how data is organised in descriptor sets
     let (descriptor_set_layout_global, descriptor_set_layout_material) = 
-      Self::create_descriptor_set_layouts(&context, &gltf_textures_data);
+      Self::create_descriptor_set_layouts(&context, &fallback_texture_data);
     
     // Create the draw-time GPU synchronisation objects
-    let (timeline_semaphore, in_flight_fences) = Self::create_sync_objects(&context);
+    let (timeline_semaphore, in_flight_fences) = Self::create_sync_objects(&context, &options);
 
     // Allocate buffers (one per frame in flight) that record commands for either the compute or graphics pipeline
-    let (draw_command_buffers, compute_command_buffers) = Self::create_command_buffers(&context);
+    let (draw_command_buffers, compute_command_buffers) = Self::create_command_buffers(&context, &options);
     
     // We manually call CompileShader for all shaders on start, ensuring SPIR-V exists by the time pipelines are created
     Self::compile_shader(&context, &Path::new(SHADER_ROOT_PATH).join(DEFAULT_SLANG_PATH), &Path::new(DEFAULT_SPIRV_PATH));
@@ -232,14 +209,11 @@ impl Engine
 
     //=========== VERTEX TRANSFORMATION AND ATTRIBUTE INFORMATION AS GPU-ACCESSIBLE AND INDEXABLE BUFFERS ============//
     // Per-frame camera-based transformations
-    let mvp_buffers = Self::create_uniform_buffers(&context);
+    let mvp_buffers = Self::create_uniform_buffers(&context, &options);
 
     let vertex_buffer = Self::create_vertex_buffer(&context, &vertices);
     
-    let index_buffer = Self::create_index_buffer(&context, &indices,
-      vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER |
-      vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-    );
+    let index_buffer = Self::create_index_buffer(&context, &indices, vk::BufferUsageFlags::STORAGE_BUFFER);
     
     let colour_buffer = Self::create_colour_buffer(&context, &vertices);
     let uv_buffer = Self::create_uv_buffer(&context, &vertices);
@@ -248,23 +222,21 @@ impl Engine
     let vertex_data = VertexData { vertex_buffer, index_buffer, colour_buffer, uv_buffer, nrm_buffer };
 
     // Set limits on the number of descriptor sets that can be allocated at any time
-    let descriptor_pool = Self::create_descriptor_pools(&context, &gltf_textures_data);
+    let descriptor_pool = Self::create_descriptor_pools(&context, &options);
       
     // Organise buffers so that they are accessible on the GPU
     let (global_descriptor_sets, material_descriptor_sets) = Self::create_descriptor_sets(
-      &context, &fallback_texture_data, &gltf_textures_data, 
+      &context, &options, &fallback_texture_data, 
       descriptor_set_layout_global, descriptor_set_layout_material, descriptor_pool, &mvp_buffers, 
       &vertices, &indices, &vertex_data
     );
 
     let camera = Camera::new(
-      RES[0], RES[1],
-      #[cfg(feature = "sponza")] glm::vec3(0.0, 1.0, -0.275), #[cfg(not(feature = "sponza"))] glm::vec3(0.0, 0.0, 5.0),
-      0.0, 
-      #[cfg(feature = "sponza")] 0.0,                         #[cfg(not(feature = "sponza"))] glm::half_pi::<f32>()
+      options.resolution.0, options.resolution.1, glm::vec3(0.0, 0.0, 5.0), 0.0, glm::half_pi::<f32>()
     );
 
     Self {
+      options,
       context: Some(context),
       debug_gui_context: Some(debug_gui_context),
       surface_format,
@@ -287,7 +259,6 @@ impl Engine
       vertices,
       indices,
       submeshes,
-      gltf_textures_data,
       vertex_data,
       // indirect_commands: Default::default(),
       // indirect_commands_buffer: Default::default(),
@@ -899,13 +870,13 @@ impl Engine
   */
 
   // Allocate the command buffers from the pool and device
-  fn create_command_buffers(context: &EngineContext) -> (Vec<vk::CommandBuffer>, Vec<vk::CommandBuffer>)
+  fn create_command_buffers(context: &EngineContext, options: &AppOptions) -> (Vec<vk::CommandBuffer>, Vec<vk::CommandBuffer>)
   {
     let device = &context.device; let command_pool = context.command_pool;
     let alloc_info = vk::CommandBufferAllocateInfo::default()
       .command_pool(command_pool) // the pool to allocate from
       .level(vk::CommandBufferLevel::PRIMARY) // will be submitted directly to queue
-      .command_buffer_count(MAX_FRAMES_IN_FLIGHT.try_into().unwrap()); // how many buffers to allocate for
+      .command_buffer_count(options.frames_in_flight.try_into().unwrap()); // how many buffers to allocate for
 
     let draw_command_buffers = unsafe { 
       device.allocate_command_buffers(&alloc_info).expect("failed to allocate command buffers!") 
@@ -918,7 +889,7 @@ impl Engine
 
   // We need a way to synchronise queue operations (submit, present, dispatch)
   // The CPU and GPU can work on things in parallel, but some are dependent on others and need to wait
-  fn create_sync_objects(context: &EngineContext) -> (vk::Semaphore, Vec<vk::Fence>)
+  fn create_sync_objects(context: &EngineContext, options: &AppOptions) -> (vk::Semaphore, Vec<vk::Fence>)
   {
     let device = &context.device;
     /*========================================== SYNCHRONISATION OBJECT TYPES ==========================================//
@@ -946,7 +917,7 @@ impl Engine
     
     // Fences for swapping between swap chain images
     let mut in_flight_fences: Vec<vk::Fence> = vec![];
-    for _i in 0..MAX_FRAMES_IN_FLIGHT {
+    for _i in 0..options.frames_in_flight {
       in_flight_fences.push(unsafe { 
         device.create_fence(&vk::FenceCreateInfo::default(), None).expect("failed to create fence!")
       });
@@ -954,165 +925,9 @@ impl Engine
     return (timeline_semaphore, in_flight_fences);
   }
 
-  async fn load_textures(
-    context: &EngineContext, document: &Gltf, root_path: &Path
-  ) -> (Vec<(vk::Image, vk::DeviceMemory)>, Vec<vk::ImageView>)
-  {
-    let mut base_texture_images: Vec<(vk::Image, vk::DeviceMemory)> = vec![];
-    let mut base_texture_image_views: Vec<vk::ImageView> = vec![];
-    // Load the albedo texture of each material
-    let materials = &document.materials;
-    let mats_count = materials.iter().clone().count();
-    // May seem illogical to do 2 separate loops, but async requires move. 
-    // Create a local owned iterator of the information needed in the concurrent section, then asynchronously execute
-    // on that iterator (not the shared one)
-    let texture_create_info_iter: Vec<(PathBuf, bool)> = materials.iter().map(|mat| {
-      let has_pbr = !mat.pbr_metallic_roughness.as_ref().is_none();
-      if has_pbr { 
-        let has_base_colour_texture = !mat.pbr_metallic_roughness.as_ref().unwrap().base_color_texture.is_none();
-        if has_base_colour_texture {
-          let pbr_met_rough = mat.pbr_metallic_roughness.as_ref().unwrap();
-          let base_colour_texture_info = pbr_met_rough.base_color_texture.as_ref().unwrap();
-          let base_colour_texture = &document.textures[base_colour_texture_info.index];
-          let is_ktx = if !base_colour_texture.extensions.is_none() {
-            base_colour_texture.extensions.as_ref().unwrap().contains_key("KHR_texture_basisu")
-          } else { false };
-          let image_index = if is_ktx { 
-            base_colour_texture.extensions.as_ref().unwrap().get("KHR_texture_basisu").unwrap()
-              .as_object().unwrap().values().next().unwrap().as_u64().unwrap() as usize
-          } else { 
-            base_colour_texture.source.unwrap() 
-          };
-          let uri = &document.images[image_index].uri;
-          (root_path.join(Path::new(&uri)), is_ktx)
-        } else { (Path::new(&String::from("assets/white.png")).to_path_buf(), false) }
-      } else { (Path::new(&String::from("assets/white.png")).to_path_buf(), false) }
-    }).collect();
-
-    let arced_instance = Arc::new(context.instance.clone());
-    let arced_device = Arc::new(context.device.clone());
-    let arced_device_mutex = Arc::new(Mutex::new(context.device.clone()));
-    let physical_device = context.physical_device;
-    let command_pool = context.command_pool;
-    let queue = context.queue;
-    let command_buffer = Self::begin_single_time_commands(&context.device, command_pool);
-
-    let textures: Vec<((vk::Image, vk::DeviceMemory), vk::ImageView)> = stream::iter(texture_create_info_iter)
-      .map(|(tex_path, is_ktx)| {
-        let owned_instance = Arc::clone(&arced_instance);
-        let owned_device = Arc::clone(&arced_device);
-        let owned_device_mutex = Arc::clone(&arced_device_mutex);
-
-        async move { task::spawn_blocking(move || {
-          let (base_texture_image, texture_format, mip_levels) = if is_ktx {
-            Self::create_texture_image_from_ktx(
-              &owned_instance, &owned_device, &owned_device_mutex, physical_device, command_buffer, &tex_path)
-          } else {
-            Self::create_texture_image_from_png(
-              &owned_instance, &owned_device, &owned_device_mutex, physical_device, command_buffer, &tex_path)
-          };
-
-          let base_texture_image_view = Self::create_image_view(
-            &owned_device, base_texture_image.0, texture_format, vk::ImageAspectFlags::COLOR, mip_levels);
-          
-          (base_texture_image, base_texture_image_view)
-        }).await.unwrap()
-      }
-    }).buffered(mats_count).collect().await;
-
-    Self::end_single_time_commands(&context.device, queue, command_buffer);
-
-    textures.iter().for_each(|(image, view)| {
-      base_texture_images.push(*image);
-      base_texture_image_views.push(*view);
-    });
-    return (base_texture_images, base_texture_image_views);
-  }
-
-  fn create_texture_image_from_ktx(
-    instance: &Instance, device: &Device, device_mutex: &Mutex<Device>, 
-    physical_device: vk::PhysicalDevice, command_buffer: vk::CommandBuffer, texture_path: &Path
-  ) -> ((vk::Image, vk::DeviceMemory), vk::Format, u32)
-  {
-    let loaded = Ktx2Texture::from_file(texture_path.to_str().unwrap()).unwrap();
-
-    let width = loaded.width(); let height = loaded.height(); 
-    let mip_levels = loaded.levels();
-
-    let (texture, vk_format) = if loaded.needs_transcoding() {
-      let mut transcoded = loaded;
-      let (vk_format, transcode_format) = unsafe {
-        let bc3_props = instance.get_physical_device_format_properties(physical_device, vk::Format::BC3_SRGB_BLOCK);
-
-        if bc3_props.optimal_tiling_features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
-          { (vk::Format::BC3_SRGB_BLOCK, TranscodeFormat::Bc3Rgba) } 
-          else { (vk::Format::R32G32B32A32_SFLOAT, TranscodeFormat::Rgba32) }
-      };
-      transcoded.transcode_basis(transcode_format).expect("failed to transcode texture!");
-      (transcoded, vk_format)
-    } else {
-      (loaded, vk::Format::R32G32B32A32_SFLOAT)
-    };
-
-    let mut texture_data = vec![];
-    let mut mip_offsets = vec![];
-    let mut mip_sizes = vec![];
-
-    for level in 0..mip_levels {
-      mip_offsets.push(texture_data.len().try_into().unwrap());
-      let mip_data = texture.get_image_data(level, 0, 0).expect("failed to get mip level data!");
-      mip_sizes.push(mip_data.len());
-      texture_data.extend_from_slice(mip_data);
-    }
-
-    // We don't need host visibility once it's written to the GPU, copy into memory heap 0 after creation
-    // Only creates a buffer, data inside is uninitialised
-    let (staging_buffer, staging_buffer_memory) = Self::create_buffer(
-      instance, device, physical_device, texture_data.len().try_into().unwrap(),
-      vk::BufferUsageFlags::TRANSFER_SRC,
-      vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-    );
-    
-    // Map the required host-visible GPU memory, copy ktxTextureData in, then unmap
-    unsafe {
-      let data = device
-        .map_memory(staging_buffer_memory, 0, texture_data.len().try_into().unwrap(), vk::MemoryMapFlags::default())
-        .expect("failed to map texture memory!");
-      let mut align = Align::new(data, size_of::<u8>().try_into().unwrap(), texture_data.len().try_into().unwrap());
-      align.copy_from_slice(&texture_data);
-      device.unmap_memory(staging_buffer_memory);
-    }
-
-    // Initialise Image
-    let base_texture_image = Self::create_image(
-      instance, device, physical_device,
-      width, height, mip_levels, vk_format,
-      vk::ImageTiling::OPTIMAL,
-      vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
-      vk::MemoryPropertyFlags::DEVICE_LOCAL
-    );
-
-    {
-      let locked_device: &Device = &device_mutex.lock().unwrap();
-      // Get the image ready for copying to
-      Self::transition_image_layout(
-        locked_device, command_buffer,
-        base_texture_image.0, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL, mip_levels);
-      // Copy the host-visible buffer to somewhere else in GPU memory
-      Self::copy_buffer_to_image(
-        locked_device, command_buffer, staging_buffer, base_texture_image.0, width, height, mip_levels, &mip_offsets);
-      // Get the image ready for sampling in the shader
-      Self::transition_image_layout(
-        locked_device, command_buffer, base_texture_image.0, 
-        vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, mip_levels);
-    }
-
-    return (base_texture_image, vk_format, mip_levels);
-  }
-
   // Load PNG texture from path into textureImages[idx]
   fn create_texture_image_from_png(
-    instance: &Instance, device: &Device, device_mutex: &Mutex<Device>, 
+    instance: &Instance, device: &Device,
     physical_device: vk::PhysicalDevice, command_buffer: vk::CommandBuffer, texture_path: &Path
   ) -> ((vk::Image, vk::DeviceMemory), vk::Format, u32)
   {
@@ -1152,20 +967,17 @@ impl Engine
       vk::MemoryPropertyFlags::DEVICE_LOCAL
     );
 
-    {
-      let locked_device: &Device = &device_mutex.lock().unwrap();
-      // Get the image ready for copying to
-      Self::transition_image_layout(
-        locked_device, command_buffer,
-        base_texture_image.0, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL, mip_levels);
-      // Copy the host-visible buffer to somewhere else in GPU memory
-      Self::copy_buffer_to_image(
-        locked_device, command_buffer, staging_buffer, base_texture_image.0, width, height, mip_levels, &vec![0]);
-      // Get the image ready for sampling in the shader
-      Self::transition_image_layout(
-        locked_device, command_buffer, base_texture_image.0, vk::ImageLayout::TRANSFER_DST_OPTIMAL, 
-        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, mip_levels);
-    }
+    // Get the image ready for copying to
+    Self::transition_image_layout(
+      device, command_buffer,
+      base_texture_image.0, vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL, mip_levels);
+    // Copy the host-visible buffer to somewhere else in GPU memory
+    Self::copy_buffer_to_image(
+      device, command_buffer, staging_buffer, base_texture_image.0, width, height, mip_levels, &vec![0]);
+    // Get the image ready for sampling in the shader
+    Self::transition_image_layout(
+      device, command_buffer, base_texture_image.0, vk::ImageLayout::TRANSFER_DST_OPTIMAL, 
+      vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL, mip_levels);
     
     return (base_texture_image, format, mip_levels);
   }
@@ -1212,286 +1024,6 @@ impl Engine
       In our case, we know that we are operating on data structures of known size solely containing floats. Execution
       logic of getAccessorData is identical for all cases but working on varying numbers of components.
   */
-
-// Helper to get component size
-  fn component_size(component_type: AccessorComponentType) -> usize 
-  {
-    match component_type {
-      AccessorComponentType::Byte => size_of::<i8>(),
-      AccessorComponentType::UnsignedByte => size_of::<u8>(),
-      AccessorComponentType::Short => size_of::<i16>(),
-      AccessorComponentType::UnsignedShort => size_of::<u16>(),
-      AccessorComponentType::Float => size_of::<f32>(),
-      _ => panic!("unsupported component type: {:?}!", component_type),
-    }
-  }
-
-  // Helper to get number of components per accessor type
-  fn num_components(accessor_type: AccessorType) -> usize 
-  {
-    match accessor_type {
-      AccessorType::Scalar => 1,
-      AccessorType::Vec2 => 2,
-      AccessorType::Vec3 => 3,
-      AccessorType::Vec4 => 4,
-      _ => panic!("unsupported accessor type: {:?}!", accessor_type),
-    }
-  }
-
-  // Dequantize a single value based on component type
-  fn dequantize_value(bytes: &[u8], component_type: AccessorComponentType, normalized: bool) -> f32
-  {
-    match component_type {
-      AccessorComponentType::Byte => {
-        let val = i8::from_le_bytes(bytes.try_into().unwrap());
-        if normalized { (val as f32 / 127.0).max(-1.0) } else { val as f32 }
-      },
-      AccessorComponentType::UnsignedByte => {
-        let val = u8::from_le_bytes(bytes.try_into().unwrap());
-        if normalized { val as f32 / 255.0 } else { val as f32 }
-      },
-      AccessorComponentType::Short => {
-        let val = i16::from_le_bytes(bytes.try_into().unwrap());
-        if normalized { (val as f32 / 32767.0).max(-1.0) } else { val as f32 }
-      },
-      AccessorComponentType::UnsignedShort => {
-        let val = u16::from_le_bytes(bytes.try_into().unwrap());
-        if normalized { val as f32 / 65535.0 } else { val as f32 }
-      },
-      AccessorComponentType::Float => {
-        f32::from_le_bytes(bytes.try_into().unwrap())
-      },
-      _ => panic!("unsupported component type: {:?}!", component_type),
-    }
-  }
-
-  // Parse accessor data and return as Vec<f32>
-  fn parse_accessor(asset: &GltfAsset, accessor: &Accessor) -> Vec<f32>
-  {
-    let accessor_type = accessor.ty;
-    let component_type = accessor.component_type;
-    let accessor_count = accessor.count;
-    let accessor_offset = accessor.byte_offset;
-    let num_comps = Self::num_components(accessor_type);
-    let comp_size = Self::component_size(component_type);
-    let element_size = num_comps * comp_size;
-    let buffer_view = if !accessor.buffer_view.is_none() { &asset.gltf.buffer_views[accessor.buffer_view.unwrap()] } 
-                      else { panic!("no buffer view!") };
-    let stride = if buffer_view.byte_stride != 0 { buffer_view.byte_stride } else { element_size };
-    let buffer_view_offset = buffer_view.byte_offset;
-    let buffer_data = &asset.buffers[buffer_view.buffer];
-    let normalized = accessor.normalized;
-      
-    let mut result = Vec::with_capacity(accessor_count * num_comps);
-    
-    for i in 0..accessor_count {
-      let base_offset = buffer_view_offset + accessor_offset + i * stride;
-      for j in 0..num_comps {
-        let offset = base_offset + j * comp_size;
-        let bytes = &buffer_data[offset..offset + comp_size];
-        let value = Self::dequantize_value(bytes, component_type, normalized);
-        result.push(value);
-      }
-    }
-    
-    return result;
-  }
-
-  fn load_geometry(
-    asset: &GltfAsset, idx_offset: u32, vert_offset: u32, mat_offset: u32
-  ) -> (Vec<Vertex>, Vec<u32>, Vec<SubMesh>)
-  {
-    let document = &asset.gltf;
-    let mut vertices: Vec<Vertex> = vec![];
-    let mut indices: Vec<u32> = vec![];
-    let mut submeshes: Vec<SubMesh> = vec![];
-
-    // let mut rng = rand::rng();
-    // // Place a cube somewhere
-    // vertices.extend(&CUBE.vertices);
-    // indices.extend(&CUBE.indices);
-    
-    // let scale = (rng.random::<f32>() * 0.3 + 0.7) * 0.1;
-    // let theta = rng.random::<f32>() * 2.0 * glm::pi::<f32>();
-    // let axis = glm::normalize(&glm::vec3(
-    //   (rng.random::<f32>() - 0.5) * 2.0,
-    //   (rng.random::<f32>() - 0.5) * 2.0,
-    //   (rng.random::<f32>() - 0.5) * 2.0
-    // ));
-    // let translation = glm::Vec3::zeros();
-    // for v in &mut vertices {
-    //   // Build transformation matrix
-    //   let mut transformation_matrix = glm::Mat4::identity();
-    //   transformation_matrix = glm::scale(&transformation_matrix, &glm::vec3(scale, scale, scale));
-    //   transformation_matrix = glm::rotate(&transformation_matrix, theta, &axis);
-    //   transformation_matrix = glm::translate(&transformation_matrix, &translation);
-
-    //   // Apply transformation
-    //   v.pos = glm::vec4_to_vec3(&(transformation_matrix * glm::vec4(v.pos.x, v.pos.y, v.pos.z, 1.0)));
-    // }
-
-    // submeshes.push(SubMesh {
-    //   index_offset: 0,
-    //   index_count: indices.len().try_into().unwrap(),
-    //   material_id: 0,
-    //   first_vertex: 0,
-    //   max_vertex: vertices.len().try_into().unwrap(),
-    //   alpha_cut: vk::FALSE,
-    // });
-
-    let mut index_offset: u32 = indices.len().try_into().unwrap();
-
-    document.nodes.iter().filter(|node| !node.mesh.is_none()).for_each(|node| {
-      let mesh = &document.meshes[node.mesh.unwrap()];
-      mesh.primitives.iter().for_each(|prim| {
-        let start_offset: u32 = index_offset;
-        // v_offset will help in evaluating the absolute value of this primitives indices so they match up with the
-        // correct vertices in the vertex buffer
-        let v_offset: u32 = vertices.len() as u32 + vert_offset;
-        // Get the accessor for where the primitive stores its indices
-        let index_accessor = &document.accessors[prim.indices.unwrap()];
-        let index_accessor_byte_offset = index_accessor.byte_offset;
-        let index_component_type = index_accessor.component_type;
-        let index_buffer_byte_length = index_accessor.count * match index_component_type {
-          AccessorComponentType::UnsignedByte => { size_of::<u8>() },
-          AccessorComponentType::UnsignedShort => { size_of::<u16>() },
-          AccessorComponentType::UnsignedInt => { size_of::<u32>() }
-          _ => panic!("incompatible component type")
-        };
-        let index_buffer_view = &document.buffer_views[index_accessor.buffer_view.unwrap()];
-        let index_buffer_byte_offset = index_buffer_view.byte_offset + index_accessor_byte_offset;
-        let index_buffer = &asset.buffers[index_buffer_view.buffer]
-          [index_buffer_byte_offset..index_buffer_byte_offset+index_buffer_byte_length];
-
-        let prim_indices: Vec<u32> = match index_component_type {
-          AccessorComponentType::UnsignedByte => {
-            index_buffer.chunks_exact(size_of::<u8>()).map(|chunk| 
-              (u8::from_le_bytes(chunk.try_into().unwrap()) as u32) + v_offset).collect()
-          },
-          AccessorComponentType::UnsignedShort => {
-            index_buffer.chunks_exact(size_of::<u16>()).map(|chunk| 
-              (u16::from_le_bytes(chunk.try_into().unwrap()) as u32) + v_offset).collect()
-          },
-          AccessorComponentType::UnsignedInt => {
-            index_buffer.chunks_exact(size_of::<u32>()).map(|chunk| 
-              u32::from_le_bytes(chunk.try_into().unwrap()) + v_offset).collect()
-          },
-          _ => { panic!("incompatible indices component type!") }
-        };        
-
-        indices.extend(&prim_indices);
-        // Insert the indices in reverse order if the material is double-sided (triggers a redraw of the backface as a 
-        // frontface, using a reverse iterator and offsets from rbegin (which is the end in the direction of begin)
-        if document.materials[prim.material.unwrap()].double_sided {
-          let reversed_indices = prim_indices.iter().rev();
-          indices.extend(reversed_indices);
-        }
-        index_offset = indices.len().try_into().unwrap();
-
-        let mat_idx = prim.material.expect("failed to find material!");
-
-        let pos_accessor = &document.accessors[*prim.attributes.get(&String::from("POSITION")).unwrap()];
-        let positions: Vec<glm::Vec3> = Self::parse_accessor(&asset, &pos_accessor).chunks_exact(3)
-        .map(|chunk| glm::make_vec3(&chunk)).collect();
-
-        let uv_accessor = &document.accessors[*prim.attributes.get(&String::from("TEXCOORD_0")).unwrap()];
-        let uvs: Vec<glm::Vec2> = Self::parse_accessor(asset, &uv_accessor).chunks_exact(2)
-          .map(|chunk| glm::make_vec2(&chunk)).collect();
-
-        let norms_accessor = &document.accessors[*prim.attributes.get(&String::from("NORMAL")).unwrap()];
-        let norms: Vec<glm::Vec3> = Self::parse_accessor(asset, &norms_accessor).chunks_exact(3)
-          .map(|chunk| glm::make_vec3(&chunk)).collect();
-
-        let colour = 
-          glm::make_vec3(&document.materials[mat_idx].pbr_metallic_roughness.as_ref().unwrap().base_color_factor[0..3]);
-
-        // Get the model's scale
-        let translation: glm::Vec3 = glm::make_vec3(&node.translation.unwrap_or([0.0;3]));
-        let rotation = node.rotation.unwrap_or([0.0, 0.0, 0.0, 1.0]);
-        let scale: glm::Vec3 = glm::make_vec3(&node.scale.unwrap_or([1.0;3]));
-
-        let translate_mat = glm::translate(&glm::Mat4::identity(), &translation);
-        let rotate_mat = glm::quat_to_mat4(&glm::make_quat(&rotation));
-        let scale_mat = glm::scale(&glm::Mat4::identity(), &scale);
-
-        let transform_mat = translate_mat * rotate_mat * scale_mat;
-
-        // Instantiate new default vertices
-        vertices.reserve(positions.len());
-        for i in 0..positions.len() {
-          let homogenous_pos = glm::vec4(positions[i].x, positions[i].y, positions[i].z, 1.0);
-          let transformed_pos = transform_mat * homogenous_pos;
-          vertices.push(Vertex {
-            pos: glm::vec3(transformed_pos.x, transformed_pos.y, transformed_pos.z),
-            tex_coord: uvs[i],
-            colour: colour,
-            norm: norms[i]
-          });
-        }
-
-        submeshes.push( SubMesh {
-          index_offset: start_offset + idx_offset,
-          index_count: index_offset - start_offset,
-          material_id: mat_idx as u32 + mat_offset,
-          first_vertex: 0,
-          max_vertex: vertices.len() as u32 + vert_offset,
-          alpha_cut: (document.materials[mat_idx].alpha_mode as u32 != 0).try_into().unwrap(),
-        });
-      })
-    });
-
-    return (vertices, indices, submeshes);
-  }
-
-
-  // Load the glTF data at path into class members
-  fn load_gltf(
-    context: &EngineContext, model_path: &Path, 
-    initial_indices_offset: u32, initial_vertices_offset: u32, initial_mat_offset: u32,
-  ) -> (Vec<Vertex>, Vec<u32>, Vec<SubMesh>, Vec<(vk::Image, vk::DeviceMemory)>, Vec<vk::ImageView>, vk::Sampler)
-  {
-    let root_path = &model_path.parent().unwrap();
-    let file_name = &model_path.file_name().unwrap().to_str().unwrap();
-
-    // Parse the glTF file into a cgltf_asset, a usable container of all the glTF pointers to the companion bin 
-    let mut loader = GltfResourceFileLoader::default();
-    loader.set_path(&root_path.to_str().unwrap());
-    let mut asset = pollster::block_on(GltfAsset::load(&loader, &file_name, false)).unwrap();
-
-    let mut buffers = Vec::with_capacity(asset.buffers.len());
-
-    // Code segment from mugltf source
-    for (buffer_id, buffer) in asset.gltf.buffers.iter().enumerate() {
-      if !buffer.uri.is_empty() {
-        let data = pollster::block_on(loader.get_buffer(&buffer.uri)).map_err(|err| {
-            LoadGltfResourceError::new(
-                LoadGltfResourceErrorKind::LoadBufferError(buffer_id),
-                err,
-            )
-        }).unwrap();
-        buffers.push(data);
-      } 
-      else {
-        // Undefined uri refers to bin chunk
-        // We consume the chunk as owned, as there can only be 1 buffer referencing it
-        buffers.push(std::mem::take(&mut asset.bin).into_owned());
-      }
-    }
-
-    asset.buffers = buffers;
-
-    // Load asset textures. The paths of the textures will be relative to the asset's directory, so pass parent path.
-    let (base_texture_images, base_texture_image_views) = pollster::block_on(Self::load_textures(
-      context, &asset.gltf, &root_path));
-    // Create a universal sampler (like a set of rules to follow if the image doesn't match up 1-to-1 with a surface)
-    let base_texture_sampler = Self::create_texture_sampler(context);
-    // Load vertex data, grouped by material
-    let (vertices, indices, submeshes) = 
-      Self::load_geometry(&asset, initial_indices_offset, initial_vertices_offset, initial_mat_offset);
-
-    // return (vertices, indices, submeshes, vec![], vec![], Default::default());
-    return (vertices, indices, submeshes, base_texture_images, base_texture_image_views, base_texture_sampler);
-  }
 
   // Allocate and start recording a one-time command buffer
   fn begin_single_time_commands(device: &Device, command_pool: vk::CommandPool) -> vk::CommandBuffer
@@ -1550,10 +1082,6 @@ impl Engine
         .base_array_layer(0).layer_count(1)
       );
 
-    // The stage at which to begin barricading, and when to end. 
-    // As in where the last write took place -> where we pick up
-    let mut src_stage = vk::PipelineStageFlags::default(); let mut dst_stage = vk::PipelineStageFlags::default();
-
     // We intentionally support only the following transitions
     // Texture of some material getting ready to be copied to
     if old_layout == vk::ImageLayout::UNDEFINED && 
@@ -1562,8 +1090,18 @@ impl Engine
       barrier.src_access_mask = vk::AccessFlags::default();
       barrier.dst_access_mask = vk::AccessFlags::TRANSFER_WRITE;
 
-      src_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
-      dst_stage = vk::PipelineStageFlags::TRANSFER;
+      // The stage at which to begin barricading, and when to end. 
+      // As in where the last write took place -> where we pick up
+      let src_stage = vk::PipelineStageFlags::TOP_OF_PIPE;
+      let dst_stage = vk::PipelineStageFlags::TRANSFER;
+
+      // Attach the barrier to the command buffer
+      unsafe { 
+        device.cmd_pipeline_barrier(
+          command_buffer, src_stage, dst_stage, 
+          vk::DependencyFlags::default(), &[], 
+          &[], &[barrier]) 
+      };
     }
     // Texture of some model after being copied to from host-visible memory
     else if old_layout == vk::ImageLayout::TRANSFER_DST_OPTIMAL && 
@@ -1572,8 +1110,18 @@ impl Engine
       barrier.src_access_mask = vk::AccessFlags::TRANSFER_WRITE;
       barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
 
-      src_stage = vk::PipelineStageFlags::TRANSFER;
-      dst_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
+      // The stage at which to begin barricading, and when to end. 
+      // As in where the last write took place -> where we pick up
+      let src_stage = vk::PipelineStageFlags::TRANSFER;
+      let dst_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
+      
+      // Attach the barrier to the command buffer
+      unsafe { 
+        device.cmd_pipeline_barrier(
+          command_buffer, src_stage, dst_stage, 
+          vk::DependencyFlags::default(), &[], 
+          &[], &[barrier]) 
+      };
     }
     // Transition render texture
     else if old_layout == vk::ImageLayout::UNDEFINED && 
@@ -1582,18 +1130,20 @@ impl Engine
       barrier.src_access_mask = vk::AccessFlags::SHADER_WRITE;
       barrier.dst_access_mask = vk::AccessFlags::SHADER_READ;
 
-      src_stage = vk::PipelineStageFlags::COMPUTE_SHADER;
-      dst_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
+      // The stage at which to begin barricading, and when to end. 
+      // As in where the last write took place -> where we pick up
+      let src_stage = vk::PipelineStageFlags::COMPUTE_SHADER;
+      let dst_stage = vk::PipelineStageFlags::FRAGMENT_SHADER;
+      
+      // Attach the barrier to the command buffer
+      unsafe { 
+        device.cmd_pipeline_barrier(
+          command_buffer, src_stage, dst_stage, 
+          vk::DependencyFlags::default(), &[], 
+          &[], &[barrier]) 
+      };
     }
     else { panic!("unsupported layout transition!"); }
-
-    // Attach the barrier to the command buffer
-    unsafe { 
-      device.cmd_pipeline_barrier(
-        command_buffer, src_stage, dst_stage, 
-        vk::DependencyFlags::default(), &[], 
-        &[], &[barrier]) 
-    };
   }
 
   // Each pipeline needs to know what structures will be passed to the GPU during its lifetime. Not specific data, but
@@ -1720,19 +1270,19 @@ impl Engine
   // Create and Map the Uniform Buffers that will be passed to shaders
   // We create as many of each uniform buffer as there are frames in flight, as data may change between calls while the
   // data is still being read for the previous frame
-  fn create_uniform_buffers(context: &EngineContext) -> Vec<(vk::Buffer, vk::DeviceMemory)>
+  fn create_uniform_buffers(context: &EngineContext, options: &AppOptions) -> Vec<(vk::Buffer, vk::DeviceMemory)>
   {
     let instance = &context.instance;
     let device = &context.device;
     let physical_device = context.physical_device;
-    let mut mvp_buffers: Vec<(vk::Buffer, vk::DeviceMemory)> = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
+    let mut mvp_buffers: Vec<(vk::Buffer, vk::DeviceMemory)> = Vec::with_capacity(options.frames_in_flight);
 
     // General breakdown:
     // 1. Create a buffer with sizeof(UserStruct) in DeviceMemory with accessor userStructBuffer
     // 2. Persist the created objects as class members
     // 3. Map the memory and store as a void*
 
-    for _i in 0..MAX_FRAMES_IN_FLIGHT {
+    for _i in 0..options.frames_in_flight {
       let mvp_buffer_size: vk::DeviceSize = size_of::<MVP>().try_into().unwrap();
       mvp_buffers.push(Self::create_buffer(
         instance, device, physical_device, mvp_buffer_size, vk::BufferUsageFlags::UNIFORM_BUFFER, 
@@ -1766,18 +1316,15 @@ impl Engine
 
   // Create DescriptorPools that can allocate DescriptorSets. It's like a check making sure not too many descriptors of
   // some type are allocated, as it does not take layouts into account
-  fn create_descriptor_pools(
-    context: &EngineContext, gltf_textures_data: &ImageData
-  ) -> vk::DescriptorPool
+  fn create_descriptor_pools(context: &EngineContext, options: &AppOptions) -> vk::DescriptorPool
   {
     let device = &context.device;
-    let gltf_texture_views = &gltf_textures_data.views;
     // It's possible that a driver allows overallocation from pool, avoiding VK_ERROR_OUT_OF_POOL_MEMORY when allocating
     // for more descriptor sets than the descriptor pool sizes "allow". In these cases it may not seem like the
     // descriptorCount member has any effect, but it will for some other drivers.
     // STANDARD 3D MODELS
     // We need at least 1 Uniform Buffer and 1 CombinedImageSampler per material group per frame in flight
-    let descriptor_count: u32 = MAX_FRAMES_IN_FLIGHT.try_into().unwrap();
+    let descriptor_count: u32 = options.frames_in_flight.try_into().unwrap();
     let pool_sizes = [
       // Model View Projection matrices
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::UNIFORM_BUFFER).descriptor_count(descriptor_count),
@@ -1797,7 +1344,7 @@ impl Engine
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLER).descriptor_count(descriptor_count),
       // Textures
       vk::DescriptorPoolSize::default().ty(vk::DescriptorType::SAMPLED_IMAGE)
-        .descriptor_count(gltf_texture_views.len() as u32)
+        .descriptor_count(1)
     ];
 
     let pool_info = vk::DescriptorPoolCreateInfo::default()
@@ -1818,8 +1365,7 @@ impl Engine
 
   // Collation of Descriptors for shaders
   fn create_descriptor_sets(
-    context: &EngineContext, fallback_texture_data: &ImageData,
-    gltf_textures_data: &ImageData,
+    context: &EngineContext, options: &AppOptions, fallback_texture_data: &ImageData,
     descriptor_set_layout_global: vk::DescriptorSetLayout, descriptor_set_layout_material: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool, mvp_buffers: &Vec<(vk::Buffer, vk::DeviceMemory)>,
     vertices: &Vec<Vertex>, indices: &Vec<u32>, vertex_data: &VertexData
@@ -1827,8 +1373,7 @@ impl Engine
   {
     let device = &context.device;
     let fallback_texture_view = fallback_texture_data.views[0];
-    let gltf_texture_views = &gltf_textures_data.views;
-    let gltf_texture_sampler = gltf_textures_data.sampler.unwrap();
+    let fallback_texture_sampler = fallback_texture_data.sampler.unwrap();
     let index_buffer = vertex_data.index_buffer.0;
     let colour_buffer = vertex_data.colour_buffer.0;
     let uv_buffer = vertex_data.uv_buffer.0;
@@ -1839,7 +1384,7 @@ impl Engine
     // [value; num_of_copies]
     
     // MAX_FRAMES_IN_FLIGHT copies of DescriptorSetLayout
-    let global_layouts = [descriptor_set_layout_global; MAX_FRAMES_IN_FLIGHT];
+    let global_layouts = vec![descriptor_set_layout_global; options.frames_in_flight];
 
     // Collate the relevant info (DescriptorPool and DescriptorSetLayouts)
     let mut global_alloc_info = vk::DescriptorSetAllocateInfo::default()
@@ -1850,7 +1395,7 @@ impl Engine
         .expect("failed to allocate descriptor sets for descriptor_set_layout_global!")
     };
 
-    for i in 0..(MAX_FRAMES_IN_FLIGHT as usize) {
+    for i in 0..options.frames_in_flight {
       let (mvp_buffer_info, index_buffer_info, colour_buffer_info, uv_buffer_info, norms_buffer_info) = {
         (
           [vk::DescriptorBufferInfo::default().buffer(mvp_buffers[i].0)
@@ -1895,7 +1440,7 @@ impl Engine
     // Mapped Textures
     let mat_layouts = [descriptor_set_layout_material];
 
-    let mat_variable_counts = [gltf_texture_views.len() as u32];
+    let mat_variable_counts = [1];
     let mut mat_variable_count_info = vk::DescriptorSetVariableDescriptorCountAllocateInfo::default()
       .descriptor_counts(&mat_variable_counts);
 
@@ -1905,7 +1450,7 @@ impl Engine
     let material_descriptor_sets = unsafe { 
       device.allocate_descriptor_sets(&mat_alloc_info).expect("failed to create material descriptor sets!") };
 
-    let mat_sampler_info = [vk::DescriptorImageInfo::default().sampler(gltf_texture_sampler)];
+    let mat_sampler_info = [vk::DescriptorImageInfo::default().sampler(fallback_texture_sampler)];
 
     let mat_sampler_write = vk::WriteDescriptorSet::default().image_info(&mat_sampler_info)
       .dst_set(material_descriptor_sets[0]).dst_binding(0).dst_array_element(0)
@@ -1913,12 +1458,11 @@ impl Engine
 
     unsafe { device.update_descriptor_sets(&[mat_sampler_write], &[]) };
 
-    let mut mat_image_infos: Vec<vk::DescriptorImageInfo> = Vec::with_capacity(gltf_texture_views.len());
-    for view in 0..gltf_texture_views.len() {
-      mat_image_infos.push(vk::DescriptorImageInfo::default()
-        .image_view(gltf_texture_views[view]).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL));
-    }
-
+    let mut mat_image_infos: Vec<vk::DescriptorImageInfo> = vec![
+      vk::DescriptorImageInfo::default()
+        .image_view(fallback_texture_view).image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+    ];
+    
     let material_write = vk::WriteDescriptorSet::default().image_info(&mat_image_infos)
       .dst_set(material_descriptor_sets[0]).dst_binding(1).dst_array_element(0)
       .descriptor_count(mat_image_infos.len().try_into().unwrap())
@@ -1985,7 +1529,6 @@ impl Engine
       .position([1110.0, 20.0], Condition::FirstUseEver)
       .begin()
       {
-        ui.input_text("Model Path", &mut debug_gui_context.model_path).build();
         ui.input_text("Slang Path", &mut debug_gui_context.slang_path).build();
         ui.input_text("SPIR-V Path", &mut debug_gui_context.spirv_path).build();      
       };
@@ -2154,7 +1697,7 @@ impl Engine
     }
 
     // move on to the next frame
-    self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+    self.current_frame = (self.current_frame + 1) % self.options.frames_in_flight;
     self.frame = self.frame % u32::MAX + 1;
   }
 

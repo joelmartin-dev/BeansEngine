@@ -38,25 +38,14 @@ use shader_slang as slang;
 // #include "ktx.h" // Image loader, for ktxTexture2
 // #include "cgltf.h" // Model loader, for cgltf_asset
 
+use crate::app_options::AppOptions;
 //============================== User-Defined Structs ==============================//
 use crate::camera::Camera; // Provides a global MVP matrix a.k.a. Camera
 use crate::vertex::Vertex; // Hashable Vertex primitive, with position, colour and uvs
 use crate::buffer_structs::SubMesh;
 
 //============================== Application Defaults ==============================//
-// Let's the CPU start working on the next frame before the GPU asks (higher values == latency, CPU too far ahead)
-const MAX_FRAMES_IN_FLIGHT: usize = 2;
-
-// Screen resolution defaults
-const RES: [u32; 2] = [800, 600];
-
-const TEXTURES_DESCRIPTOR_ARRAY_LENGTH: u32 = 32;
-
-// Default asset paths
-#[cfg(feature = "sponza")] const DEFAULT_MODEL_PATH: &'static str = "assets/sponza/Sponza.gltf";
-#[cfg(not(feature = "sponza"))] const DEFAULT_MODEL_PATH: &'static str = "assets/suzanne/SuzanneCornell_Opt.gltf";
-
-const SHADER_ROOT_PATH: &'static str = "assets/shaders/hardware";
+const SHADER_ROOT_PATH: &'static str = "assets/shaders";
 
 const DEFAULT_SLANG_PATH: &'static str = "raster.slang";
 
@@ -147,7 +136,6 @@ pub struct DebugGuiContext {
   renderer: Renderer,
 
   // Data to change at runtime
-  model_path: String,
   slang_path: String,
   spirv_path: String,
   delta: u128,
@@ -171,6 +159,7 @@ pub struct ImageData {
 
 #[derive(Default)]
 pub struct Engine {
+  options: AppOptions,
   context: Option<EngineContext>,
   debug_gui_context: Option<DebugGuiContext>,
   
@@ -203,7 +192,6 @@ pub struct Engine {
   vertices: Vec<Vertex>,
   indices: Vec<u32>,
   submeshes: Vec<SubMesh>,
-  gltf_textures_data: ImageData,
   
   vertex_data: VertexData,  
   

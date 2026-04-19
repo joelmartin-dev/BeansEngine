@@ -2,17 +2,19 @@ use std::time::{Instant};
 
 use winit::{application::ApplicationHandler, dpi::PhysicalSize, event::{ElementState, WindowEvent, Event}, event_loop, keyboard::{KeyCode, PhysicalKey}, window::Window};
 
-use crate::engine::{App, Engine, RES};
+use crate::engine::{App, Engine};
+use crate::app_options::AppOptions;
 use std::path::Path;
 
 impl ApplicationHandler for App {
   fn resumed(&mut self, event_loop: &event_loop::ActiveEventLoop) {
+      let options: AppOptions = serde_json::from_str(&std::fs::read_to_string("options.config").unwrap()).unwrap();
       let window = event_loop.create_window(
         Window::default_attributes()
         .with_title("Beans Engine")
-        .with_inner_size(PhysicalSize::new(RES[0], RES[1]))
+        .with_inner_size(PhysicalSize::new(options.resolution.0, options.resolution.1))
       ).unwrap();
-      self.engine = Some(Engine::new(&window));
+      self.engine = Some(Engine::new(&window, options));
       self.window = Some(window);
   }
 
@@ -76,6 +78,8 @@ impl ApplicationHandler for App {
           engine.camera.update((engine.delta as f32) / ((2 << delta_exp) as f32));
           engine.draw_frame(window);
           let mut frame_end = Instant::now();
+
+          // Lock to 60fps
           while frame_end.duration_since(frame_start).as_micros() < 16667 { frame_end = Instant::now() }
   
           engine.delta = frame_end.duration_since(frame_start).as_micros();
