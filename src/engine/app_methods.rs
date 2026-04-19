@@ -59,10 +59,6 @@ impl ApplicationHandler for App {
               if event.state == ElementState::Pressed && !event.repeat && self.modifiers_state.alt_key() {
                 engine.reload_shaders();
               }
-            },
-            PhysicalKey::Code(KeyCode::KeyA) => {
-              if event.state == ElementState::Pressed && !event.repeat && self.modifiers_state.alt_key() {
-              }
             }
             _ => ()
           }
