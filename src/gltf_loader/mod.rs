@@ -7,7 +7,7 @@ pub enum ComponentType {
   UNSIGNED_SHORT = 5123, // integer
   UNSIGNED_INT = 5125, // integer
   FLOAT = 5126, // integer
-  INT = 5124 // integer, default
+  DEFAULT // integer, default
 }
 pub enum AccessorType {
   SCALAR,
@@ -17,7 +17,7 @@ pub enum AccessorType {
   MAT2,
   MAT3,
   MAT4,
-  STRING
+  DEFAULT
 }
 // An object pointing to a buffer view containing the indices of deviating accessor values. 
 // The number of indices is equal to `accessor.sparse.count`. Indices **MUST** strictly increase.
@@ -111,6 +111,7 @@ pub struct Asset {
   extensions: Vec<Extension>,
   extras: Vec<Extra>,
 }
+// A buffer points to binary geometry, animation, or skins.
 pub struct Buffer {
   // The URI (or IRI) of the buffer.  Relative paths are relative to the current glTF asset.
   // Instead of referencing an external file, this field **MAY** contain a `data:`-URI.
@@ -121,7 +122,29 @@ pub struct Buffer {
   extensions: Vec<Extension>,
   extras: Vec<Extra>,
 }
-pub struct BufferView {}
+pub enum BufferViewTarget {
+  ARRAY_BUFFER = 34962,
+  ELEMENT_ARRAY_BUFFER = 34963,
+  DEFAULT
+}
+// A view into a buffer generally representing a subset of the buffer.
+pub struct BufferView {
+  // The index of the buffer.
+  buffer: i32, // min: 0
+  // The offset into the buffer in bytes.
+  byte_offset: Option<i32>, // min: 0, default: 0
+  // The length of the buffer_view in bytes.
+  byte_length: i32, // min: 1
+  // The stride, in bytes, between vertex attributes. 
+  // When this is not defined, data is tightly packed. 
+  // When two or more accessors use the same buffer view, this field **MUST** be defined.
+  byte_stride: Option<i32>, // min: 4, max: 252, multipleOf: 4,
+  // The hint representing the intended GPU buffer type to use with this buffer view.
+  target: Option<BufferViewTarget>,
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
 pub struct Camera {}
 pub struct Image {}
 pub struct Material {}
