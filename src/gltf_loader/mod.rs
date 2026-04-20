@@ -97,8 +97,30 @@ pub struct Accessor {
   extras: Vec<Extra>,
 }
 pub struct Animation {}
-pub struct Asset {}
-pub struct Buffer {}
+// Metadata about the glTF asset.
+pub struct Asset {
+  // A copyright message suitable for display to credit the content creator.
+  copyright: Option<String>,
+  // Tool that generated this glTF model.  Useful for debugging.
+  generator: Option<String>,
+  // The glTF version in the form of `<major>.<minor>` that this asset targets.
+  version: String, // pattern: ^[0-9]+\\.[0-9]+$
+  // The minimum glTF version in the form of `<major>.<minor>` that this asset targets. 
+  // This property **MUST NOT** be greater than the asset version.
+  min_version: Option<String>, // pattern: ^[0-9]+\\.[0-9]+$
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
+pub struct Buffer {
+  // The URI (or IRI) of the buffer.  Relative paths are relative to the current glTF asset.
+  // Instead of referencing an external file, this field **MAY** contain a `data:`-URI.
+  uri: Option<String>, // format: iri-reference, gltf_uriType: application
+  // The length of the buffer in bytes.
+  byte_length: i32, // min: 1
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
 pub struct BufferView {}
 pub struct Camera {}
 pub struct Image {}
