@@ -7,7 +7,7 @@ pub enum ComponentType {
   UNSIGNED_SHORT = 5123, // integer
   UNSIGNED_INT = 5125, // integer
   FLOAT = 5126, // integer
-  DEFAULT // integer, default
+  UNDEFINED // integer, default
 }
 pub enum AccessorType {
   SCALAR,
@@ -17,7 +17,7 @@ pub enum AccessorType {
   MAT2,
   MAT3,
   MAT4,
-  DEFAULT
+  UNDEFINED
 }
 // An object pointing to a buffer view containing the indices of deviating accessor values. 
 // The number of indices is equal to `accessor.sparse.count`. Indices **MUST** strictly increase.
@@ -131,7 +131,7 @@ pub enum InterpolationType {
   // For each input element, the output stores three elements, an in-tangent, a spline vertex, and an out-tangent. 
   // There **MUST** be at least two keyframes when using this interpolation.
   CUBICSPLINE,
-  DEFAULT
+  UNDEFINED
 }
 // An animation sampler combines timestamps with a sequence of output values and defines an interpolation algorithm.
 pub struct AnimationSampler {
@@ -184,7 +184,7 @@ pub struct Buffer {
 pub enum BufferViewTarget {
   ARRAY_BUFFER = 34962,
   ELEMENT_ARRAY_BUFFER = 34963,
-  DEFAULT
+  UNDEFINED
 }
 // A view into a buffer generally representing a subset of the buffer.
 pub struct BufferView {
@@ -275,7 +275,7 @@ pub enum MeshPrimitiveMode {
   TRIANGLES = 4,
   TRIANGLE_STRIP = 5,
   TRIANGLE_FAN = 6,
-  DEFAULT
+  UNDEFINED
 }
 pub struct MeshPrimitive {
   // A plain JSON object, where each key corresponds to a mesh attribute semantic 
@@ -348,7 +348,35 @@ pub struct Node {
   extensions: Vec<Extension>,
   extras: Vec<Extra>,
 }
-pub struct Sampler {}
+pub enum SamplerFilter {
+  NEAREST = 9728,
+  LINEAR = 9729,
+  NEAREST_MIPMAP_NEAREST = 9984,
+  LINEAR_MIPMAP_NEAREST = 9985,
+  NEAREST_MIPMAP_LINEAR = 9986,
+  LINEAR_MIPMAP_LINEAR = 9987,
+  UNDEFINED
+}
+pub enum SamplerWrap {
+  CLAMP_TO_EDGE = 33071,
+  MIRRORED_REPEAT = 33648,
+  REPEAT = 10497,
+  UNDEFINED
+}
+// Texture sampler properties for filtering and wrapping modes.
+pub struct Sampler {
+  // Magnification filter.
+  mag_filter: Option<SamplerFilter>, // NEAREST, LINEAR, or some integer
+  // Minification filter.
+  min_filter: Option<SamplerFilter>, // NEAREST, LINEAR, NEAREST_MIPMAP_NEAREST, LINEAR_MIPMAP_NEAREST, NEAREST_MIPMAP_LINEAR, LINEAR_MIPMAP_LINEAR, or some integer
+  // S (U) wrapping mode. All valid values correspond to WebGL enums
+  wrap_s: Option<SamplerWrap>, // default: REPEAT
+  // T (V) wrapping mode.
+  wrap_t: Option<SamplerWrap>, // default: REPEAT
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
 // The root nodes of a scene.
 pub struct Scene {
   nodes: Option<Vec<i32 /* min: 0 */>>, // minItems: 1, uniqueItems
@@ -391,6 +419,8 @@ pub struct TextureInfo {
   // which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). 
   // A mesh primitive **MUST** have the corresponding texture coordinate attributes for the material to be applicable to it.
   tex_coord: Option<i32>, // min: 0, default: 0
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
 }
 
 pub struct GltfLoader {
