@@ -256,14 +256,98 @@ pub struct Image {
   // The URI (or IRI) of the image.  Relative paths are relative to the current glTF asset.  
   // Instead of referencing an external file, this field **MAY** contain a `data:`-URI. 
   // This field **MUST NOT** be defined when `bufferView` is defined.
-  uri: String,
+  uri: Option<String>, // format: iri-reference, gltf_uriType: image
+  // The image's media type. This field **MUST** be defined when `bufferView` is defined.
+  mime_type: Option<String>, // anyOf: image/jpeg, image/png, or some string
+  // The index of the bufferView that contains the image. This field **MUST NOT** be defined when `uri` is defined.
+  buffer_view: Option<i32>, // min: 0
   name: Option<String>,
   extensions: Vec<Extension>,
   extras: Vec<Extra>,
 }
 pub struct Material {}
-pub struct Mesh {}
-pub struct Node {}
+// Geometry to be rendered with the given material.
+pub enum MeshPrimitiveMode {
+  POINTS = 0,
+  LINES = 1,
+  LINE_LOOP = 2,
+  LINE_STRIP = 3,
+  TRIANGLES = 4,
+  TRIANGLE_STRIP = 5,
+  TRIANGLE_FAN = 6,
+  DEFAULT
+}
+pub struct MeshPrimitive {
+  // A plain JSON object, where each key corresponds to a mesh attribute semantic 
+  // and each value is the index of the accessor containing attribute's data.
+  attributes: Vec<(String, i32)>, // minProperties: 1, REVISIT
+  // The index of the accessor that contains the vertex indices.
+  // When this is undefined, the primitive defines non-indexed geometry.
+  // When defined, the accessor **MUST** have `SCALAR` type and an unsigned integer component type.
+  indices: Option<i32>, // min: 0
+  // The index of the material to apply to this primitive when rendering.
+  material: Option<i32>, // min: 0
+  // The topology type of primitives to render.
+  mode: Option<MeshPrimitiveMode>, // default: 4
+  // A plain JSON object specifying attributes displacements in a morph target, 
+  // where each key corresponds to one of the three supported attribute semantic (`POSITION`, `NORMAL`, or `TANGENT`) 
+  // and each value is the index of the accessor containing the attribute displacements' data.
+  targets: Option<Vec<(String, i32) /* minProperties: 1 */>>, // minItems: 1
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
+// A set of primitives to be rendered.  Its global transform is defined by a node that references it.
+pub struct Mesh {
+  // An array of primitives, each defining geometry to be rendered.
+  primitives: Vec<MeshPrimitive>, // minItems: 1
+  // Array of weights to be applied to the morph targets. 
+  // The number of array elements **MUST** match the number of morph targets.
+  weights: Option<Vec<f32>>, // minItems: 1
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
+// A node in the node hierarchy. 
+// When the node contains `skin`, all `mesh.primitives` **MUST** contain `JOINTS_0` and `WEIGHTS_0` attributes.
+// A node **MAY** have either a `matrix` or any combination of `translation`/`rotation`/`scale` (TRS) properties. 
+// TRS properties are converted to matrices and postmultiplied in the `T * R * S` order to compose the transformation matrix; 
+// first the scale is applied to the vertices, then the rotation, and then the translation. 
+// If none are provided, the transform is the identity. 
+// When a node is targeted for animation (referenced by an animation.channel.target), `matrix` **MUST NOT** be present.
+//     "not": {
+//          "anyOf": [
+//              { "required": [ "matrix", "translation" ] },
+//              { "required": [ "matrix", "rotation" ] },
+//              { "required": [ "matrix", "scale" ] }
+//          ]
+//      }
+pub struct Node {
+  // The index of the camera referenced by this node.
+  camera: Option<Camera>,
+  // The indices of this node's children.
+  children: Option<Vec<i32 /* min: 0 */>>, // minItems: 1, uniqueItems
+  // The index of the skin referenced by this node. 
+  // When a skin is referenced by a node within a scene, all joints used by the skin **MUST** belong to the same scene. 
+  // When defined, `mesh` **MUST** also be defined.
+  skin: Option<i32>, // min: 0
+  // A floating-point 4x4 transformation matrix stored in column-major order.
+  matrix: Option<Vec<f32>>, // minItems: 16, maxItems: 16, default: [ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0 ]
+  // The index of the mesh in this node.
+  mesh: Option<i32>, // min: 0
+  // The node's unit quaternion rotation in the order (x, y, z, w), where w is the scalar.
+  rotation: Option<Vec<f32 /* min: -1.0f, max: 1.0f */>>, // minItems: 4, maxItems: 4, default: [ 0.0, 0.0, 0.0, 1.0 ]
+  // The node's non-unifomr scale, given as the scaling factors along the x, y, and z axes.
+  scale: Option<Vec<f32>>, // minItems: 3, maxItems: 3, default: [ 1.0, 1.0, 1.0 ]
+  // The node's translation along the x, y, and z axes.
+  translation: Option<Vec<f32>>, // minItems: 3, maxItems: 3, default: [ 0.0, 0.0, 0.0 ]
+  // The weights of the instantiated morph target. 
+  // The number of array elements **MUST** match the number of morph targets of the referenced mesh. 
+  // When defined, `mesh` **MUST** also be defined.
+  weights: Option<Vec<f32>>, // minItems: 1
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
 pub struct Sampler {}
 pub struct Scene {}
 pub struct Skin {}
