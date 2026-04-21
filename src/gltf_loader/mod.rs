@@ -365,12 +365,33 @@ pub struct Skin {
   // The index of the node used as a skeleton root. 
   // The node **MUST** be the closest common root of the joints hierarchy or a direct or indirect parent node of the closest common root.
   skeleton: Option<i32>, // min: 0
+  // Indices of skeleton, nodes used as joints in this skin.
+  joints: Vec<i32 /* min: 0 */>, // minItems: 1, uniqueItems
   name: Option<String>,
   extensions: Vec<Extension>,
   extras: Vec<Extra>,
 }
-pub struct Texture {}
-
+// A texture and its sampler.
+pub struct Texture {
+  // The index of the sampler used by this texture. 
+  // When undefined, a sampler with repeat wrapping and auto filtering **SHOULD** be used.
+  sampler: Option<i32>, // min: 0
+  // The index of the image used by this texture. 
+  // When undefined, an extension or other mechanism **SHOULD** supply an alternate texture source, otherwise behavior is undefined.
+  source: Option<i32>, // min: 0
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
+// Reference to a texture.
+pub struct TextureInfo {
+  // The index of the texture.
+  index: i32, // min: 0
+  // This integer value is used to construct a string in the format `TEXCOORD_<set index>` 
+  // which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). 
+  // A mesh primitive **MUST** have the corresponding texture coordinate attributes for the material to be applicable to it.
+  tex_coord: Option<i32>, // min: 0, default: 0
+}
 
 pub struct GltfLoader {
   // Names of glTF extensions used in this asset.
