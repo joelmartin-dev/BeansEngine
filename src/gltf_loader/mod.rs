@@ -204,7 +204,53 @@ pub struct BufferView {
   extensions: Vec<Extension>,
   extras: Vec<Extra>,
 }
-pub struct Camera {}
+// An orthographic camera containing properties to create an orthographic projection matrix.
+pub struct Orthographic {
+  // The floating-point horizontal magnification of the view. 
+  // This value **MUST NOT** be equal to zero. This value **SHOULD NOT** be negative.
+  xmag: f32,
+  // The floating-point vertical magnification of the view. 
+  // This value **MUST NOT** be equal to zero. This value **SHOULD NOT** be negative.
+  ymag: f32,
+  // The floating-point distance to the far clipping plane. 
+  // This value **MUST NOT** be equal to zero. `zfar` **MUST** be greater than `znear`.
+  zfar: f32, // exclusiveMin: 0.0
+  // The floating-point distance to the near clipping plane.
+  znear: f32, // min: 0.0
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
+// A perspective camera containing properties to create a perspective projection matrix.
+pub struct Perspective {
+  // The floating-point aspect ratio of the field of view. 
+  // When undefined, the aspect ratio of the rendering viewport **MUST** be used.
+  aspect_ratio: Option<f32>, // exclusiveMin: 0.0
+  // The floating-point vertical field of view in radians. This value **SHOULD** be less than π.
+  yfov: f32, // exclusiveMin: 0.0
+  // The floating-point distance to the far clipping plane. 
+  // When defined, `zfar` **MUST** be greater than `znear`. 
+  // If `zfar` is undefined, client implementations **SHOULD** use infinite projection matrix.
+  zfar: Option<f32>, // exclusiveMin: 0.0
+  // The floating-point distance to the near clipping plane.
+  znear: f32, // exclusiveMin: 0.0
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
+// A camera's projection.  A node **MAY** reference a camera to apply a transform to place the camera in the scene.
+pub struct Camera {
+  // An orthographic camera containing properties to create an orthographic projection matrix. 
+  // This property **MUST NOT** be defined when `perspective` is defined.
+  orthographic: Option<Orthographic>,
+  // A perspective camera containing properties to create a perspective projection matrix. 
+  // This property **MUST NOT** be defined when `orthographic` is defined.
+  perspective: Option<Perspective>,
+  // Specifies if the camera uses a perspective or orthographic projection.
+  // Based on this, either the camera's `perspective` or `orthographic` property **MUST** be defined.
+  ty: String, // anyOf: perspective, orthographic, or some string
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
 pub struct Image {}
 pub struct Material {}
 pub struct Mesh {}
