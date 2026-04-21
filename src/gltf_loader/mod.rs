@@ -75,7 +75,7 @@ pub struct Accessor {
   // not to be confused with the number of bytes or number of components.
   count: i32, // min: 1
   // Specifies if the accessor's elements are scalars, vectors, or matrices.
-  ty: AccessorType,
+  ty: String, // anyOf: SCALAR, VEC2, VEC3, VEC4, MAT2, MAT3, MAT4, or some string
   // Maximum value of each component in this accessor.
   // Array elements **MUST** be treated as having the same data type as accessor's `componentType`. 
   // Both `min` and `max` arrays have the same length. 
@@ -96,7 +96,66 @@ pub struct Accessor {
   extensions: Vec<Extension>,
   extras: Vec<Extra>,
 }
-pub struct Animation {}
+// The descriptor of the animated property.
+pub struct AnimationChannelTarget {
+  // The index of the node to animate. When undefined, the animated object **MAY** be defined by an extension.
+  node: Option<i32>, // min: 0
+  // The name of the node's TRS property to animate, or the "weights" of the Morph Targets it instantiates. 
+  // For the "translation" property, the values that are provided by the sampler are the translation along the X, Y, and Z axes. 
+  // For the "rotation" property, the values are a quaternion in the order (x, y, z, w), where w is the scalar. 
+  // For the "scale" property, the values are the scaling factors along the X, Y, and Z axes.
+  path: String, // "translation", "rotation", "scale", "weights", ""
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
+// An animation channel combines an animation sampler with a target property being animated.
+pub struct AnimationChannel {
+  // The index of a sampler in this animation used to compute the value for the target, 
+  // e.g., a node's translation, rotation, or scale (TRS).
+  sampler: i32, // min: 0
+  // The descriptor of the animated property.
+  target: AnimationChannelTarget,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
+pub enum InterpolationType {
+  // The animated values are linearly interpolated between keyframes. 
+  // When targeting a rotation, spherical linear interpolation (slerp) **SHOULD** be used to interpolate quaternions. 
+  // The number of output elements **MUST** equal the number of input elements.
+  LINEAR,
+  // The animated values remain constant to the output of the first keyframe, until the next keyframe. 
+  // The number of output elements **MUST** equal the number of input elements.
+  STEP,
+  // The animation's interpolation is computed using a cubic spline with specified tangents. 
+  // The number of output elements **MUST** equal three times the number of input elements. 
+  // For each input element, the output stores three elements, an in-tangent, a spline vertex, and an out-tangent. 
+  // There **MUST** be at least two keyframes when using this interpolation.
+  CUBICSPLINE,
+  DEFAULT
+}
+// An animation sampler combines timestamps with a sequence of output values and defines an interpolation algorithm.
+pub struct AnimationSampler {
+  // The index of an accessor containing keyframe timestamps. 
+  // The accessor **MUST** be of scalar type with floating-point components. 
+  // The values represent time in seconds with `time[0] >= 0.0`, and strictly increasing values, i.e., `time[n + 1] > time[n]`.
+  input: i32, // min: 0
+  interpolation: Option<String>, // anyOf: LINEAR, STEP, CUBICSPLINE, or some string
+  output: i32, // min: 0
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
+// A keyframe animation.
+pub struct Animation {
+  // An array of animation channels. An animation channel combines an animation sampler with a target property being animated. 
+  // Different channels of the same animation **MUST NOT** have the same targets.
+  channels: Vec<AnimationChannel>, // min_items: 1
+  // An array of animation samplers. 
+  // An animation sampler combines timestamps with a sequence of output values and defines an interpolation algorithm.
+  samplers: Vec<AnimationSampler>, // min_items: 1
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
 // Metadata about the glTF asset.
 pub struct Asset {
   // A copyright message suitable for display to credit the content creator.
