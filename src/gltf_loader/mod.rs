@@ -349,8 +349,26 @@ pub struct Node {
   extras: Vec<Extra>,
 }
 pub struct Sampler {}
-pub struct Scene {}
-pub struct Skin {}
+// The root nodes of a scene.
+pub struct Scene {
+  nodes: Option<Vec<i32 /* min: 0 */>>, // minItems: 1, uniqueItems
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
+// Joints and matrices defining a skin.
+pub struct Skin {
+  // The index of the accessor containing the floating-point 4x4 inverse-bind matrices. 
+  // Its `accessor.count` property **MUST** be greater than or equal to the number of elements of the `joints` array. 
+  // When undefined, each matrix is a 4x4 identity matrix.
+  inverse_bind_matrices: Option<i32>, // min: 0
+  // The index of the node used as a skeleton root. 
+  // The node **MUST** be the closest common root of the joints hierarchy or a direct or indirect parent node of the closest common root.
+  skeleton: Option<i32>, // min: 0
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
 pub struct Texture {}
 
 
