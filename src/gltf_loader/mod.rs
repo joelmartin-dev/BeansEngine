@@ -251,7 +251,16 @@ pub struct Camera {
   extensions: Vec<Extension>,
   extras: Vec<Extra>,
 }
-pub struct Image {}
+// Image data used to create a texture. Image **MAY** be referenced by an URI (or IRI) or a buffer view index.
+pub struct Image {
+  // The URI (or IRI) of the image.  Relative paths are relative to the current glTF asset.  
+  // Instead of referencing an external file, this field **MAY** contain a `data:`-URI. 
+  // This field **MUST NOT** be defined when `bufferView` is defined.
+  uri: String,
+  name: Option<String>,
+  extensions: Vec<Extension>,
+  extras: Vec<Extra>,
+}
 pub struct Material {}
 pub struct Mesh {}
 pub struct Node {}
