@@ -1,5 +1,20 @@
-pub struct Extension {}
-pub struct Extra {}
+use std::{fs};
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, Map};
+
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Extension {
+  #[serde(flatten)]
+  additionalProperties: Map<String, Value>
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Extra {
+  #[serde(flatten)]
+  additionalProperties: Map<String, Value>
+}
 pub enum ComponentType {
   BYTE = 5120, // integer
   UNSIGNED_BYTE = 5121, // integer
@@ -21,29 +36,37 @@ pub enum AccessorType {
 }
 // An object pointing to a buffer view containing the indices of deviating accessor values. 
 // The number of indices is equal to `accessor.sparse.count`. Indices **MUST** strictly increase.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AccessorSparseIndices {
   // The index of the buffer view with sparse indices. 
   // The referenced buffer view **MUST NOT** have its `target` or `byteStride` properties defined. 
   // The buffer view and the optional `byteOffset` **MUST** be aligned to the `componentType` byte length.
+  #[serde(rename = "bufferView")]
   buffer_view: i32, // min: 0
   // The offset relative to the start of the buffer view in bytes.
+  #[serde(rename = "byteOffset")]
   byte_offset: Option<i32>, // min: 0, default: 0
   // The indices data type.
-  component_type: ComponentType, // UNSIGNED_BYTE, UNSIGNED_SHORT, UNSIGNED_INT, or INT
+  #[serde(rename = "componentType")]
+  component_type: i32, // UNSIGNED_BYTE, UNSIGNED_SHORT, UNSIGNED_INT, or INT
   extensions: Option<Vec<Extension>>,
   extras: Option<Vec<Extra>>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AccessorSparseValues {
   // The index of the bufferView with sparse values. 
   // The referenced buffer view **MUST NOT** have its `target` or `byteStride` properties defined.
+  #[serde(rename = "bufferView")]
   buffer_view: i32, // min: 0
   // The offset relative to the start of the bufferView in bytes.
+  #[serde(rename = "byteOffset")]
   byte_offset: Option<i32>, // min: 0, default: 0
   extensions: Option<Vec<Extension>>,
   extras: Option<Vec<Extra>>,
 }
 // Sparse storage of accessor values that deviate from their initialization value.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AccessorSparse {
   // Number of deviating accessor values stored in the sparse array.
   count: i32, // min: 1
@@ -56,17 +79,21 @@ pub struct AccessorSparse {
   extras: Option<Vec<Extra>>,
 }
 // A typed view into a buffer view that contains raw binary data.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Accessor {
   // The index of the buffer view. When undefined, the accessor **MUST** be initialized with zeros; 
   // `sparse` property or extensions **MAY** override zeros with actual values.
+  #[serde(rename = "bufferView")]
   buffer_view: Option<i32>, // min: 0
   // The offset relative to the start of the buffer view in bytes.
   // This **MUST** be a multiple of the size of the component datatype. 
   // This property **MUST NOT** be defined when `bufferView` is undefined.
+  #[serde(rename = "byteOffset")]
   byte_offset: Option<i32>, // min: 0, default: 0
   // The datatype of the accessor's components.
   // UNSIGNED_INT type **MUST NOT** be used for any accessor that is not referenced by `mesh.primitive.indices`.
-  component_type: ComponentType, // Can be any ComponentType
+  #[serde(rename = "componentType")]
+  component_type: i32, // Can be any ComponentType
   // Specifies whether integer data values are normalized (`true`) to [0, 1] (for unsigned types) 
   // or to [-1, 1] (for signed types) when they are accessed.
   // This property **MUST NOT** be set to `true` for accessors with `FLOAT` or `UNSIGNED_INT` component type.
@@ -75,6 +102,7 @@ pub struct Accessor {
   // not to be confused with the number of bytes or number of components.
   count: i32, // min: 1
   // Specifies if the accessor's elements are scalars, vectors, or matrices.
+  #[serde(rename = "type")]
   ty: String, // anyOf: SCALAR, VEC2, VEC3, VEC4, MAT2, MAT3, MAT4, or some string
   // Maximum value of each component in this accessor.
   // Array elements **MUST** be treated as having the same data type as accessor's `componentType`. 
@@ -93,10 +121,11 @@ pub struct Accessor {
   // Sparse storage of elements that deviate from their initialization value.
   sparse: Option<AccessorSparse>,
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // The descriptor of the animated property.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AnimationChannelTarget {
   // The index of the node to animate. When undefined, the animated object **MAY** be defined by an extension.
   node: Option<i32>, // min: 0
@@ -105,18 +134,19 @@ pub struct AnimationChannelTarget {
   // For the "rotation" property, the values are a quaternion in the order (x, y, z, w), where w is the scalar. 
   // For the "scale" property, the values are the scaling factors along the X, Y, and Z axes.
   path: String, // "translation", "rotation", "scale", "weights", ""
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // An animation channel combines an animation sampler with a target property being animated.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AnimationChannel {
   // The index of a sampler in this animation used to compute the value for the target, 
   // e.g., a node's translation, rotation, or scale (TRS).
   sampler: i32, // min: 0
   // The descriptor of the animated property.
   target: AnimationChannelTarget,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 pub enum InterpolationType {
   // The animated values are linearly interpolated between keyframes. 
@@ -134,6 +164,7 @@ pub enum InterpolationType {
   UNDEFINED
 }
 // An animation sampler combines timestamps with a sequence of output values and defines an interpolation algorithm.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AnimationSampler {
   // The index of an accessor containing keyframe timestamps. 
   // The accessor **MUST** be of scalar type with floating-point components. 
@@ -141,10 +172,11 @@ pub struct AnimationSampler {
   input: i32, // min: 0
   interpolation: Option<String>, // anyOf: LINEAR, STEP, CUBICSPLINE, or some string
   output: i32, // min: 0
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // A keyframe animation.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Animation {
   // An array of animation channels. An animation channel combines an animation sampler with a target property being animated. 
   // Different channels of the same animation **MUST NOT** have the same targets.
@@ -153,10 +185,11 @@ pub struct Animation {
   // An animation sampler combines timestamps with a sequence of output values and defines an interpolation algorithm.
   samplers: Vec<AnimationSampler>, // min_items: 1
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // Metadata about the glTF asset.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Asset {
   // A copyright message suitable for display to credit the content creator.
   copyright: Option<String>,
@@ -166,20 +199,23 @@ pub struct Asset {
   version: String, // pattern: ^[0-9]+\\.[0-9]+$
   // The minimum glTF version in the form of `<major>.<minor>` that this asset targets. 
   // This property **MUST NOT** be greater than the asset version.
+  #[serde(rename = "minVersion")]
   min_version: Option<String>, // pattern: ^[0-9]+\\.[0-9]+$
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // A buffer points to binary geometry, animation, or skins.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Buffer {
   // The URI (or IRI) of the buffer.  Relative paths are relative to the current glTF asset.
   // Instead of referencing an external file, this field **MAY** contain a `data:`-URI.
   uri: Option<String>, // format: iri-reference, gltf_uriType: application
   // The length of the buffer in bytes.
+  #[serde(rename = "byteLength")]
   byte_length: i32, // min: 1
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 pub enum BufferViewTarget {
   ARRAY_BUFFER = 34962,
@@ -187,24 +223,29 @@ pub enum BufferViewTarget {
   UNDEFINED
 }
 // A view into a buffer generally representing a subset of the buffer.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct BufferView {
   // The index of the buffer.
   buffer: i32, // min: 0
   // The offset into the buffer in bytes.
+  #[serde(rename = "byteOffset")]
   byte_offset: Option<i32>, // min: 0, default: 0
   // The length of the buffer_view in bytes.
+  #[serde(rename = "byteLength")]
   byte_length: i32, // min: 1
   // The stride, in bytes, between vertex attributes. 
   // When this is not defined, data is tightly packed. 
   // When two or more accessors use the same buffer view, this field **MUST** be defined.
+  #[serde(rename = "byteStride")]
   byte_stride: Option<i32>, // min: 4, max: 252, multipleOf: 4,
   // The hint representing the intended GPU buffer type to use with this buffer view.
-  target: Option<BufferViewTarget>,
+  target: Option<i32>,
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // An orthographic camera containing properties to create an orthographic projection matrix.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Orthographic {
   // The floating-point horizontal magnification of the view. 
   // This value **MUST NOT** be equal to zero. This value **SHOULD NOT** be negative.
@@ -217,10 +258,11 @@ pub struct Orthographic {
   zfar: f32, // exclusiveMin: 0.0
   // The floating-point distance to the near clipping plane.
   znear: f32, // min: 0.0
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // A perspective camera containing properties to create a perspective projection matrix.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Perspective {
   // The floating-point aspect ratio of the field of view. 
   // When undefined, the aspect ratio of the rendering viewport **MUST** be used.
@@ -233,10 +275,11 @@ pub struct Perspective {
   zfar: Option<f32>, // exclusiveMin: 0.0
   // The floating-point distance to the near clipping plane.
   znear: f32, // exclusiveMin: 0.0
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // A camera's projection.  A node **MAY** reference a camera to apply a transform to place the camera in the scene.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Camera {
   // An orthographic camera containing properties to create an orthographic projection matrix. 
   // This property **MUST NOT** be defined when `perspective` is defined.
@@ -246,12 +289,14 @@ pub struct Camera {
   perspective: Option<Perspective>,
   // Specifies if the camera uses a perspective or orthographic projection.
   // Based on this, either the camera's `perspective` or `orthographic` property **MUST** be defined.
+  #[serde(rename = "type")]
   ty: String, // anyOf: perspective, orthographic, or some string
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // Image data used to create a texture. Image **MAY** be referenced by an URI (or IRI) or a buffer view index.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Image {
   // The URI (or IRI) of the image.  Relative paths are relative to the current glTF asset.  
   // Instead of referencing an external file, this field **MAY** contain a `data:`-URI. 
@@ -262,11 +307,12 @@ pub struct Image {
   // The index of the bufferView that contains the image. This field **MUST NOT** be defined when `uri` is defined.
   buffer_view: Option<i32>, // min: 0
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 
 // Reference to a texture.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct TextureInfo {
   // The index of the texture.
   index: i32, // min: 0
@@ -274,8 +320,8 @@ pub struct TextureInfo {
   // which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). 
   // A mesh primitive **MUST** have the corresponding texture coordinate attributes for the material to be applicable to it.
   tex_coord: Option<i32>, // min: 0, default: 0
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 pub enum MaterialAlphaMode {
   // The alpha value is ignored, and the rendered output is fully opaque.
@@ -289,6 +335,7 @@ pub enum MaterialAlphaMode {
   UNDEFINED
 }
 // A set of parameter values that are used to define the metallic-roughness material model from Physically-Based Rendering (PBR) methodology.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MaterialPbrMetallicRoughness {
   // The factors for the base color of the material. This value defines linear multipliers for the sampled texels of the base color texture.
   base_color_factor: Option<Vec<f32 /* min: 0.0, max: 1.0 */>>, // minItems: 4, maxItems: 4, default: [ 1.0, 1.0, 1.0, 1.0 ]
@@ -309,9 +356,10 @@ pub struct MaterialPbrMetallicRoughness {
   // If other channels are present (R or A), they **MUST** be ignored for metallic-roughness calculations. 
   // When undefined, the texture **MUST** be sampled as having `1.0` in G and B components.
   metallic_roughness_texture: Option<TextureInfo>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MaterialOcclusionTextureInfo {
   // The index of the texture.
   index: i32, // min: 0
@@ -323,9 +371,10 @@ pub struct MaterialOcclusionTextureInfo {
   // A value of `0.0` means no occlusion. A value of `1.0` means full occlusion. 
   // This value affects the final occlusion value as: `1.0 + strength * (<sampled occlusion texture value> - 1.0)`.
   strength: Option<f32>, // min: 0.0, max: 1.0, default: 1.0
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MaterialNormalTextureInfo {
   // The index of the texture.
   index: i32, // min: 0
@@ -337,10 +386,11 @@ pub struct MaterialNormalTextureInfo {
   // This value scales the normal vector in X and Y directions using the formula: 
   // `scaledNormal =  normalize((<sampled normal texture value> * 2.0 - 1.0) * vec3(<normal scale>, <normal scale>, 1.0))`.
   scale: Option<f32>, // default: 1.0
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // The material appearance of a primitive.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Material {
   // A set of parameter values that are used to define the metallic-roughness material model from Physically Based Rendering (PBR) methodology. 
   // When undefined, all the default values of `pbrMetallicRoughness` **MUST** apply.
@@ -375,8 +425,8 @@ pub struct Material {
   // The back-face **MUST** have its normals reversed before the lighting equation is evaluated.
   double_sided: Option<bool>, // default: false
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // Geometry to be rendered with the given material.
 pub enum MeshPrimitiveMode {
@@ -389,6 +439,7 @@ pub enum MeshPrimitiveMode {
   TRIANGLE_FAN = 6,
   UNDEFINED
 }
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MeshPrimitive {
   // A plain JSON object, where each key corresponds to a mesh attribute semantic 
   // and each value is the index of the accessor containing attribute's data.
@@ -400,15 +451,16 @@ pub struct MeshPrimitive {
   // The index of the material to apply to this primitive when rendering.
   material: Option<i32>, // min: 0
   // The topology type of primitives to render.
-  mode: Option<MeshPrimitiveMode>, // default: 4
+  mode: Option<i32>, // default: 4
   // A plain JSON object specifying attributes displacements in a morph target, 
   // where each key corresponds to one of the three supported attribute semantic (`POSITION`, `NORMAL`, or `TANGENT`) 
   // and each value is the index of the accessor containing the attribute displacements' data.
   targets: Option<Vec<(String, i32) /* minProperties: 1 */>>, // minItems: 1
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // A set of primitives to be rendered.  Its global transform is defined by a node that references it.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Mesh {
   // An array of primitives, each defining geometry to be rendered.
   primitives: Vec<MeshPrimitive>, // minItems: 1
@@ -416,8 +468,8 @@ pub struct Mesh {
   // The number of array elements **MUST** match the number of morph targets.
   weights: Option<Vec<f32>>, // minItems: 1
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // A node in the node hierarchy. 
 // When the node contains `skin`, all `mesh.primitives` **MUST** contain `JOINTS_0` and `WEIGHTS_0` attributes.
@@ -433,6 +485,7 @@ pub struct Mesh {
 //              { "required": [ "matrix", "scale" ] }
 //          ]
 //      }
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Node {
   // The index of the camera referenced by this node.
   camera: Option<Camera>,
@@ -457,8 +510,8 @@ pub struct Node {
   // When defined, `mesh` **MUST** also be defined.
   weights: Option<Vec<f32>>, // minItems: 1
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 pub enum SamplerFilter {
   NEAREST = 9728,
@@ -476,27 +529,30 @@ pub enum SamplerWrap {
   UNDEFINED
 }
 // Texture sampler properties for filtering and wrapping modes.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Sampler {
   // Magnification filter.
-  mag_filter: Option<SamplerFilter>, // NEAREST, LINEAR, or some integer
+  mag_filter: Option<i32>, // NEAREST, LINEAR, or some integer
   // Minification filter.
-  min_filter: Option<SamplerFilter>, // NEAREST, LINEAR, NEAREST_MIPMAP_NEAREST, LINEAR_MIPMAP_NEAREST, NEAREST_MIPMAP_LINEAR, LINEAR_MIPMAP_LINEAR, or some integer
+  min_filter: Option<i32>, // NEAREST, LINEAR, NEAREST_MIPMAP_NEAREST, LINEAR_MIPMAP_NEAREST, NEAREST_MIPMAP_LINEAR, LINEAR_MIPMAP_LINEAR, or some integer
   // S (U) wrapping mode. All valid values correspond to WebGL enums
-  wrap_s: Option<SamplerWrap>, // default: REPEAT
+  wrap_s: Option<i32>, // default: REPEAT
   // T (V) wrapping mode.
-  wrap_t: Option<SamplerWrap>, // default: REPEAT
+  wrap_t: Option<i32>, // default: REPEAT
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // The root nodes of a scene.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Scene {
   nodes: Option<Vec<i32 /* min: 0 */>>, // minItems: 1, uniqueItems
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // Joints and matrices defining a skin.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Skin {
   // The index of the accessor containing the floating-point 4x4 inverse-bind matrices. 
   // Its `accessor.count` property **MUST** be greater than or equal to the number of elements of the `joints` array. 
@@ -508,10 +564,11 @@ pub struct Skin {
   // Indices of skeleton, nodes used as joints in this skin.
   joints: Vec<i32 /* min: 0 */>, // minItems: 1, uniqueItems
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 // A texture and its sampler.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Texture {
   // The index of the sampler used by this texture. 
   // When undefined, a sampler with repeat wrapping and auto filtering **SHOULD** be used.
@@ -520,10 +577,11 @@ pub struct Texture {
   // When undefined, an extension or other mechanism **SHOULD** supply an alternate texture source, otherwise behavior is undefined.
   source: Option<i32>, // min: 0
   name: Option<String>,
-  extensions: Vec<Extension>,
-  extras: Vec<Extra>,
+  extensions: Option<Vec<Extension>>,
+  extras: Option<Vec<Extra>>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct GltfLoader {
   // Names of glTF extensions used in this asset.
   extensions_used: Option<Vec<Extension>>,
@@ -559,4 +617,259 @@ pub struct GltfLoader {
   skins: Option<Vec<Skin>>,
   // An array of textures.
   textures: Option<Vec<Texture>>
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct LoadTest {
+    // Names of glTF extensions used in this asset.
+  extensionsUsed: Option<Vec<String>>,
+  // Names of glTF extensions required to properly load this asset.
+  extensionsRequired: Option<Vec<String>>,
+  // An array of accessors.  An accessor is a typed view into a bufferView.
+  accessors: Option<Vec<Map<String, Value>>>,
+  // An array of keyframe animations.
+  animations: Option<Vec<Map<String, Value>>>,
+  // Metadata about the glTF asset.
+  asset: Map<String, Value>,
+  // An array of buffers.  A buffer points to binary geometry, animation, or skins.
+  buffers: Option<Vec<Buffer>>,
+  // An array of bufferViews.  A bufferView is a view into a buffer generally representing a subset of the buffer.
+  bufferViews: Option<Vec<Map<String, Value>>>,
+  // An array of cameras.  A camera defines a projection matrix.
+  cameras: Option<Vec<Map<String, Value>>>,
+  // An array of images.  An image defines data used to create a texture.
+  images: Option<Vec<Map<String, Value>>>,
+  // An array of materials.  A material defines the appearance of a primitive.
+  materials: Option<Vec<Map<String, Value>>>,
+  // An array of meshes.  A mesh is a set of primitives to be rendered.
+  meshes: Option<Vec<Map<String, Value>>>,
+  // An array of nodes.
+  nodes: Option<Vec<Map<String, Value>>>,
+  // An array of samplers.
+  samplers: Option<Vec<Map<String, Value>>>,
+  // The index of the default scene.  This property **MUST NOT** be defined, when `scenes` is undefined.
+  scene: Option<i32>, // min: 0
+  // An array of scenes.
+  scenes: Option<Vec<Map<String, Value>>>,
+  // An array of skins.  A skin is defined by joints and matrices.
+  skins: Option<Vec<Map<String, Value>>>,
+  // An array of textures.
+  textures: Option<Vec<Map<String, Value>>>
+}
+
+#[test]
+fn load_test() {
+  const PATHS: &[&str] = &[
+    "REPLACE_WITH_PATH\\Triangle\\glTF\\Triangle.gltf",
+    "REPLACE_WITH_PATH\\ABeautifulGame\\glTF\\ABeautifulGame.gltf",
+    "REPLACE_WITH_PATH\\AlphaBlendModeTest\\glTF\\AlphaBlendModeTest.gltf",
+    "REPLACE_WITH_PATH\\AnimatedColorsCube\\glTF\\AnimatedColorsCube.gltf",
+    "REPLACE_WITH_PATH\\AnimatedCube\\glTF\\AnimatedCube.gltf",
+    "REPLACE_WITH_PATH\\AnimatedMorphCube\\glTF\\AnimatedMorphCube.gltf",
+    "REPLACE_WITH_PATH\\AnimatedMorphCube\\glTF-Quantized\\AnimatedMorphCube.gltf",
+    "REPLACE_WITH_PATH\\AnimatedTriangle\\glTF\\AnimatedTriangle.gltf",
+    "REPLACE_WITH_PATH\\AnimatedPointerUVs\\glTF\\AnimatedPointerUVs.gltf",
+    "REPLACE_WITH_PATH\\AnisotropyBarnLamp\\glTF\\AnisotropyBarnLamp.gltf",
+    "REPLACE_WITH_PATH\\AnisotropyBarnLamp\\glTF-KTX-BasisU\\AnisotropyBarnLamp.gltf",
+    "REPLACE_WITH_PATH\\AnisotropyDiscTest\\glTF\\AnisotropyDiscTest.gltf",
+    "REPLACE_WITH_PATH\\AnisotropyRotationTest\\glTF\\AnisotropyRotationTest.gltf",
+    "REPLACE_WITH_PATH\\AnisotropyStrengthTest\\glTF\\AnisotropyStrengthTest.gltf",
+    "REPLACE_WITH_PATH\\AntiqueCamera\\glTF\\AntiqueCamera.gltf",
+    "REPLACE_WITH_PATH\\AttenuationTest\\glTF\\AttenuationTest.gltf",
+    "REPLACE_WITH_PATH\\Avocado\\glTF\\Avocado.gltf",
+    "REPLACE_WITH_PATH\\Avocado\\glTF-Draco\\Avocado.gltf",
+    "REPLACE_WITH_PATH\\Avocado\\glTF-Quantized\\Avocado.gltf",
+    "REPLACE_WITH_PATH\\BarramundiFish\\glTF\\BarramundiFish.gltf",
+    "REPLACE_WITH_PATH\\BarramundiFish\\glTF-Draco\\BarramundiFish.gltf",
+    "REPLACE_WITH_PATH\\BoomBox\\glTF\\BoomBox.gltf",
+    "REPLACE_WITH_PATH\\BoomBox\\glTF-Draco\\BoomBox.gltf",
+    "REPLACE_WITH_PATH\\BoomBoxWithAxes\\glTF\\BoomBoxWithAxes.gltf",
+    "REPLACE_WITH_PATH\\Box\\glTF\\Box.gltf",
+    "REPLACE_WITH_PATH\\Box\\glTF-Draco\\Box.gltf",
+    "REPLACE_WITH_PATH\\Box\\glTF-Embedded\\Box.gltf",
+    "REPLACE_WITH_PATH\\Box With Spaces\\glTF\\Box With Spaces.gltf",
+    "REPLACE_WITH_PATH\\BoxAnimated\\glTF\\BoxAnimated.gltf",
+    "REPLACE_WITH_PATH\\BoxAnimated\\glTF-Embedded\\BoxAnimated.gltf",
+    "REPLACE_WITH_PATH\\BoxInterleaved\\glTF\\BoxInterleaved.gltf",
+    "REPLACE_WITH_PATH\\BoxInterleaved\\glTF-Embedded\\BoxInterleaved.gltf",
+    "REPLACE_WITH_PATH\\BoxTextured\\glTF\\BoxTextured.gltf",
+    "REPLACE_WITH_PATH\\BoxTextured\\glTF=Embedded\\BoxTextured.gltf",
+    "REPLACE_WITH_PATH\\BoxTexturedNonPowerOfTwo\\glTF\\BoxTexturedNonPowerOfTwo.gltf",
+    "REPLACE_WITH_PATH\\BoxTexturedNonPowerOfTwo\\glTF-Embedded\\BoxTexturedNonPowerOfTwo.gltf",
+    "REPLACE_WITH_PATH\\BoxVertexColors\\glTF\\BoxVertexColors.gltf",
+    "REPLACE_WITH_PATH\\BoxVertexColors\\glTF-Embedded\\BoxVertexColors.gltf",
+    "REPLACE_WITH_PATH\\BrainStem\\glTF\\BrainStem.gltf",
+    "REPLACE_WITH_PATH\\BrainStem\\glTF-Draco\\BrainStem.gltf",
+    "REPLACE_WITH_PATH\\BrainStem\\glTF-Embedded\\BrainStem.gltf",
+    "REPLACE_WITH_PATH\\BrainStem\\glTF-Meshopt\\BrainStem.gltf",
+    "REPLACE_WITH_PATH\\BrainStem\\glTF-Meshopt-EXT\\BrainStem.gltf",
+    "REPLACE_WITH_PATH\\Cameras\\glTF\\Cameras.gltf",
+    "REPLACE_WITH_PATH\\Cameras\\glTF-Embedded\\Cameras.gltf",
+    "REPLACE_WITH_PATH\\CarConcept\\glTF\\CarConcept.gltf",
+    "REPLACE_WITH_PATH\\CarConcept\\glTF-JPG\\CarConcept.gltf",
+    "REPLACE_WITH_PATH\\CarConcept\\glTF-KTX-BasisU-Draco\\CarConcept.gltf",
+    "REPLACE_WITH_PATH\\CarConcept\\glTF-WEBP\\CarConcept.gltf",
+    "REPLACE_WITH_PATH\\CarbonFibre\\glTF\\CarbonFibre.gltf",
+    "REPLACE_WITH_PATH\\CesiumMan\\glTF\\CesiumMan.gltf",
+    "REPLACE_WITH_PATH\\CesiumMan\\glTF-Draco\\CesiumMan.gltf",
+    "REPLACE_WITH_PATH\\CesiumMan\\glTF-Embedded\\CesiumMan.gltf",
+    "REPLACE_WITH_PATH\\CesiumMilkTruck\\glTF\\CesiumMilkTruck.gltf",
+    "REPLACE_WITH_PATH\\CesiumMilkTruck\\glTF-Draco\\CesiumMilkTruck.gltf",
+    "REPLACE_WITH_PATH\\CesiumMilkTruck\\glTF-Embedded\\CesiumMilkTruck.gltf",
+    "REPLACE_WITH_PATH\\ChairDamaskPurplegold\\glTF\\ChairDamaskPurplegold.gltf",
+    "REPLACE_WITH_PATH\\ChronographWatch\\glTF\\ChronographWatch.gltf",
+    "REPLACE_WITH_PATH\\ChronographWatch\\glTF-KTX-BasisU\\ChronographWatch.gltf",
+    "REPLACE_WITH_PATH\\ChronographWatch\\glTF-WEBP\\ChronographWatch.gltf",
+    "REPLACE_WITH_PATH\\ClearCoatCarPaint\\glTF\\ClearCoatCarPaint.gltf",
+    "REPLACE_WITH_PATH\\ClearCoatTest\\glTF\\ClearCoatTest.gltf",
+    "REPLACE_WITH_PATH\\ClearcoatWicker\\glTF\\ClearcoatWicker.gltf",
+    "REPLACE_WITH_PATH\\CommercialRefrigerator\\glTF\\CommercialRefrigerator.gltf",
+    "REPLACE_WITH_PATH\\CompareAlphaCoverage\\glTF\\CompareAlphaCoverage.gltf",
+    "REPLACE_WITH_PATH\\CompareAmbientOcclusion\\glTF\\CompareAmbientOcclusion.gltf",
+    "REPLACE_WITH_PATH\\CompareAnisotropy\\glTF\\CompareAnisotropy.gltf",
+    "REPLACE_WITH_PATH\\CompareBaseColor\\glTF\\CompareBaseColor.gltf",
+    "REPLACE_WITH_PATH\\CompareClearcoat\\glTF\\CompareClearcoat.gltf",
+    "REPLACE_WITH_PATH\\CompareDispersion\\glTF\\CompareDispersion.gltf",
+    "REPLACE_WITH_PATH\\CompareEmissiveStrength\\glTF\\CompareEmissiveStrength.gltf",
+    "REPLACE_WITH_PATH\\CompareIor\\glTF\\CompareIor.gltf",
+    "REPLACE_WITH_PATH\\CompareIridescence\\glTF\\CompareIridescence.gltf",
+    "REPLACE_WITH_PATH\\CompareMetallic\\glTF\\CompareMetallic.gltf",
+    "REPLACE_WITH_PATH\\CompareNormal\\glTF\\CompareNormal.gltf",
+    "REPLACE_WITH_PATH\\CompareRoughness\\glTF\\CompareRoughness.gltf",
+    "REPLACE_WITH_PATH\\CompareSheen\\glTF\\CompareSheen.gltf",
+    "REPLACE_WITH_PATH\\CompareSpecular\\glTF\\CompareSpecular.gltf",
+    "REPLACE_WITH_PATH\\CompareTransmission\\glTF\\CompareTransmission.gltf",
+    "REPLACE_WITH_PATH\\CompareVolume\\glTF\\CompareVolume.gltf",
+    "REPLACE_WITH_PATH\\Corset\\glTF\\Corset.gltf",
+    "REPLACE_WITH_PATH\\Corset\\glTF-Draco\\Corset.gltf",
+    "REPLACE_WITH_PATH\\Cube\\glTF\\Cube.gltf",
+    "REPLACE_WITH_PATH\\CubeVisibility\\glTF\\CubeVisibility.gltf",
+    "REPLACE_WITH_PATH\\DamagedHelmet\\glTF\\DamagedHelmet.gltf",
+    "REPLACE_WITH_PATH\\DamagedHelmet\\glTF-Embedded\\DamagedHelmet.gltf",
+    "REPLACE_WITH_PATH\\DiffuseTransmissionPlant\\glTF\\DiffuseTransmissionPlant.gltf",
+    "REPLACE_WITH_PATH\\DiffuseTransmissionTeacup\\glTF\\DiffuseTransmissionTeacup.gltf",
+    "REPLACE_WITH_PATH\\DiffuseTransmissionTest\\glTF\\DiffuseTransmissionTest.gltf",
+    "REPLACE_WITH_PATH\\DirectionalLight\\glTF\\DirectionalLight.gltf",
+    "REPLACE_WITH_PATH\\DispersionTest\\glTF\\DispersionTest.gltf",
+    "REPLACE_WITH_PATH\\DragonAttenuation\\glTF\\DragonAttenuation.gltf",
+    "REPLACE_WITH_PATH\\DragonAttenuation\\glTF-Meshopt\\DragonAttenuation.gltf",
+    "REPLACE_WITH_PATH\\DragonAttenuation\\glTF-Meshopt-EXT\\DragonAttenuation.gltf",
+    "REPLACE_WITH_PATH\\DragonDispersion\\glTF\\DragonDispersion.gltf",
+    "REPLACE_WITH_PATH\\Duck\\glTF\\Duck.gltf",
+    "REPLACE_WITH_PATH\\Duck\\glTF-Draco\\Duck.gltf",
+    "REPLACE_WITH_PATH\\Duck\\glTF-Embedded\\Duck.gltf",
+    "REPLACE_WITH_PATH\\Duck\\glTF-Quantized\\Duck.gltf",
+    "REPLACE_WITH_PATH\\EmissiveStrengthTest\\glTF\\EmissiveStrengthTest.gltf",
+    "REPLACE_WITH_PATH\\EnvironmentTest\\glTF\\EnvironmentTest.gltf",
+    "REPLACE_WITH_PATH\\FlightHelmet\\glTF\\FlightHelmet.gltf",
+    "REPLACE_WITH_PATH\\Fox\\glTF\\Fox.gltf",
+    "REPLACE_WITH_PATH\\GlamVelvetSofa\\glTF\\GlamVelvetSofa.gltf",
+    "REPLACE_WITH_PATH\\GlassBrokenWindow\\glTF\\GlassBrokenWindow.gltf",
+    "REPLACE_WITH_PATH\\GlassHurricaneCandleHolder\\glTF\\GlassHurricaneCandleHolder.gltf",
+    "REPLACE_WITH_PATH\\GlassVaseFlowers\\glTF\\GlassVaseFlowers.gltf",
+    "REPLACE_WITH_PATH\\IORTestGrid\\glTF\\IORTestGrid.gltf",
+    "REPLACE_WITH_PATH\\InterpolationTest\\glTF\\InterpolationTest.gltf",
+    "REPLACE_WITH_PATH\\IridescenceAbalone\\glTF\\IridescenceAbalone.gltf",
+    "REPLACE_WITH_PATH\\IridescenceDielectricSpheres\\glTF\\IridescenceDielectricSpheres.gltf",
+    "REPLACE_WITH_PATH\\IridescenceLamp\\glTF\\IridescenceLamp.gltf",
+    "REPLACE_WITH_PATH\\IridescenceMetallicSpheres\\glTF\\IridescenceMetallicSpheres.gltf",
+    "REPLACE_WITH_PATH\\IridescenceSuzanne\\glTF\\IridescenceSuzanne.gltf",
+    "REPLACE_WITH_PATH\\IridescentDishWithOlives\\glTF\\IridescentDishWithOlives.gltf",
+    "REPLACE_WITH_PATH\\Lantern\\glTF\\Lantern.gltf",
+    "REPLACE_WITH_PATH\\Lantern\\glTF-Draco\\Lantern.gltf",
+    "REPLACE_WITH_PATH\\Lantern\\glTF-Quantized\\Lantern.gltf",
+    "REPLACE_WITH_PATH\\LightVisibility\\glTF\\LightVisibility.gltf",
+    "REPLACE_WITH_PATH\\LightsPunctualLamp\\glTF\\LightsPunctualLamp.gltf",
+    "REPLACE_WITH_PATH\\MandarinOrange\\glTF\\MandarinOrange.gltf",
+    "REPLACE_WITH_PATH\\MaterialsVariantsShoe\\glTF\\MaterialsVariantsShoe.gltf",
+    "REPLACE_WITH_PATH\\MeshPrimitiveModes\\glTF\\MeshPrimitiveModes.gltf",
+    "REPLACE_WITH_PATH\\MeshoptCubeTest\\glTF\\MeshoptCubeTest.gltf",
+    "REPLACE_WITH_PATH\\MetalRoughSpheres\\glTF\\MetalRoughSpheres.gltf",
+    "REPLACE_WITH_PATH\\MetalRoughSpheres\\glTF-Embedded\\MetalRoughSpheres.gltf",
+    "REPLACE_WITH_PATH\\MetalRoughSpheresNoTextures\\glTF\\MetalRoughSpheresNoTextures.gltf",
+    "REPLACE_WITH_PATH\\MorphPrimitivesTest\\glTF\\MorphPrimitivesTest.gltf",
+    "REPLACE_WITH_PATH\\MorphPrimitivesTest\\glTF-Draco\\MorphPrimitivesTest.gltf",
+    "REPLACE_WITH_PATH\\MorphStressTest\\glTF\\MorphStressTest.gltf",
+    "REPLACE_WITH_PATH\\MosquitoInAmber\\glTF\\MosquitoInAmber.gltf",
+    "REPLACE_WITH_PATH\\MultiUVTest\\glTF\\MultiUVTest.gltf",
+    "REPLACE_WITH_PATH\\MultiUVTest\\glTF-Embedded\\MultiUVTest.gltf",
+    "REPLACE_WITH_PATH\\MultipleScenes\\glTF\\MultipleScenes.gltf",
+    "REPLACE_WITH_PATH\\MultipleScenes\\glTF-Embedded\\MultipleScenes.gltf",
+    "REPLACE_WITH_PATH\\NegativeScaleTest\\glTF\\NegativeScaleTest.gltf",
+    "REPLACE_WITH_PATH\\NodePerformanceTest\\glTF\\NodePerformanceTest.gltf",
+    "REPLACE_WITH_PATH\\NormalTangentMirrorTest\\glTF\\NormalTangentMirrorTest.gltf",
+    "REPLACE_WITH_PATH\\NormalTangentTest\\glTF\\NormalTangentTest.gltf",
+    "REPLACE_WITH_PATH\\OrientationTest\\glTF\\OrientationTest.gltf",
+    "REPLACE_WITH_PATH\\OrientationTest\\glTF-Embedded\\OrientationTest.gltf",
+    "REPLACE_WITH_PATH\\PlaysetLightTest\\glTF\\PlaysetLightTest.gltf",
+    "REPLACE_WITH_PATH\\PointLightIntensityTest\\glTF\\PointLightIntensityTest.gltf",
+    "REPLACE_WITH_PATH\\PotOfCoals\\glTF\\PotOfCoals.gltf",
+    "REPLACE_WITH_PATH\\PotOfCoalsAnimationPointer\\glTF\\PotOfCoalsAnimationPointer.gltf",
+    "REPLACE_WITH_PATH\\PrimitiveModeNormalsTest\\glTF\\PrimitiveModeNormalsTest.gltf",
+    "REPLACE_WITH_PATH\\RecursiveSkeletons\\glTF\\RecursiveSkeletons.gltf",
+    "REPLACE_WITH_PATH\\RiggedFigure\\glTF\\RiggedFigure.gltf",
+    "REPLACE_WITH_PATH\\RiggedFigure\\glTF-Draco\\RiggedFigure.gltf",
+    "REPLACE_WITH_PATH\\RiggedFigure\\glTF-Embedded\\RiggedFigure.gltf",
+    "REPLACE_WITH_PATH\\RiggedSimple\\glTF\\RiggedSimple.gltf",
+    "REPLACE_WITH_PATH\\RiggedSimple\\glTF-Draco\\RiggedSimple.gltf",
+    "REPLACE_WITH_PATH\\RiggedSimple\\glTF-Embedded\\RiggedSimple.gltf",
+    "REPLACE_WITH_PATH\\ScatteringSkull\\glTF\\ScatteringSkull.gltf",
+    "REPLACE_WITH_PATH\\SciFiHelmet\\glTF\\SciFiHelmet.gltf",
+    "REPLACE_WITH_PATH\\SheenChair\\glTF\\SheenChair.gltf",
+    "REPLACE_WITH_PATH\\SheenCloth\\glTF\\SheenCloth.gltf",
+    "REPLACE_WITH_PATH\\SheenTestGrid\\glTF\\SheenTestGrid.gltf",
+    "REPLACE_WITH_PATH\\SheenWoodLeatherSofa\\glTF\\SheenWoodLeatherSofa.gltf",
+    "REPLACE_WITH_PATH\\SimpleInstancing\\glTF\\SimpleInstancing.gltf",
+    "REPLACE_WITH_PATH\\SimpleInstancing\\glTF-Embedded\\SimpleInstancing.gltf",
+    "REPLACE_WITH_PATH\\SimpleMaterial\\glTF\\SimpleMaterial.gltf",
+    "REPLACE_WITH_PATH\\SimpleMaterial\\glTF-Embedded\\SimpleMaterial.gltf",
+    "REPLACE_WITH_PATH\\SimpleMeshes\\glTF\\SimpleMeshes.gltf",
+    "REPLACE_WITH_PATH\\SimpleMeshes\\glTF-Embedded\\SimpleMeshes.gltf",
+    "REPLACE_WITH_PATH\\SimpleSkin\\glTF\\SimpleSkin.gltf",
+    "REPLACE_WITH_PATH\\SimpleSkin\\glTF-Embedded\\SimpleSkin.gltf",
+    "REPLACE_WITH_PATH\\SimpleSparseAccessor\\glTF\\SimpleSparseAccessor.gltf",
+    "REPLACE_WITH_PATH\\SimpleSparseAccessor\\glTF-Embedded\\SimpleSparseAccessor.gltf",
+    "REPLACE_WITH_PATH\\SimpleTexture\\glTF\\SimpleTexture.gltf",
+    "REPLACE_WITH_PATH\\SimpleTexture\\glTF-Embedded\\SimpleTexture.gltf",
+    "REPLACE_WITH_PATH\\SpecGlossVsMetalRough\\glTF\\SpecGlossVsMetalRough.gltf",
+    "REPLACE_WITH_PATH\\SpecularSilkPouf\\glTF\\SpecularSilkPouf.gltf",
+    "REPLACE_WITH_PATH\\SpecularTest\\glTF\\SpecularTest.gltf",
+    "REPLACE_WITH_PATH\\Sponza\\glTF\\Sponza.gltf",
+    "REPLACE_WITH_PATH\\StainedGlassLamp\\glTF\\StainedGlassLamp.gltf",
+    "REPLACE_WITH_PATH\\StainedGlassLamp\\glTF-JPG-PNG\\StainedGlassLamp.gltf",
+    "REPLACE_WITH_PATH\\StainedGlassLamp\\glTF-KTX-BasisU\\StainedGlassLamp.gltf",
+    "REPLACE_WITH_PATH\\SunglassesKhronos\\glTF\\SunglassesKhronos.gltf",
+    "REPLACE_WITH_PATH\\SunglassesKhronos\\glTF-Draco\\SunglassesKhronos.gltf",
+    "REPLACE_WITH_PATH\\Suzanne\\glTF\\Suzanne.gltf",
+    "REPLACE_WITH_PATH\\TextureCoordinateTest\\glTF\\TextureCoordinateTest.gltf",
+    "REPLACE_WITH_PATH\\TextureCoordinateTest\\glTF-Embedded\\TextureCoordinateTest.gltf",
+    "REPLACE_WITH_PATH\\TextureEncodingTest\\glTF\\TextureEncodingTest.gltf",
+    "REPLACE_WITH_PATH\\TextureLinearInterpolationTest\\glTF\\TextureLinearInterpolationTest.gltf",
+    "REPLACE_WITH_PATH\\TextureSettingsTest\\glTF\\TextureSettingsTest.gltf",
+    "REPLACE_WITH_PATH\\TextureSettingsTest\\glTF-Embedded\\TextureSettingsTest.gltf",
+    "REPLACE_WITH_PATH\\TextureTransformMultiTest\\glTF\\TextureTransformMultiTest.gltf",
+    "REPLACE_WITH_PATH\\TextureTransformTest\\glTF\\TextureTransformTest.gltf",
+    "REPLACE_WITH_PATH\\ToyCar\\glTF\\ToyCar.gltf",
+    "REPLACE_WITH_PATH\\TransmissionOrderTest\\glTF\\TransmissionOrderTest.gltf",
+    "REPLACE_WITH_PATH\\TransmissionRoughnessTest\\glTF\\TransmissionRoughnessTest.gltf",
+    "REPLACE_WITH_PATH\\TransmissionTest\\glTF\\TransmissionTest.gltf",
+    "REPLACE_WITH_PATH\\TransmissionThinwallTestGrid\\glTF\\TransmissionThinwallTestGrid.gltf",
+    "REPLACE_WITH_PATH\\Triangle\\glTF-Embedded\\Triangle.gltf",
+    "REPLACE_WITH_PATH\\TriangleWithoutIndices\\glTF\\TriangleWithoutIndices.gltf",
+    "REPLACE_WITH_PATH\\TriangleWithoutIndices\\glTF-Embedded\\TriangleWithoutIndices.gltf",
+    "REPLACE_WITH_PATH\\TwoSidedPlane\\glTF\\TwoSidedPlane.gltf",
+    "REPLACE_WITH_PATH\\USDShaderBallForGltf\\glTF\\USDShaderBallForGltf.gltf",
+    "REPLACE_WITH_PATH\\Unicode❤♻Test\\glTF\\Unicode❤♻Test.gltf",
+    "REPLACE_WITH_PATH\\UnlitTest\\glTF\\UnlitTest.gltf",
+    "REPLACE_WITH_PATH\\VertexColorTest\\glTF\\VertexColorTest.gltf",
+    "REPLACE_WITH_PATH\\VertexColorTest\\glTF-Embedded\\VertexColorTest.gltf",
+    "REPLACE_WITH_PATH\\VirtualCity\\glTF\\VirtualCity.gltf",
+    "REPLACE_WITH_PATH\\VirtualCity\\glTF-Draco\\VirtualCity.gltf",
+    "REPLACE_WITH_PATH\\VirtualCity\\glTF-Embedded\\VirtualCity.gltf",
+    "REPLACE_WITH_PATH\\WaterBottle\\glTF\\WaterBottle.gltf",
+    "REPLACE_WITH_PATH\\WaterBottle\\glTF-Draco\\WaterBottle.gltf",
+    "REPLACE_WITH_PATH\\XmpMetadataRoundedCube\\glTF\\XmpMetadataRoundedCube.gltf",
+  ];
+  let loaded: LoadTest = serde_json::from_str(&fs::read_to_string("REPLACE_WITH_PATH\\Triangle\\glTF\\Triangle.gltf").unwrap()).unwrap();
+  println!("{:?}", loaded);
 }
