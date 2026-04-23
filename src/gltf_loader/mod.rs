@@ -52,8 +52,8 @@ pub struct AccessorSparseIndices {
   // The indices data type.
   #[serde(rename = "componentType")]
   component_type: i32, // UNSIGNED_BYTE, UNSIGNED_SHORT, UNSIGNED_INT, or INT
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -65,8 +65,8 @@ pub struct AccessorSparseValues {
   // The offset relative to the start of the bufferView in bytes.
   #[serde(rename = "byteOffset")]
   byte_offset: Option<i32>, // min: 0, default: 0
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // Sparse storage of accessor values that deviate from their initialization value.
 #[derive(Serialize, Deserialize, Debug)]
@@ -78,8 +78,8 @@ pub struct AccessorSparse {
   indices: AccessorSparseIndices,
   // An object pointing to a buffer view containing the deviating accessor values.
   values: AccessorSparseValues,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // A typed view into a buffer view that contains raw binary data.
 #[derive(Serialize, Deserialize, Debug)]
@@ -124,8 +124,8 @@ pub struct Accessor {
   // Sparse storage of elements that deviate from their initialization value.
   sparse: Option<AccessorSparse>,
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // The descriptor of the animated property.
 #[derive(Serialize, Deserialize, Debug)]
@@ -137,8 +137,8 @@ pub struct AnimationChannelTarget {
   // For the "rotation" property, the values are a quaternion in the order (x, y, z, w), where w is the scalar. 
   // For the "scale" property, the values are the scaling factors along the X, Y, and Z axes.
   path: String, // "translation", "rotation", "scale", "weights", ""
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // An animation channel combines an animation sampler with a target property being animated.
 #[derive(Serialize, Deserialize, Debug)]
@@ -148,8 +148,8 @@ pub struct AnimationChannel {
   sampler: i32, // min: 0
   // The descriptor of the animated property.
   target: AnimationChannelTarget,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 pub enum InterpolationType {
   // The animated values are linearly interpolated between keyframes. 
@@ -175,8 +175,8 @@ pub struct AnimationSampler {
   input: i32, // min: 0
   interpolation: Option<String>, // anyOf: LINEAR, STEP, CUBICSPLINE, or some string
   output: i32, // min: 0
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // A keyframe animation.
 #[derive(Serialize, Deserialize, Debug)]
@@ -188,8 +188,8 @@ pub struct Animation {
   // An animation sampler combines timestamps with a sequence of output values and defines an interpolation algorithm.
   samplers: Vec<AnimationSampler>, // min_items: 1
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // Metadata about the glTF asset.
 #[derive(Serialize, Deserialize, Debug)]
@@ -204,8 +204,8 @@ pub struct Asset {
   // This property **MUST NOT** be greater than the asset version.
   #[serde(rename = "minVersion")]
   min_version: Option<String>, // pattern: ^[0-9]+\\.[0-9]+$
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // A buffer points to binary geometry, animation, or skins.
 #[derive(Serialize, Deserialize, Debug)]
@@ -217,8 +217,8 @@ pub struct Buffer {
   #[serde(rename = "byteLength")]
   byte_length: i32, // min: 1
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 pub enum BufferViewTarget {
   ARRAY_BUFFER = 34962,
@@ -244,8 +244,8 @@ pub struct BufferView {
   // The hint representing the intended GPU buffer type to use with this buffer view.
   target: Option<i32>,
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // An orthographic camera containing properties to create an orthographic projection matrix.
 #[derive(Serialize, Deserialize, Debug)]
@@ -261,8 +261,8 @@ pub struct Orthographic {
   zfar: f32, // exclusiveMin: 0.0
   // The floating-point distance to the near clipping plane.
   znear: f32, // min: 0.0
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // A perspective camera containing properties to create a perspective projection matrix.
 #[derive(Serialize, Deserialize, Debug)]
@@ -278,8 +278,8 @@ pub struct Perspective {
   zfar: Option<f32>, // exclusiveMin: 0.0
   // The floating-point distance to the near clipping plane.
   znear: f32, // exclusiveMin: 0.0
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // A camera's projection.  A node **MAY** reference a camera to apply a transform to place the camera in the scene.
 #[derive(Serialize, Deserialize, Debug)]
@@ -295,8 +295,8 @@ pub struct Camera {
   #[serde(rename = "type")]
   ty: String, // anyOf: perspective, orthographic, or some string
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // Image data used to create a texture. Image **MAY** be referenced by an URI (or IRI) or a buffer view index.
 #[derive(Serialize, Deserialize, Debug)]
@@ -310,8 +310,8 @@ pub struct Image {
   // The index of the bufferView that contains the image. This field **MUST NOT** be defined when `uri` is defined.
   buffer_view: Option<i32>, // min: 0
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 
 // Reference to a texture.
@@ -323,8 +323,8 @@ pub struct TextureInfo {
   // which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). 
   // A mesh primitive **MUST** have the corresponding texture coordinate attributes for the material to be applicable to it.
   tex_coord: Option<i32>, // min: 0, default: 0
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 pub enum MaterialAlphaMode {
   // The alpha value is ignored, and the rendered output is fully opaque.
@@ -359,8 +359,8 @@ pub struct MaterialPbrMetallicRoughness {
   // If other channels are present (R or A), they **MUST** be ignored for metallic-roughness calculations. 
   // When undefined, the texture **MUST** be sampled as having `1.0` in G and B components.
   metallic_roughness_texture: Option<TextureInfo>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MaterialOcclusionTextureInfo {
@@ -374,8 +374,8 @@ pub struct MaterialOcclusionTextureInfo {
   // A value of `0.0` means no occlusion. A value of `1.0` means full occlusion. 
   // This value affects the final occlusion value as: `1.0 + strength * (<sampled occlusion texture value> - 1.0)`.
   strength: Option<f32>, // min: 0.0, max: 1.0, default: 1.0
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MaterialNormalTextureInfo {
@@ -389,8 +389,8 @@ pub struct MaterialNormalTextureInfo {
   // This value scales the normal vector in X and Y directions using the formula: 
   // `scaledNormal =  normalize((<sampled normal texture value> * 2.0 - 1.0) * vec3(<normal scale>, <normal scale>, 1.0))`.
   scale: Option<f32>, // default: 1.0
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // The material appearance of a primitive.
 #[derive(Serialize, Deserialize, Debug)]
@@ -428,8 +428,8 @@ pub struct Material {
   // The back-face **MUST** have its normals reversed before the lighting equation is evaluated.
   double_sided: Option<bool>, // default: false
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // Geometry to be rendered with the given material.
 pub enum MeshPrimitiveMode {
@@ -459,8 +459,8 @@ pub struct MeshPrimitive {
   // where each key corresponds to one of the three supported attribute semantic (`POSITION`, `NORMAL`, or `TANGENT`) 
   // and each value is the index of the accessor containing the attribute displacements' data.
   targets: Option<Vec<(String, i32) /* minProperties: 1 */>>, // minItems: 1
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // A set of primitives to be rendered.  Its global transform is defined by a node that references it.
 #[derive(Serialize, Deserialize, Debug)]
@@ -471,8 +471,8 @@ pub struct Mesh {
   // The number of array elements **MUST** match the number of morph targets.
   weights: Option<Vec<f32>>, // minItems: 1
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // A node in the node hierarchy. 
 // When the node contains `skin`, all `mesh.primitives` **MUST** contain `JOINTS_0` and `WEIGHTS_0` attributes.
@@ -513,8 +513,8 @@ pub struct Node {
   // When defined, `mesh` **MUST** also be defined.
   weights: Option<Vec<f32>>, // minItems: 1
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 pub enum SamplerFilter {
   NEAREST = 9728,
@@ -543,16 +543,16 @@ pub struct Sampler {
   // T (V) wrapping mode.
   wrap_t: Option<i32>, // default: REPEAT
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // The root nodes of a scene.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Scene {
   nodes: Option<Vec<i32 /* min: 0 */>>, // minItems: 1, uniqueItems
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // Joints and matrices defining a skin.
 #[derive(Serialize, Deserialize, Debug)]
@@ -567,8 +567,8 @@ pub struct Skin {
   // Indices of skeleton, nodes used as joints in this skin.
   joints: Vec<i32 /* min: 0 */>, // minItems: 1, uniqueItems
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 // A texture and its sampler.
 #[derive(Serialize, Deserialize, Debug)]
@@ -580,16 +580,16 @@ pub struct Texture {
   // When undefined, an extension or other mechanism **SHOULD** supply an alternate texture source, otherwise behavior is undefined.
   source: Option<i32>, // min: 0
   name: Option<String>,
-  extensions: Option<Vec<Extension>>,
-  extras: Option<Vec<Extra>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GltfLoader {
   // Names of glTF extensions used in this asset.
-  extensions_used: Option<Vec<Extension>>,
+  extensions_used: Option<Vec<String>>,
   // Names of glTF extensions required to properly load this asset.
-  extensions_required: Option<Vec<Extension>>,
+  extensions_required: Option<Vec<String>>,
   // An array of accessors.  An accessor is a typed view into a bufferView.
   accessors: Option<Vec<Accessor>>,
   // An array of keyframe animations.
@@ -657,5 +657,7 @@ pub struct LoadTest {
   // An array of skins.  A skin is defined by joints and matrices.
   skins: Option<Vec<Map<String, Value>>>,
   // An array of textures.
-  textures: Option<Vec<Map<String, Value>>>
+  textures: Option<Vec<Map<String, Value>>>,
+  extensions: Option<Extension>,
+  extras: Option<Extra>,
 }

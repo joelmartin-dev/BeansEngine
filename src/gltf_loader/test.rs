@@ -221,6 +221,9 @@ fn load_test() {
     let p = path.join(p_str);
     let loaded: LoadTest = serde_json::from_str(&fs::read_to_string(p).unwrap()).unwrap();
     // println!("{:?}", loaded);
+    if (loaded.buffers.is_some()) {
+      println!("{:?}", loaded.buffers.unwrap());
+    }
     println!("{}", f);
   });
 }
