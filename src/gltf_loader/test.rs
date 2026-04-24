@@ -439,9 +439,9 @@ fn parse_test() {
     // if (loaded.buffers.is_some()) {
     //   println!("{:?}", loaded.buffers.unwrap());
     // }
-    if loaded.meshes.is_some() {
-      let mesh = &loaded.meshes.unwrap()[0];
-      println!("{:?}", mesh.primitives[0].mode);
+    if loaded.accessors.is_some() {
+      let accessor = &loaded.accessors.unwrap()[0];
+      println!("{:?}", accessor.ty);
     }
     // println!("{}", f);
   });

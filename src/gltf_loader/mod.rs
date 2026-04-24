@@ -1,3 +1,4 @@
+mod enums;
 mod methods;
 mod test;
 
@@ -5,7 +6,12 @@ use std::{collections::HashMap, fs};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, Map};
-use winit::event_loop::EventLoopClosed;
+use enums::{
+  AccessorType, ComponentType, InterpolationType, SamplerFilter, SamplerWrap, MaterialAlphaMode, MeshPrimitiveMode,
+  serialize_mesh_primitive_mode, deserialize_mesh_primitive_mode,
+  serialize_component_type, deserialize_component_type,
+  serialize_accessor_type, deserialize_accessor_type
+};
 
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -19,25 +25,7 @@ pub struct Extra {
   #[serde(flatten)]
   additional_properties: Map<String, Value>
 }
-pub enum ComponentType {
-  Byte = 5120, // integer
-  UnsignedByte = 5121, // integer
-  Short = 5122, // integer
-  UnsignedShort = 5123, // integer
-  UnsignedInt = 5125, // integer
-  Float = 5126, // integer
-  Undefined // integer, default
-}
-pub enum AccessorType {
-  Scalar,
-  Vec2,
-  Vec3,
-  Vec4,
-  Mat2,
-  Mat3,
-  Mat4,
-  Undefined
-}
+
 // An object pointing to a buffer view containing the indices of deviating accessor values. 
 // The number of indices is equal to `accessor.sparse.count`. Indices **MUST** strictly increase.
 #[derive(Serialize, Deserialize, Debug)]
@@ -51,8 +39,11 @@ pub struct AccessorSparseIndices {
   #[serde(rename = "byteOffset")]
   byte_offset: Option<i32>, // min: 0, default: 0
   // The indices data type.
-  #[serde(rename = "componentType")]
-  component_type: i32, // UNSIGNED_BYTE, UNSIGNED_SHORT, UNSIGNED_INT, or INT
+  #[serde(rename = "componentType",
+    serialize_with = "serialize_component_type",
+    deserialize_with = "deserialize_component_type",
+  )]
+  component_type: ComponentType, // UNSIGNED_BYTE, UNSIGNED_SHORT, UNSIGNED_INT, or INT
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
@@ -96,8 +87,12 @@ pub struct Accessor {
   byte_offset: Option<i32>, // min: 0, default: 0
   // The datatype of the accessor's components.
   // UNSIGNED_INT type **MUST NOT** be used for any accessor that is not referenced by `mesh.primitive.indices`.
-  #[serde(rename = "componentType")]
-  component_type: i32, // Can be any ComponentType
+  
+  #[serde(rename = "componentType",
+    serialize_with = "serialize_component_type",
+    deserialize_with = "deserialize_component_type",
+  )]
+  component_type: ComponentType, // Can be any ComponentType
   // Specifies whether integer data values are normalized (`true`) to [0, 1] (for unsigned types) 
   // or to [-1, 1] (for signed types) when they are accessed.
   // This property **MUST NOT** be set to `true` for accessors with `FLOAT` or `UNSIGNED_INT` component type.
@@ -106,8 +101,11 @@ pub struct Accessor {
   // not to be confused with the number of bytes or number of components.
   count: i32, // min: 1
   // Specifies if the accessor's elements are scalars, vectors, or matrices.
-  #[serde(rename = "type")]
-  ty: String, // anyOf: SCALAR, VEC2, VEC3, VEC4, MAT2, MAT3, MAT4, or some string
+  #[serde(rename = "type",
+    serialize_with = "serialize_accessor_type",
+    deserialize_with = "deserialize_accessor_type",
+  )]
+  ty: AccessorType, // anyOf: SCALAR, VEC2, VEC3, VEC4, MAT2, MAT3, MAT4, or some string
   // Maximum value of each component in this accessor.
   // Array elements **MUST** be treated as having the same data type as accessor's `componentType`. 
   // Both `min` and `max` arrays have the same length. 
@@ -151,21 +149,6 @@ pub struct AnimationChannel {
   target: AnimationChannelTarget,
   extensions: Option<Extension>,
   extras: Option<Extra>,
-}
-pub enum InterpolationType {
-  // The animated values are linearly interpolated between keyframes. 
-  // When targeting a rotation, spherical linear interpolation (slerp) **SHOULD** be used to interpolate quaternions. 
-  // The number of output elements **MUST** equal the number of input elements.
-  Linear,
-  // The animated values remain constant to the output of the first keyframe, until the next keyframe. 
-  // The number of output elements **MUST** equal the number of input elements.
-  Step,
-  // The animation's interpolation is computed using a cubic spline with specified tangents. 
-  // The number of output elements **MUST** equal three times the number of input elements. 
-  // For each input element, the output stores three elements, an in-tangent, a spline vertex, and an out-tangent. 
-  // There **MUST** be at least two keyframes when using this interpolation.
-  CubicSpline,
-  Undefined
 }
 // An animation sampler combines timestamps with a sequence of output values and defines an interpolation algorithm.
 #[derive(Serialize, Deserialize, Debug)]
@@ -220,11 +203,6 @@ pub struct Buffer {
   name: Option<String>,
   extensions: Option<Extension>,
   extras: Option<Extra>,
-}
-pub enum BufferViewTarget {
-  ARRAY_BUFFER = 34962,
-  ELEMENT_ARRAY_BUFFER = 34963,
-  UNDEFINED
 }
 // A view into a buffer generally representing a subset of the buffer.
 #[derive(Serialize, Deserialize, Debug)]
@@ -330,17 +308,6 @@ pub struct TextureInfo {
   tex_coord: Option<i32>, // min: 0, default: 0
   extensions: Option<Extension>,
   extras: Option<Extra>,
-}
-pub enum MaterialAlphaMode {
-  // The alpha value is ignored, and the rendered output is fully opaque.
-  Opaque,
-  // The rendered output is either fully opaque or fully transparent depending on the alpha value and the specified `alphaCutoff` value; 
-  // the exact appearance of the edges **MAY** be subject to implementation-specific techniques such as "Alpha-to-Coverage".
-  Mask,
-  // The alpha value is used to composite the source and destination areas. 
-  // The rendered output is combined with the background using the normal painting operation (i.e. the Porter and Duff over operator).
-  Blend,
-  Undefined
 }
 // A set of parameter values that are used to define the metallic-roughness material model from Physically-Based Rendering (PBR) methodology.
 #[derive(Serialize, Deserialize, Debug)]
@@ -451,66 +418,6 @@ pub struct Material {
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
-// Geometry to be rendered with the given material.
-#[derive(Debug)]
-pub enum MeshPrimitiveMode {
-  Points = 0,
-  Lines = 1,
-  LineLoop = 2,
-  LineStrip = 3,
-  Triangles = 4,
-  TriangleStrip = 5,
-  TriangleFan = 6,
-  Undefined
-}
-impl MeshPrimitiveMode {
-  fn from_i32(val: i32) -> Self {
-    match val {
-      0 => MeshPrimitiveMode::Points,
-      1 => MeshPrimitiveMode::Lines,
-      2 => MeshPrimitiveMode::LineLoop,
-      3 => MeshPrimitiveMode::LineStrip,
-      4 => MeshPrimitiveMode::Triangles,
-      5 => MeshPrimitiveMode::TriangleStrip,
-      6 => MeshPrimitiveMode::TriangleFan,
-      _ => MeshPrimitiveMode::Undefined
-    }
-  }
-
-
-  fn to_i32(&self) -> i32 {
-    match self {
-      MeshPrimitiveMode::Points => 0,
-      MeshPrimitiveMode::Lines => 1,
-      MeshPrimitiveMode::LineLoop => 2,
-      MeshPrimitiveMode::LineStrip => 3,
-      MeshPrimitiveMode::Triangles => 4,
-      MeshPrimitiveMode::TriangleStrip => 5,
-      MeshPrimitiveMode::TriangleFan => 6,
-      _ => 7
-    }
-  }
-}
-fn deserialize_mesh_primitive_mode<'de, D>(deserializer: D) -> Result<Option<MeshPrimitiveMode>, D::Error>
-where
-  D: Deserializer<'de>,
-  {
-    let val = Option::<i32>::deserialize(deserializer)?;
-    Ok(val.map(MeshPrimitiveMode::from_i32))
-  }
-
-fn serialize_mesh_primitive_mode<S>(mode: &Option<MeshPrimitiveMode>, serializer: S) -> Result<S::Ok, S::Error>
-where
-  S: Serializer,
-  {
-    match mode {
-      Some(val) => {
-        serializer.serialize_i32(val.to_i32())
-      },
-      _ => serializer.serialize_none()
-    }
-
-  }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MeshPrimitive {
   // A plain JSON object, where each key corresponds to a mesh attribute semantic 
@@ -591,21 +498,6 @@ pub struct Node {
   name: Option<String>,
   extensions: Option<Extension>,
   extras: Option<Extra>,
-}
-pub enum SamplerFilter {
-  Nearest = 9728,
-  Linear = 9729,
-  NearestMipmapNearest = 9984,
-  LinearMipmapNearest = 9985,
-  NearestMipmapLinear = 9986,
-  LinearMipmapLinear = 9987,
-  Undefined
-}
-pub enum SamplerWrap {
-  ClampToEdge = 33071,
-  MirroredRepeat = 33648,
-  Repeat = 10497,
-  Undefined
 }
 // Texture sampler properties for filtering and wrapping modes.
 #[derive(Serialize, Deserialize, Debug)]
