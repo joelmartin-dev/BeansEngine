@@ -1,41 +1,42 @@
 mod methods;
 mod test;
 
-use std::{fs};
+use std::{collections::HashMap, fs};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, Map};
+use winit::event_loop::EventLoopClosed;
 
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Extension {
   #[serde(flatten)]
-  additionalProperties: Map<String, Value>
+  additional_properties: Map<String, Value>
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Extra {
   #[serde(flatten)]
-  additionalProperties: Map<String, Value>
+  additional_properties: Map<String, Value>
 }
 pub enum ComponentType {
-  BYTE = 5120, // integer
-  UNSIGNED_BYTE = 5121, // integer
-  SHORT = 5122, // integer
-  UNSIGNED_SHORT = 5123, // integer
-  UNSIGNED_INT = 5125, // integer
-  FLOAT = 5126, // integer
-  UNDEFINED // integer, default
+  Byte = 5120, // integer
+  UnsignedByte = 5121, // integer
+  Short = 5122, // integer
+  UnsignedShort = 5123, // integer
+  UnsignedInt = 5125, // integer
+  Float = 5126, // integer
+  Undefined // integer, default
 }
 pub enum AccessorType {
-  SCALAR,
-  VEC2,
-  VEC3,
-  VEC4,
-  MAT2,
-  MAT3,
-  MAT4,
-  UNDEFINED
+  Scalar,
+  Vec2,
+  Vec3,
+  Vec4,
+  Mat2,
+  Mat3,
+  Mat4,
+  Undefined
 }
 // An object pointing to a buffer view containing the indices of deviating accessor values. 
 // The number of indices is equal to `accessor.sparse.count`. Indices **MUST** strictly increase.
@@ -155,16 +156,16 @@ pub enum InterpolationType {
   // The animated values are linearly interpolated between keyframes. 
   // When targeting a rotation, spherical linear interpolation (slerp) **SHOULD** be used to interpolate quaternions. 
   // The number of output elements **MUST** equal the number of input elements.
-  LINEAR,
+  Linear,
   // The animated values remain constant to the output of the first keyframe, until the next keyframe. 
   // The number of output elements **MUST** equal the number of input elements.
-  STEP,
+  Step,
   // The animation's interpolation is computed using a cubic spline with specified tangents. 
   // The number of output elements **MUST** equal three times the number of input elements. 
   // For each input element, the output stores three elements, an in-tangent, a spline vertex, and an out-tangent. 
   // There **MUST** be at least two keyframes when using this interpolation.
-  CUBICSPLINE,
-  UNDEFINED
+  CubicSpline,
+  Undefined
 }
 // An animation sampler combines timestamps with a sequence of output values and defines an interpolation algorithm.
 #[derive(Serialize, Deserialize, Debug)]
@@ -269,6 +270,7 @@ pub struct Orthographic {
 pub struct Perspective {
   // The floating-point aspect ratio of the field of view. 
   // When undefined, the aspect ratio of the rendering viewport **MUST** be used.
+  #[serde(rename = "aspectRatio")]
   aspect_ratio: Option<f32>, // exclusiveMin: 0.0
   // The floating-point vertical field of view in radians. This value **SHOULD** be less than π.
   yfov: f32, // exclusiveMin: 0.0
@@ -306,8 +308,10 @@ pub struct Image {
   // This field **MUST NOT** be defined when `bufferView` is defined.
   uri: Option<String>, // format: iri-reference, gltf_uriType: image
   // The image's media type. This field **MUST** be defined when `bufferView` is defined.
+  #[serde(rename = "mimeType")]
   mime_type: Option<String>, // anyOf: image/jpeg, image/png, or some string
   // The index of the bufferView that contains the image. This field **MUST NOT** be defined when `uri` is defined.
+  #[serde(rename = "bufferView")]
   buffer_view: Option<i32>, // min: 0
   name: Option<String>,
   extensions: Option<Extension>,
@@ -322,42 +326,48 @@ pub struct TextureInfo {
   // This integer value is used to construct a string in the format `TEXCOORD_<set index>` 
   // which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). 
   // A mesh primitive **MUST** have the corresponding texture coordinate attributes for the material to be applicable to it.
+  #[serde(rename = "texCoord")]
   tex_coord: Option<i32>, // min: 0, default: 0
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
 pub enum MaterialAlphaMode {
   // The alpha value is ignored, and the rendered output is fully opaque.
-  OPAQUE,
+  Opaque,
   // The rendered output is either fully opaque or fully transparent depending on the alpha value and the specified `alphaCutoff` value; 
   // the exact appearance of the edges **MAY** be subject to implementation-specific techniques such as "Alpha-to-Coverage".
-  MASK,
+  Mask,
   // The alpha value is used to composite the source and destination areas. 
   // The rendered output is combined with the background using the normal painting operation (i.e. the Porter and Duff over operator).
-  BLEND,
-  UNDEFINED
+  Blend,
+  Undefined
 }
 // A set of parameter values that are used to define the metallic-roughness material model from Physically-Based Rendering (PBR) methodology.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MaterialPbrMetallicRoughness {
   // The factors for the base color of the material. This value defines linear multipliers for the sampled texels of the base color texture.
+  #[serde(rename = "baseColorFactor")]
   base_color_factor: Option<Vec<f32 /* min: 0.0, max: 1.0 */>>, // minItems: 4, maxItems: 4, default: [ 1.0, 1.0, 1.0, 1.0 ]
   // The base color texture. The first three components (RGB) **MUST** be encoded with the sRGB transfer function. 
   // They specify the base color of the material. 
   // If the fourth component (A) is present, it represents the linear alpha coverage of the material. 
   // Otherwise, the alpha coverage is equal to `1.0`. The `material.alphaMode` property specifies how alpha is interpreted. 
   // The stored texels **MUST NOT** be premultiplied. When undefined, the texture **MUST** be sampled as having `1.0` in all components.
+  #[serde(rename = "baseColorTexture")]
   base_color_texture: Option<TextureInfo>,
   // The factor for the metalness of the material. 
   // This value defines a linear multiplier for the sampled metalness values of the metallic-roughness texture.
+  #[serde(rename = "metallicFactor")]
   metallic_factor: Option<f32>, // min: 0.0, max: 1.0, default: 1.0
   // The factor for the roughness of the material. 
   // This value defines a linear multiplier for the sampled roughness values of the metallic-roughness texture.
+  #[serde(rename = "roughnessFactor")]
   roughness_factor: Option<f32>, // min: 0.0, max: 1.0, default: 1.0
   // The metallic-roughness texture. The metalness values are sampled from the B channel. 
   // The roughness values are sampled from the G channel. These values **MUST** be encoded with a linear transfer function. 
   // If other channels are present (R or A), they **MUST** be ignored for metallic-roughness calculations. 
   // When undefined, the texture **MUST** be sampled as having `1.0` in G and B components.
+  #[serde(rename = "metallicRoughnessTexture")]
   metallic_roughness_texture: Option<TextureInfo>,
   extensions: Option<Extension>,
   extras: Option<Extra>,
@@ -369,6 +379,7 @@ pub struct MaterialOcclusionTextureInfo {
   // This integer value is used to construct a string in the format `TEXCOORD_<set index>` 
   // which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). 
   // A mesh primitive **MUST** have the corresponding texture coordinate attributes for the material to be applicable to it.
+  #[serde(rename = "texCoord")]
   tex_coord: Option<i32>, // min: 0, default: 0
   // A scalar parameter controlling the amount of occlusion applied. 
   // A value of `0.0` means no occlusion. A value of `1.0` means full occlusion. 
@@ -384,6 +395,7 @@ pub struct MaterialNormalTextureInfo {
   // This integer value is used to construct a string in the format `TEXCOORD_<set index>` 
   // which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). 
   // A mesh primitive **MUST** have the corresponding texture coordinate attributes for the material to be applicable to it.
+  #[serde(rename = "texCoord")]
   tex_coord: Option<i32>, // min: 0, default: 0
   // The scalar parameter applied to each normal vector of the texture. 
   // This value scales the normal vector in X and Y directions using the formula: 
@@ -397,56 +409,114 @@ pub struct MaterialNormalTextureInfo {
 pub struct Material {
   // A set of parameter values that are used to define the metallic-roughness material model from Physically Based Rendering (PBR) methodology. 
   // When undefined, all the default values of `pbrMetallicRoughness` **MUST** apply.
+  #[serde(rename = "pbrMetallicRoughness")]
   pbr_metallic_roughness: Option<MaterialPbrMetallicRoughness>,
   // The tangent space normal texture. The texture encodes RGB components with linear transfer function. 
   // Each texel represents the XYZ components of a normal vector in tangent space. 
   // The normal vectors use the convention +X is right and +Y is up. +Z points toward the viewer. 
   // If a fourth component (A) is present, it **MUST** be ignored. When undefined, the material does not have a tangent space normal texture.
+  #[serde(rename = "normalTexture")]
   normal_texture: Option<MaterialNormalTextureInfo>,
   // The occlusion texture. The occlusion values are linearly sampled from the R channel. 
   // Higher values indicate areas that receive full indirect lighting and lower values indicate no indirect lighting. 
   // If other channels are present (GBA), they **MUST** be ignored for occlusion calculations. 
   // When undefined, the material does not have an occlusion texture.
+  #[serde(rename = "occlusionTexture")]
   occlusion_texture: Option<MaterialOcclusionTextureInfo>,
   // The emissive texture. It controls the color and intensity of the light being emitted by the material. 
   // This texture contains RGB components encoded with the sRGB transfer function. 
   // If a fourth component (A) is present, it **MUST** be ignored. 
   // When undefined, the texture **MUST** be sampled as having `1.0` in RGB components.
+  #[serde(rename = "emissiveTexture")]
   emissive_texture: Option<TextureInfo>,
   // The factors for the emissive color of the material. 
   // This value defines linear multipliers for the sampled texels of the emissive texture.
+  #[serde(rename = "emissiveFactor")]
   emissive_factor: Option<Vec<f32 /* min: 0.0, max: 1.0 */>>, // minItems: 3, maxItems: 3, default: [ 0.0, 0.0, 0.0 ]
   // The material's alpha rendering mode enumeration specifying the interpretation of the alpha value of the base color.
+  #[serde(rename = "alphaMode")]
   alpha_mode: Option<String>, // OPAQUE, MASK, BLEND, or some string. default: OPAQUE
   // Specifies the cutoff threshold when in `MASK` alpha mode. 
   // If the alpha value is greater than or equal to this value then it is rendered as fully opaque, otherwise, it is rendered as fully transparent. 
   // A value greater than `1.0` will render the entire material as fully transparent. 
   // This value **MUST** be ignored for other alpha modes. When `alphaMode` is not defined, this value **MUST NOT** be defined.
+  #[serde(rename = "alphaCutoff")]
   alpha_cutoff: Option<f32>, // min: 0.0, default: 0.5
   // Specifies whether the material is double sided. When this value is false, back-face culling is enabled. 
   // When this value is true, back-face culling is disabled and double-sided lighting is enabled. 
   // The back-face **MUST** have its normals reversed before the lighting equation is evaluated.
+  #[serde(rename = "doubleSided")]
   double_sided: Option<bool>, // default: false
   name: Option<String>,
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
 // Geometry to be rendered with the given material.
+#[derive(Debug)]
 pub enum MeshPrimitiveMode {
-  POINTS = 0,
-  LINES = 1,
-  LINE_LOOP = 2,
-  LINE_STRIP = 3,
-  TRIANGLES = 4,
-  TRIANGLE_STRIP = 5,
-  TRIANGLE_FAN = 6,
-  UNDEFINED
+  Points = 0,
+  Lines = 1,
+  LineLoop = 2,
+  LineStrip = 3,
+  Triangles = 4,
+  TriangleStrip = 5,
+  TriangleFan = 6,
+  Undefined
 }
+impl MeshPrimitiveMode {
+  fn from_i32(val: i32) -> Self {
+    match val {
+      0 => MeshPrimitiveMode::Points,
+      1 => MeshPrimitiveMode::Lines,
+      2 => MeshPrimitiveMode::LineLoop,
+      3 => MeshPrimitiveMode::LineStrip,
+      4 => MeshPrimitiveMode::Triangles,
+      5 => MeshPrimitiveMode::TriangleStrip,
+      6 => MeshPrimitiveMode::TriangleFan,
+      _ => MeshPrimitiveMode::Undefined
+    }
+  }
+
+
+  fn to_i32(&self) -> i32 {
+    match self {
+      MeshPrimitiveMode::Points => 0,
+      MeshPrimitiveMode::Lines => 1,
+      MeshPrimitiveMode::LineLoop => 2,
+      MeshPrimitiveMode::LineStrip => 3,
+      MeshPrimitiveMode::Triangles => 4,
+      MeshPrimitiveMode::TriangleStrip => 5,
+      MeshPrimitiveMode::TriangleFan => 6,
+      _ => 7
+    }
+  }
+}
+fn deserialize_mesh_primitive_mode<'de, D>(deserializer: D) -> Result<Option<MeshPrimitiveMode>, D::Error>
+where
+  D: Deserializer<'de>,
+  {
+    let val = Option::<i32>::deserialize(deserializer)?;
+    Ok(val.map(MeshPrimitiveMode::from_i32))
+  }
+
+fn serialize_mesh_primitive_mode<S>(mode: &Option<MeshPrimitiveMode>, serializer: S) -> Result<S::Ok, S::Error>
+where
+  S: Serializer,
+  {
+    match mode {
+      Some(val) => {
+        serializer.serialize_i32(val.to_i32())
+      },
+      _ => serializer.serialize_none()
+    }
+
+  }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MeshPrimitive {
   // A plain JSON object, where each key corresponds to a mesh attribute semantic 
   // and each value is the index of the accessor containing attribute's data.
-  attributes: Vec<(String, i32)>, // minProperties: 1, REVISIT
+  attributes: HashMap<String, i32>,
+  // attributes: MeshPrimitiveAttribute, // minProperties: 1, REVISIT
   // The index of the accessor that contains the vertex indices.
   // When this is undefined, the primitive defines non-indexed geometry.
   // When defined, the accessor **MUST** have `SCALAR` type and an unsigned integer component type.
@@ -454,11 +524,17 @@ pub struct MeshPrimitive {
   // The index of the material to apply to this primitive when rendering.
   material: Option<i32>, // min: 0
   // The topology type of primitives to render.
-  mode: Option<i32>, // default: 4
+  #[serde(
+    serialize_with = "serialize_mesh_primitive_mode",
+    skip_serializing_if = "Option::is_none",
+    deserialize_with = "deserialize_mesh_primitive_mode",
+    default
+  )]
+  mode: Option<MeshPrimitiveMode>, // default: 4
   // A plain JSON object specifying attributes displacements in a morph target, 
   // where each key corresponds to one of the three supported attribute semantic (`POSITION`, `NORMAL`, or `TANGENT`) 
   // and each value is the index of the accessor containing the attribute displacements' data.
-  targets: Option<Vec<(String, i32) /* minProperties: 1 */>>, // minItems: 1
+  targets: Option<Vec<HashMap<String, i32>>>, // minItems: 1
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
@@ -491,7 +567,7 @@ pub struct Mesh {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Node {
   // The index of the camera referenced by this node.
-  camera: Option<Camera>,
+  camera: Option<i32>, // min: 0
   // The indices of this node's children.
   children: Option<Vec<i32 /* min: 0 */>>, // minItems: 1, uniqueItems
   // The index of the skin referenced by this node. 
@@ -517,30 +593,34 @@ pub struct Node {
   extras: Option<Extra>,
 }
 pub enum SamplerFilter {
-  NEAREST = 9728,
-  LINEAR = 9729,
-  NEAREST_MIPMAP_NEAREST = 9984,
-  LINEAR_MIPMAP_NEAREST = 9985,
-  NEAREST_MIPMAP_LINEAR = 9986,
-  LINEAR_MIPMAP_LINEAR = 9987,
-  UNDEFINED
+  Nearest = 9728,
+  Linear = 9729,
+  NearestMipmapNearest = 9984,
+  LinearMipmapNearest = 9985,
+  NearestMipmapLinear = 9986,
+  LinearMipmapLinear = 9987,
+  Undefined
 }
 pub enum SamplerWrap {
-  CLAMP_TO_EDGE = 33071,
-  MIRRORED_REPEAT = 33648,
-  REPEAT = 10497,
-  UNDEFINED
+  ClampToEdge = 33071,
+  MirroredRepeat = 33648,
+  Repeat = 10497,
+  Undefined
 }
 // Texture sampler properties for filtering and wrapping modes.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Sampler {
   // Magnification filter.
+  #[serde(rename = "magFilter")]
   mag_filter: Option<i32>, // NEAREST, LINEAR, or some integer
   // Minification filter.
+  #[serde(rename = "minFilter")]
   min_filter: Option<i32>, // NEAREST, LINEAR, NEAREST_MIPMAP_NEAREST, LINEAR_MIPMAP_NEAREST, NEAREST_MIPMAP_LINEAR, LINEAR_MIPMAP_LINEAR, or some integer
   // S (U) wrapping mode. All valid values correspond to WebGL enums
+  #[serde(rename = "wrapS")]
   wrap_s: Option<i32>, // default: REPEAT
   // T (V) wrapping mode.
+  #[serde(rename = "wrapT")]
   wrap_t: Option<i32>, // default: REPEAT
   name: Option<String>,
   extensions: Option<Extension>,
@@ -560,6 +640,7 @@ pub struct Skin {
   // The index of the accessor containing the floating-point 4x4 inverse-bind matrices. 
   // Its `accessor.count` property **MUST** be greater than or equal to the number of elements of the `joints` array. 
   // When undefined, each matrix is a 4x4 identity matrix.
+  #[serde(rename = "inverseBindMatrices")]
   inverse_bind_matrices: Option<i32>, // min: 0
   // The index of the node used as a skeleton root. 
   // The node **MUST** be the closest common root of the joints hierarchy or a direct or indirect parent node of the closest common root.
@@ -587,8 +668,10 @@ pub struct Texture {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GltfLoader {
   // Names of glTF extensions used in this asset.
+  #[serde(rename = "extensionsUsed")]
   extensions_used: Option<Vec<String>>,
   // Names of glTF extensions required to properly load this asset.
+  #[serde(rename = "extensionsRequired")]
   extensions_required: Option<Vec<String>>,
   // An array of accessors.  An accessor is a typed view into a bufferView.
   accessors: Option<Vec<Accessor>>,
@@ -599,6 +682,7 @@ pub struct GltfLoader {
   // An array of buffers.  A buffer points to binary geometry, animation, or skins.
   buffers: Option<Vec<Buffer>>,
   // An array of bufferViews.  A bufferView is a view into a buffer generally representing a subset of the buffer.
+  #[serde(rename = "bufferViews")]
   buffer_views: Option<Vec<BufferView>>,
   // An array of cameras.  A camera defines a projection matrix.
   cameras: Option<Vec<Camera>>,
@@ -619,45 +703,7 @@ pub struct GltfLoader {
   // An array of skins.  A skin is defined by joints and matrices.
   skins: Option<Vec<Skin>>,
   // An array of textures.
-  textures: Option<Vec<Texture>>
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct LoadTest {
-    // Names of glTF extensions used in this asset.
-  extensionsUsed: Option<Vec<String>>,
-  // Names of glTF extensions required to properly load this asset.
-  extensionsRequired: Option<Vec<String>>,
-  // An array of accessors.  An accessor is a typed view into a bufferView.
-  accessors: Option<Vec<Map<String, Value>>>,
-  // An array of keyframe animations.
-  animations: Option<Vec<Map<String, Value>>>,
-  // Metadata about the glTF asset.
-  asset: Map<String, Value>,
-  // An array of buffers.  A buffer points to binary geometry, animation, or skins.
-  buffers: Option<Vec<Buffer>>,
-  // An array of bufferViews.  A bufferView is a view into a buffer generally representing a subset of the buffer.
-  bufferViews: Option<Vec<Map<String, Value>>>,
-  // An array of cameras.  A camera defines a projection matrix.
-  cameras: Option<Vec<Map<String, Value>>>,
-  // An array of images.  An image defines data used to create a texture.
-  images: Option<Vec<Map<String, Value>>>,
-  // An array of materials.  A material defines the appearance of a primitive.
-  materials: Option<Vec<Map<String, Value>>>,
-  // An array of meshes.  A mesh is a set of primitives to be rendered.
-  meshes: Option<Vec<Map<String, Value>>>,
-  // An array of nodes.
-  nodes: Option<Vec<Map<String, Value>>>,
-  // An array of samplers.
-  samplers: Option<Vec<Map<String, Value>>>,
-  // The index of the default scene.  This property **MUST NOT** be defined, when `scenes` is undefined.
-  scene: Option<i32>, // min: 0
-  // An array of scenes.
-  scenes: Option<Vec<Map<String, Value>>>,
-  // An array of skins.  A skin is defined by joints and matrices.
-  skins: Option<Vec<Map<String, Value>>>,
-  // An array of textures.
-  textures: Option<Vec<Map<String, Value>>>,
+  textures: Option<Vec<Texture>>,
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
