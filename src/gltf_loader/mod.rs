@@ -7,12 +7,19 @@ use std::{collections::HashMap, fs};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, Map};
 use enums::{
-  AccessorType, ComponentType, InterpolationType, SamplerFilter, SamplerWrap, MaterialAlphaMode, MeshPrimitiveMode,
-  serialize_mesh_primitive_mode, deserialize_mesh_primitive_mode,
-  serialize_component_type, deserialize_component_type,
-  serialize_accessor_type, deserialize_accessor_type
+  AccessorType, ComponentType, AnimationChannelTargetPath, AnimationSamplerInterpolationType, 
+  SamplerFilter, SamplerWrap, MaterialAlphaMode, MeshPrimitiveMode
+};
+use methods::{
+  default_base_color_factor, default_emissive_factor, default_mesh_primitive_mode, 
+  default_f32_1, default_f32_half, default_matrix,
+  default_rotation, default_scale, default_translation,
+  serialize_to_i32, serialize_option_to_i32, serialize_to_str, serialize_option_to_str,
+  deserialize_from_i32_to_enum, deserialize_from_option_i32_to_enum,
+  deserialize_from_string_to_enum, deserialize_from_option_string_to_enum,
 };
 
+use crate::gltf_loader::enums::{BufferViewTarget, CameraType, ImageMimeType};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Extension {
@@ -36,14 +43,14 @@ pub struct AccessorSparseIndices {
   #[serde(rename = "bufferView")]
   buffer_view: i32, // min: 0
   // The offset relative to the start of the buffer view in bytes.
-  #[serde(rename = "byteOffset")]
-  byte_offset: Option<i32>, // min: 0, default: 0
+  #[serde(rename = "byteOffset", default)]
+  byte_offset: i32, // min: 0, default: 0
   // The indices data type.
   #[serde(rename = "componentType",
-    serialize_with = "serialize_component_type",
-    deserialize_with = "deserialize_component_type",
+    serialize_with = "serialize_to_i32",
+    deserialize_with = "deserialize_from_i32_to_enum",
   )]
-  component_type: ComponentType, // UNSIGNED_BYTE, UNSIGNED_SHORT, UNSIGNED_INT, or INT
+  component_type: ComponentType, // UNSIGNED_BYTE, UNSIGNED_SHORT, or UNSIGNED_INT
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
@@ -55,8 +62,8 @@ pub struct AccessorSparseValues {
   #[serde(rename = "bufferView")]
   buffer_view: i32, // min: 0
   // The offset relative to the start of the bufferView in bytes.
-  #[serde(rename = "byteOffset")]
-  byte_offset: Option<i32>, // min: 0, default: 0
+  #[serde(rename = "byteOffset", default)]
+  byte_offset: i32, // min: 0, default: 0
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
@@ -83,27 +90,27 @@ pub struct Accessor {
   // The offset relative to the start of the buffer view in bytes.
   // This **MUST** be a multiple of the size of the component datatype. 
   // This property **MUST NOT** be defined when `bufferView` is undefined.
-  #[serde(rename = "byteOffset")]
+  #[serde(rename = "byteOffset", default)]
   byte_offset: Option<i32>, // min: 0, default: 0
   // The datatype of the accessor's components.
   // UNSIGNED_INT type **MUST NOT** be used for any accessor that is not referenced by `mesh.primitive.indices`.
-  
   #[serde(rename = "componentType",
-    serialize_with = "serialize_component_type",
-    deserialize_with = "deserialize_component_type",
+    serialize_with = "serialize_to_i32",
+    deserialize_with = "deserialize_from_i32_to_enum",
   )]
   component_type: ComponentType, // Can be any ComponentType
   // Specifies whether integer data values are normalized (`true`) to [0, 1] (for unsigned types) 
   // or to [-1, 1] (for signed types) when they are accessed.
   // This property **MUST NOT** be set to `true` for accessors with `FLOAT` or `UNSIGNED_INT` component type.
-  normalized: Option<bool>, // default: false
+  #[serde(default)]
+  normalized: bool, // default: false
   // The number of elements referenced by this accessor, 
   // not to be confused with the number of bytes or number of components.
   count: i32, // min: 1
   // Specifies if the accessor's elements are scalars, vectors, or matrices.
   #[serde(rename = "type",
-    serialize_with = "serialize_accessor_type",
-    deserialize_with = "deserialize_accessor_type",
+    serialize_with = "serialize_to_str",
+    deserialize_with = "deserialize_from_string_to_enum",
   )]
   ty: AccessorType, // anyOf: SCALAR, VEC2, VEC3, VEC4, MAT2, MAT3, MAT4, or some string
   // Maximum value of each component in this accessor.
@@ -112,14 +119,14 @@ pub struct Accessor {
   // The length is determined by the value of the `type` property; it can be 1, 2, 3, 4, 9, or 16.
   // `normalized` property has no effect on array values: they always correspond to the actual values stored in the buffer. 
   // When the accessor is sparse, this property **MUST** contain maximum values of accessor data with sparse substitution applied.
-  max: Option<Vec<f32>>, // min_items: 1, max_items: 16
+  max: Option<Vec<f32>>, // min_items: 1, max_items: 16 CHECK MIN MAX AFTER LOAD
   // Minimum value of each component in this accessor.
   // Array elements **MUST** be treated as having the same data type as accessor's `componentType`.
   // Both `min` and `max` arrays have the same length.
   // The length is determined by the value of the `type` property; it can be 1, 2, 3, 4, 9, or 16.
   // `normalized` property has no effect on array values: they always correspond to the actual values stored in the buffer. 
   // When the accessor is sparse, this property **MUST** contain minimum values of accessor data with sparse substitution applied.
-  min: Option<Vec<f32>>, // min_items: 1, max_items: 16
+  min: Option<Vec<f32>>, // min_items: 1, max_items: 16 CHECK MIN MAX AFTER LOAD
   // Sparse storage of elements that deviate from their initialization value.
   sparse: Option<AccessorSparse>,
   name: Option<String>,
@@ -135,7 +142,11 @@ pub struct AnimationChannelTarget {
   // For the "translation" property, the values that are provided by the sampler are the translation along the X, Y, and Z axes. 
   // For the "rotation" property, the values are a quaternion in the order (x, y, z, w), where w is the scalar. 
   // For the "scale" property, the values are the scaling factors along the X, Y, and Z axes.
-  path: String, // "translation", "rotation", "scale", "weights", ""
+  #[serde(
+    serialize_with = "serialize_to_str",
+    deserialize_with = "deserialize_from_string_to_enum"
+  )]
+  path: AnimationChannelTargetPath, // "translation", "rotation", "scale", "weights", ""
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
@@ -157,7 +168,12 @@ pub struct AnimationSampler {
   // The accessor **MUST** be of scalar type with floating-point components. 
   // The values represent time in seconds with `time[0] >= 0.0`, and strictly increasing values, i.e., `time[n + 1] > time[n]`.
   input: i32, // min: 0
-  interpolation: Option<String>, // anyOf: LINEAR, STEP, CUBICSPLINE, or some string
+  #[serde(
+    serialize_with = "serialize_to_str",
+    deserialize_with = "deserialize_from_string_to_enum",
+    default
+  )]
+  interpolation: AnimationSamplerInterpolationType, // anyOf: LINEAR, STEP, CUBICSPLINE, or some string
   output: i32, // min: 0
   extensions: Option<Extension>,
   extras: Option<Extra>,
@@ -167,10 +183,10 @@ pub struct AnimationSampler {
 pub struct Animation {
   // An array of animation channels. An animation channel combines an animation sampler with a target property being animated. 
   // Different channels of the same animation **MUST NOT** have the same targets.
-  channels: Vec<AnimationChannel>, // min_items: 1
+  channels: Vec<AnimationChannel>, // min_items: 1 CHECK MIN ITEMS AFTER LOAD
   // An array of animation samplers. 
   // An animation sampler combines timestamps with a sequence of output values and defines an interpolation algorithm.
-  samplers: Vec<AnimationSampler>, // min_items: 1
+  samplers: Vec<AnimationSampler>, // min_items: 1 CHECK MIN ITEMS AFTER LOAD
   name: Option<String>,
   extensions: Option<Extension>,
   extras: Option<Extra>,
@@ -221,7 +237,12 @@ pub struct BufferView {
   #[serde(rename = "byteStride")]
   byte_stride: Option<i32>, // min: 4, max: 252, multipleOf: 4,
   // The hint representing the intended GPU buffer type to use with this buffer view.
-  target: Option<i32>,
+  #[serde(
+    serialize_with = "serialize_option_to_i32",
+    deserialize_with = "deserialize_from_option_i32_to_enum", 
+    default
+  )]
+  target: Option<BufferViewTarget>,
   name: Option<String>,
   extensions: Option<Extension>,
   extras: Option<Extra>,
@@ -272,8 +293,11 @@ pub struct Camera {
   perspective: Option<Perspective>,
   // Specifies if the camera uses a perspective or orthographic projection.
   // Based on this, either the camera's `perspective` or `orthographic` property **MUST** be defined.
-  #[serde(rename = "type")]
-  ty: String, // anyOf: perspective, orthographic, or some string
+  #[serde(rename = "type", 
+    serialize_with = "serialize_to_str",
+    deserialize_with = "deserialize_from_string_to_enum"
+  )]
+  ty: CameraType, // anyOf: perspective, orthographic, or some string
   name: Option<String>,
   extensions: Option<Extension>,
   extras: Option<Extra>,
@@ -286,8 +310,12 @@ pub struct Image {
   // This field **MUST NOT** be defined when `bufferView` is defined.
   uri: Option<String>, // format: iri-reference, gltf_uriType: image
   // The image's media type. This field **MUST** be defined when `bufferView` is defined.
-  #[serde(rename = "mimeType")]
-  mime_type: Option<String>, // anyOf: image/jpeg, image/png, or some string
+  #[serde(rename = "mimeType",
+    serialize_with = "serialize_option_to_str",
+    deserialize_with = "deserialize_from_option_string_to_enum",
+    default
+  )]
+  mime_type: Option<ImageMimeType>, // anyOf: image/jpeg, image/png, or some string
   // The index of the bufferView that contains the image. This field **MUST NOT** be defined when `uri` is defined.
   #[serde(rename = "bufferView")]
   buffer_view: Option<i32>, // min: 0
@@ -304,8 +332,8 @@ pub struct TextureInfo {
   // This integer value is used to construct a string in the format `TEXCOORD_<set index>` 
   // which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). 
   // A mesh primitive **MUST** have the corresponding texture coordinate attributes for the material to be applicable to it.
-  #[serde(rename = "texCoord")]
-  tex_coord: Option<i32>, // min: 0, default: 0
+  #[serde(rename = "texCoord", default)]
+  tex_coord: i32, // min: 0, default: 0
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
@@ -313,8 +341,8 @@ pub struct TextureInfo {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MaterialPbrMetallicRoughness {
   // The factors for the base color of the material. This value defines linear multipliers for the sampled texels of the base color texture.
-  #[serde(rename = "baseColorFactor")]
-  base_color_factor: Option<Vec<f32 /* min: 0.0, max: 1.0 */>>, // minItems: 4, maxItems: 4, default: [ 1.0, 1.0, 1.0, 1.0 ]
+  #[serde(rename = "baseColorFactor", default = "default_base_color_factor")]
+  base_color_factor: [f32 /* min: 0.0, max: 1.0 */; 4], // minItems: 4, maxItems: 4, default: [ 1.0, 1.0, 1.0, 1.0 ]
   // The base color texture. The first three components (RGB) **MUST** be encoded with the sRGB transfer function. 
   // They specify the base color of the material. 
   // If the fourth component (A) is present, it represents the linear alpha coverage of the material. 
@@ -324,12 +352,12 @@ pub struct MaterialPbrMetallicRoughness {
   base_color_texture: Option<TextureInfo>,
   // The factor for the metalness of the material. 
   // This value defines a linear multiplier for the sampled metalness values of the metallic-roughness texture.
-  #[serde(rename = "metallicFactor")]
-  metallic_factor: Option<f32>, // min: 0.0, max: 1.0, default: 1.0
+  #[serde(rename = "metallicFactor", default = "default_f32_1")]
+  metallic_factor: f32, // min: 0.0, max: 1.0, default: 1.0
   // The factor for the roughness of the material. 
   // This value defines a linear multiplier for the sampled roughness values of the metallic-roughness texture.
-  #[serde(rename = "roughnessFactor")]
-  roughness_factor: Option<f32>, // min: 0.0, max: 1.0, default: 1.0
+  #[serde(rename = "roughnessFactor", default = "default_f32_1")]
+  roughness_factor: f32, // min: 0.0, max: 1.0, default: 1.0
   // The metallic-roughness texture. The metalness values are sampled from the B channel. 
   // The roughness values are sampled from the G channel. These values **MUST** be encoded with a linear transfer function. 
   // If other channels are present (R or A), they **MUST** be ignored for metallic-roughness calculations. 
@@ -346,12 +374,13 @@ pub struct MaterialOcclusionTextureInfo {
   // This integer value is used to construct a string in the format `TEXCOORD_<set index>` 
   // which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). 
   // A mesh primitive **MUST** have the corresponding texture coordinate attributes for the material to be applicable to it.
-  #[serde(rename = "texCoord")]
-  tex_coord: Option<i32>, // min: 0, default: 0
+  #[serde(rename = "texCoord", default)]
+  tex_coord: i32, // min: 0, default: 0
   // A scalar parameter controlling the amount of occlusion applied. 
   // A value of `0.0` means no occlusion. A value of `1.0` means full occlusion. 
   // This value affects the final occlusion value as: `1.0 + strength * (<sampled occlusion texture value> - 1.0)`.
-  strength: Option<f32>, // min: 0.0, max: 1.0, default: 1.0
+  #[serde(default = "default_f32_1")]
+  strength: f32, // min: 0.0, max: 1.0, default: 1.0
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
@@ -367,7 +396,8 @@ pub struct MaterialNormalTextureInfo {
   // The scalar parameter applied to each normal vector of the texture. 
   // This value scales the normal vector in X and Y directions using the formula: 
   // `scaledNormal =  normalize((<sampled normal texture value> * 2.0 - 1.0) * vec3(<normal scale>, <normal scale>, 1.0))`.
-  scale: Option<f32>, // default: 1.0
+  #[serde(default = "default_f32_1")]
+  scale: f32, // default: 1.0
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
@@ -398,22 +428,26 @@ pub struct Material {
   emissive_texture: Option<TextureInfo>,
   // The factors for the emissive color of the material. 
   // This value defines linear multipliers for the sampled texels of the emissive texture.
-  #[serde(rename = "emissiveFactor")]
-  emissive_factor: Option<Vec<f32 /* min: 0.0, max: 1.0 */>>, // minItems: 3, maxItems: 3, default: [ 0.0, 0.0, 0.0 ]
+  #[serde(rename = "emissiveFactor", default = "default_emissive_factor")]
+  emissive_factor: [f32 /* min: 0.0, max: 1.0 */; 3], // minItems: 3, maxItems: 3, default: [ 0.0, 0.0, 0.0 ]
   // The material's alpha rendering mode enumeration specifying the interpretation of the alpha value of the base color.
-  #[serde(rename = "alphaMode")]
-  alpha_mode: Option<String>, // OPAQUE, MASK, BLEND, or some string. default: OPAQUE
+  #[serde(rename = "alphaMode", 
+    serialize_with = "serialize_to_str",
+    deserialize_with = "deserialize_from_string_to_enum",
+    default
+  )]
+  alpha_mode: MaterialAlphaMode, // OPAQUE, MASK, BLEND, or some string. default: OPAQUE
   // Specifies the cutoff threshold when in `MASK` alpha mode. 
   // If the alpha value is greater than or equal to this value then it is rendered as fully opaque, otherwise, it is rendered as fully transparent. 
   // A value greater than `1.0` will render the entire material as fully transparent. 
   // This value **MUST** be ignored for other alpha modes. When `alphaMode` is not defined, this value **MUST NOT** be defined.
-  #[serde(rename = "alphaCutoff")]
-  alpha_cutoff: Option<f32>, // min: 0.0, default: 0.5
+  #[serde(rename = "alphaCutoff", default = "default_f32_half")]
+  alpha_cutoff: f32, // min: 0.0, default: 0.5
   // Specifies whether the material is double sided. When this value is false, back-face culling is enabled. 
   // When this value is true, back-face culling is disabled and double-sided lighting is enabled. 
   // The back-face **MUST** have its normals reversed before the lighting equation is evaluated.
-  #[serde(rename = "doubleSided")]
-  double_sided: Option<bool>, // default: false
+  #[serde(rename = "doubleSided", default)]
+  double_sided: bool, // default: false
   name: Option<String>,
   extensions: Option<Extension>,
   extras: Option<Extra>,
@@ -423,7 +457,6 @@ pub struct MeshPrimitive {
   // A plain JSON object, where each key corresponds to a mesh attribute semantic 
   // and each value is the index of the accessor containing attribute's data.
   attributes: HashMap<String, i32>,
-  // attributes: MeshPrimitiveAttribute, // minProperties: 1, REVISIT
   // The index of the accessor that contains the vertex indices.
   // When this is undefined, the primitive defines non-indexed geometry.
   // When defined, the accessor **MUST** have `SCALAR` type and an unsigned integer component type.
@@ -432,12 +465,11 @@ pub struct MeshPrimitive {
   material: Option<i32>, // min: 0
   // The topology type of primitives to render.
   #[serde(
-    serialize_with = "serialize_mesh_primitive_mode",
-    skip_serializing_if = "Option::is_none",
-    deserialize_with = "deserialize_mesh_primitive_mode",
-    default
+    serialize_with = "serialize_to_i32",
+    deserialize_with = "deserialize_from_i32_to_enum",
+    default = "default_mesh_primitive_mode"
   )]
-  mode: Option<MeshPrimitiveMode>, // default: 4
+  mode: MeshPrimitiveMode, // default: 4
   // A plain JSON object specifying attributes displacements in a morph target, 
   // where each key corresponds to one of the three supported attribute semantic (`POSITION`, `NORMAL`, or `TANGENT`) 
   // and each value is the index of the accessor containing the attribute displacements' data.
@@ -482,15 +514,19 @@ pub struct Node {
   // When defined, `mesh` **MUST** also be defined.
   skin: Option<i32>, // min: 0
   // A floating-point 4x4 transformation matrix stored in column-major order.
-  matrix: Option<Vec<f32>>, // minItems: 16, maxItems: 16, default: [ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0 ]
+  #[serde(default = "default_matrix")]
+  matrix: [f32; 16], // minItems: 16, maxItems: 16, default: [ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0 ]
   // The index of the mesh in this node.
   mesh: Option<i32>, // min: 0
   // The node's unit quaternion rotation in the order (x, y, z, w), where w is the scalar.
-  rotation: Option<Vec<f32 /* min: -1.0f, max: 1.0f */>>, // minItems: 4, maxItems: 4, default: [ 0.0, 0.0, 0.0, 1.0 ]
-  // The node's non-unifomr scale, given as the scaling factors along the x, y, and z axes.
-  scale: Option<Vec<f32>>, // minItems: 3, maxItems: 3, default: [ 1.0, 1.0, 1.0 ]
+  #[serde(default = "default_rotation")]
+  rotation: [f32 /* min: -1.0, max: 1.0 */; 4], // minItems: 4, maxItems: 4, default: [ 0.0, 0.0, 0.0, 1.0 ]
+  // The node's non-uniform scale, given as the scaling factors along the x, y, and z axes.
+  #[serde(default = "default_scale")]
+  scale: [f32; 3], // minItems: 3, maxItems: 3, default: [ 1.0, 1.0, 1.0 ]
   // The node's translation along the x, y, and z axes.
-  translation: Option<Vec<f32>>, // minItems: 3, maxItems: 3, default: [ 0.0, 0.0, 0.0 ]
+  #[serde(default = "default_translation")]
+  translation: [f32; 3], // minItems: 3, maxItems: 3, default: [ 0.0, 0.0, 0.0 ]
   // The weights of the instantiated morph target. 
   // The number of array elements **MUST** match the number of morph targets of the referenced mesh. 
   // When defined, `mesh` **MUST** also be defined.
@@ -503,17 +539,33 @@ pub struct Node {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Sampler {
   // Magnification filter.
-  #[serde(rename = "magFilter")]
-  mag_filter: Option<i32>, // NEAREST, LINEAR, or some integer
+  #[serde(rename = "magFilter",
+    serialize_with = "serialize_option_to_i32",
+    deserialize_with = "deserialize_from_option_i32_to_enum",
+    default
+  )]
+  mag_filter: Option<SamplerFilter>, // NEAREST, LINEAR, or some integer
   // Minification filter.
-  #[serde(rename = "minFilter")]
-  min_filter: Option<i32>, // NEAREST, LINEAR, NEAREST_MIPMAP_NEAREST, LINEAR_MIPMAP_NEAREST, NEAREST_MIPMAP_LINEAR, LINEAR_MIPMAP_LINEAR, or some integer
+  #[serde(rename = "minFilter",
+    serialize_with = "serialize_option_to_i32",
+    deserialize_with = "deserialize_from_option_i32_to_enum",
+    default
+  )]
+  min_filter: Option<SamplerFilter>, // NEAREST, LINEAR, NEAREST_MIPMAP_NEAREST, LINEAR_MIPMAP_NEAREST, NEAREST_MIPMAP_LINEAR, LINEAR_MIPMAP_LINEAR, or some integer
   // S (U) wrapping mode. All valid values correspond to WebGL enums
-  #[serde(rename = "wrapS")]
-  wrap_s: Option<i32>, // default: REPEAT
+  #[serde(rename = "wrapS",
+    serialize_with = "serialize_to_i32",
+    deserialize_with = "deserialize_from_i32_to_enum",
+    default
+  )]
+  wrap_s: SamplerWrap, // default: REPEAT
   // T (V) wrapping mode.
-  #[serde(rename = "wrapT")]
-  wrap_t: Option<i32>, // default: REPEAT
+  #[serde(rename = "wrapT",
+    serialize_with = "serialize_to_i32",
+    deserialize_with = "deserialize_from_i32_to_enum",
+    default
+  )]
+  wrap_t: SamplerWrap, // default: REPEAT
   name: Option<String>,
   extensions: Option<Extension>,
   extras: Option<Extra>,
