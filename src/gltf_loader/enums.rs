@@ -1,5 +1,6 @@
 use serde::{Deserializer, Deserialize, Serializer, Serialize};
 
+// Allows checking if undefined at deserialized time with generic types
 pub trait Undefinable { fn is_undefined(&self) -> bool; }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

@@ -434,15 +434,24 @@ fn parse_test() {
     let p_str = String::from(f);
     let p = PathBuf::from(p_str);
     let joined_p = path.join(p);
-    println!("{}", f);
-    let loaded: GltfLoader = serde_json::from_str(&fs::read_to_string(joined_p).unwrap()).unwrap();
+    // println!("{}", f);
+    let parsed = GltfLoader::load(&joined_p);
     // println!("{:?}", loaded);
     // if (loaded.buffers.is_some()) {
     //   println!("{:?}", loaded.buffers.unwrap());
     // }
-    // if loaded.accessors.is_some() {
-    //   let accessor = &loaded.accessors.unwrap()[0];
-    //   println!("{:?}", accessor.ty);
-    // }
+    if parsed.is_ok() {
+      let loaded = parsed.unwrap();
+      if loaded.asset.min_version.is_some() {
+        println!("{}", loaded.asset.min_version.unwrap());
+      }
+      // if loaded.accessors.is_some() {
+      //   let accessor = &loaded.accessors.unwrap()[0];
+      //   println!("{:?}", accessor.ty);
+      // }
+    }
+    else {
+      println!("{}", parsed.unwrap_err());
+    }
   });
 }
