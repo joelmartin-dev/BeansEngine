@@ -434,7 +434,6 @@ fn parse_test() {
     let p_str = String::from(f);
     let p = PathBuf::from(p_str);
     let joined_p = path.join(p);
-    // println!("{}", f);
     let parsed = GltfLoader::load(&joined_p);
     // println!("{:?}", loaded);
     // if (loaded.buffers.is_some()) {
@@ -444,6 +443,7 @@ fn parse_test() {
       let loaded = parsed.unwrap();
     }
     else {
+      println!("{}", f);
       println!("{}", parsed.unwrap_err());
     }
   });

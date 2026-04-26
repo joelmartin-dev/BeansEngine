@@ -1,5 +1,6 @@
 use std::{any::{Any, type_name}, fs, path::PathBuf};
 
+use pct_str::{Encoder, PctString, UriReserved};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 
 use crate::gltf_loader::{GltfLoader, Validatable, enums::{MeshPrimitiveMode, Undefinable}};
@@ -9,48 +10,48 @@ impl GltfLoader {
     let parsed: Result<GltfLoader, serde_json::Error> = serde_json::from_str(&fs::read_to_string(path).unwrap());
 
     if let Ok(loaded) = parsed {
-      loaded.is_valid()?;
+      loaded.is_valid(&loaded)?;
       
       if let Some(accessors)    = &loaded.accessors     
-        { accessors   .iter().try_for_each(|accessor|     accessor    .is_valid())? };
+        { accessors   .iter().try_for_each(|accessor|     accessor    .is_valid(&loaded))? };
       
       if let Some(animations)   = &loaded.animations    
-        { animations  .iter().try_for_each(|animation|    animation   .is_valid())? };
+        { animations  .iter().try_for_each(|animation|    animation   .is_valid(&loaded))? };
       
-      loaded.asset.is_valid()?;
+      loaded.asset.is_valid(&loaded)?;
       
       if let Some(buffers)      = &loaded.buffers       
-        { buffers     .iter().try_for_each(|buffer|       buffer      .is_valid())? };
+        { buffers     .iter().try_for_each(|buffer|       buffer      .is_valid(&loaded))? };
       
       if let Some(buffer_views) = &loaded.buffer_views  
-        { buffer_views.iter().try_for_each(|buffer_view|  buffer_view .is_valid())? };
+        { buffer_views.iter().try_for_each(|buffer_view|  buffer_view .is_valid(&loaded))? };
       
       if let Some(cameras)      = &loaded.cameras       
-        { cameras     .iter().try_for_each(|camera|       camera      .is_valid())? };
+        { cameras     .iter().try_for_each(|camera|       camera      .is_valid(&loaded))? };
       
       if let Some(images)       = &loaded.images        
-        { images      .iter().try_for_each(|image|        image       .is_valid())? };
+        { images      .iter().try_for_each(|image|        image       .is_valid(&loaded))? };
       
       if let Some(materials)    = &loaded.materials     
-        { materials   .iter().try_for_each(|material|     material    .is_valid())? };
+        { materials   .iter().try_for_each(|material|     material    .is_valid(&loaded))? };
       
       if let Some(meshes)       = &loaded.meshes        
-        { meshes      .iter().try_for_each(|mesh|         mesh        .is_valid())? };
+        { meshes      .iter().try_for_each(|mesh|         mesh        .is_valid(&loaded))? };
       
       if let Some(nodes)        = &loaded.nodes         
-        { nodes       .iter().try_for_each(|node|         node        .is_valid())? };
+        { nodes       .iter().try_for_each(|node|         node        .is_valid(&loaded))? };
       
       if let Some(samplers)     = &loaded.samplers      
-        { samplers    .iter().try_for_each(|sampler|      sampler     .is_valid())? };
+        { samplers    .iter().try_for_each(|sampler|      sampler     .is_valid(&loaded))? };
       
       if let Some(scenes)       = &loaded.scenes        
-        { scenes      .iter().try_for_each(|scene|        scene       .is_valid())? };
+        { scenes      .iter().try_for_each(|scene|        scene       .is_valid(&loaded))? };
       
       if let Some(skins)        = &loaded.skins         
-        { skins       .iter().try_for_each(|skin|         skin        .is_valid())? };
+        { skins       .iter().try_for_each(|skin|         skin        .is_valid(&loaded))? };
       
       if let Some(textures)     = &loaded.textures      
-        { textures    .iter().try_for_each(|texture|      texture     .is_valid())? };
+        { textures    .iter().try_for_each(|texture|      texture     .is_valid(&loaded))? };
       
       Ok(loaded)
     }
@@ -110,6 +111,16 @@ where D: Deserializer<'de>, T: From<String> + Undefinable
       Err(Error::custom(format!("Invalid {} field!", type_name)))
     },
     v => Ok(v.map(T::from))
+  }
+}
+
+pub fn deserialize_string_to_iri<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where D: Deserializer<'de>
+{
+  let val = Option::<String>::deserialize(deserializer)?;
+  match val {
+    Some(v) => { let encoded_val = PctString::encode(v.chars(), UriReserved::Path); Ok(Some(encoded_val.to_string()))},
+    None => Ok(None)
   }
 }
 // #endregion

@@ -4,6 +4,7 @@ mod test;
 
 use std::{collections::HashMap, fmt::Display, fs};
 
+use iref::{Iri, Uri, iri::{self, Path}};
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, Map};
@@ -18,11 +19,12 @@ use methods::{
   serialize_to_i32, serialize_option_to_i32, serialize_to_str, serialize_option_to_str,
   deserialize_from_i32_to_enum, deserialize_from_option_i32_to_enum,
   deserialize_from_string_to_enum, deserialize_from_option_string_to_enum,
+  deserialize_string_to_iri
 };
 
 use crate::gltf_loader::enums::{BufferViewTarget, CameraType, ImageMimeType};
 
-trait Validatable { fn is_valid(&self) -> Result<(), String>; }
+trait Validatable { fn is_valid(&self, base: &GltfLoader) -> Result<(), String>; }
 
 fn check_for_dup_items<T>(v: &Vec<T>, name: &str) -> Result<(), String> 
 where T: PartialEq + Ord + Clone
@@ -45,8 +47,16 @@ fn check_if_empty<T>(v: &Vec<T>, name: &str) -> Result<(), String>
 fn check_items_for_min_val<T>(v: &Vec<T>, min: T, name: &str) -> Result<(), String>
 where T: PartialOrd + Display + Copy
 {
-  let has_less_than_min = v.iter().any(|&item| item < min); 
-  if has_less_than_min { Err(format!("Each item of `{}` must be greater than {}!", name, min))? };
+  let has_lt_min = v.iter().any(|&item| item < min); 
+  if has_lt_min { Err(format!("Each item of `{}` must be greater than or equal to {}!", name, min))? };
+  Ok(())
+}
+
+fn check_items_for_max_val<T>(v: &Vec<T>, max: T, name: &str) -> Result<(), String>
+where T: PartialOrd + Display + Copy
+{
+  let has_gt_max = v.iter().any(|&item| item > max); 
+  if has_gt_max { Err(format!("Each item of `{}` must be less than or equal to {}!", name, max))? };
   Ok(())
 }
 
@@ -93,7 +103,7 @@ pub struct GltfLoader {
   extras: Option<Extra>,
 }
 impl Validatable for GltfLoader {
-  fn is_valid(&self) -> Result<(), String> {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
     if let Some(ext_used)     = &self.extensions_used     { check_if_empty(ext_used,      "extensionsUsed"    )? ; 
                                                             check_for_dup_items(ext_used, "extensionsUsed"    )? }
     if let Some(ext_req)      = &self.extensions_required { check_if_empty(ext_req,       "extensionsRequired")? ; 
@@ -175,7 +185,55 @@ pub struct Accessor {
   extras: Option<Extra>,
 }
 impl Validatable for Accessor {
-  fn is_valid(&self) -> Result<(), String> {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    if let Some(buffer_view) = 
+      self.buffer_view { check_items_for_min_val(&vec![buffer_view], 0, "accessor.bufferView")? };
+    if let Some(byte_offset) = 
+      self.byte_offset { 
+        if self.buffer_view.is_none() { 
+          Err(format!("`accessor.byteOffset` must not be defined when `accessor.bufferView` is undefined!"))? 
+        }
+        check_items_for_min_val(&vec![byte_offset], 0, "accessor.byteOffset")?;
+        match self.component_type {
+          ComponentType::Short => { if byte_offset % 2 != 0 { Err(format!(
+            "`accessor.byteOffset` must be a multiple of the `accessor.componentType` datatype!"))?
+          }},
+          ComponentType::UnsignedShort => { if byte_offset % 2 != 0 { Err(format!(
+            "`accessor.byteOffset` must be a multiple of the `accessor.componentType` datatype!"))?
+          }},
+          ComponentType::UnsignedInt => {if byte_offset % 4 != 0 { Err(format!(
+            "`accessor.byteOffset` must be a multiple of the `accessor.componentType` datatype!"))?
+          }},
+          ComponentType::Float => {if byte_offset % 4 != 0 { Err(format!(
+            "`accessor.byteOffset` must be a multiple of the `accessor.componentType` datatype!"))?
+          }},
+          ComponentType::Undefined => Err(format!("Invalid `accessor.componentType`"))?,
+          _ => ()
+        } 
+      };
+    if self.normalized && (self.component_type == ComponentType::UnsignedInt || self.component_type == ComponentType::Float) {
+      Err(format!("`accessor.normalized` must not be `true` for accessors with `FLOAT` or `UNSIGNED_INT` component type!"))?
+    }
+    check_items_for_min_val(&vec![self.count], 1, "`accessor.count`")?;
+    if (self.min.is_none() && self.max.is_some()) || (self.min.is_some() && self.max.is_none()) {
+      Err(format!("`accessor.min` and `accessor.max` must have same length!"))?
+    }
+    if let (Some(min), Some(max)) = (&self.min, &self.max) {
+      if min.len() != max.len() {
+        Err(format!("`accessor.min` and `accessor.max` must have same length!"))?
+      }
+      match self.ty {
+        AccessorType::Scalar => { if min.len() != 1 { Err(format!("The lengths of `accessor.min` and `accessor.max` must match `accessor.type`"))? }},
+        AccessorType::Vec2 => { if min.len() != 2 { Err(format!("The lengths of `accessor.min` and `accessor.max` must match `accessor.type`"))? }},
+        AccessorType::Vec3 => { if min.len() != 3 { Err(format!("The lengths of `accessor.min` and `accessor.max` must match `accessor.type`"))? }},
+        AccessorType::Vec4 => { if min.len() != 4 { Err(format!("The lengths of `accessor.min` and `accessor.max` must match `accessor.type`"))? }},
+        AccessorType::Mat2 => { if min.len() != 4 { Err(format!("The lengths of `accessor.min` and `accessor.max` must match `accessor.type`"))? }},
+        AccessorType::Mat3 => { if min.len() != 9 { Err(format!("The lengths of `accessor.min` and `accessor.max` must match `accessor.type`"))? }},
+        AccessorType::Mat4 => { if min.len() != 16 { Err(format!("The lengths of `accessor.min` and `accessor.max` must match `accessor.type`"))? }},
+        _ => Err(format!("Invalid `accessor.type`"))?
+      }
+    }
+    if let Some(sparse) = &self.sparse { sparse.is_valid(base)? };
     Ok(())
   }
 }
@@ -194,8 +252,13 @@ pub struct Animation {
   extras: Option<Extra>,
 }
 impl Validatable for Animation {
-  fn is_valid(&self) -> Result<(), String> {
-      Ok(())
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    check_if_empty(&self.channels, "animation.channels")?;
+    check_if_empty(&self.samplers, "animation.channels")?;
+    self.channels.iter().try_for_each(|c| c.is_valid(base) )?;
+    self.samplers.iter().try_for_each(|s| s.is_valid(base) )?;
+    
+    Ok(())
   }
 }
 
@@ -216,7 +279,7 @@ pub struct Asset {
   extras: Option<Extra>,
 }
 impl Validatable for Asset {
-  fn is_valid(&self) -> Result<(), String> {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
     let version_regex = Regex::new("^[0-9]+\\.[0-9]+$").unwrap();
     if !version_regex.is_match(&self.version) {
       return Err(format!("`asset.version` must match regex: ^[0-9]+\\.[0-9]+$"))
@@ -248,6 +311,7 @@ impl Validatable for Asset {
 pub struct Buffer {
   // The URI (or IRI) of the buffer.  Relative paths are relative to the current glTF asset.
   // Instead of referencing an external file, this field **MAY** contain a `data:`-URI.
+  #[serde(default, deserialize_with = "deserialize_string_to_iri")]
   uri: Option<String>, // format: iri-reference, gltf_uriType: application
   // The length of the buffer in bytes.
   #[serde(rename = "byteLength")]
@@ -257,8 +321,12 @@ pub struct Buffer {
   extras: Option<Extra>,
 }
 impl Validatable for Buffer {
-  fn is_valid(&self) -> Result<(), String> {
-      Ok(())
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    
+    if let Some(uri) = &self.uri {
+      match iri::Path::new(&uri) { Err(e) => Err(e.to_string())?, _ => () } }
+    check_items_for_min_val(&vec![self.byte_length], 1, "buffer.byteLength")?;
+    Ok(())
   }
 }
 
@@ -290,8 +358,16 @@ pub struct BufferView {
   extras: Option<Extra>,
 }
 impl Validatable for BufferView {
-  fn is_valid(&self) -> Result<(), String> {
-      Ok(())
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    check_items_for_min_val(&vec![self.buffer], 0, "bufferView.buffer")?;
+    if let Some(byte_offset) = self.byte_offset { check_items_for_min_val(&vec![byte_offset], 0, "bufferView.byteOffset")? };
+    check_items_for_min_val(&vec![self.byte_length], 1, "bufferView.byteLength")?;
+    if let Some(byte_stride) = self.byte_stride {
+      check_items_for_min_val(&vec![byte_stride], 4, "bufferView.byteStride")?;
+      check_items_for_max_val(&vec![byte_stride], 252, "bufferView.byteStride")?;
+      if byte_stride % 4 != 0 { Err(format!("`bufferView.byteStride` must be a multiple of 4!"))? }
+    }
+    Ok(())
   }
 }
 
@@ -316,8 +392,25 @@ pub struct Camera {
   extras: Option<Extra>,
 }
 impl Validatable for Camera {
-  fn is_valid(&self) -> Result<(), String> {
-      Ok(())
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    if self.orthographic.is_some() && self.perspective.is_some() {
+      Err(format!("`camera.perspective` and `camera.orthographic` must not both be defined!"))?
+    }
+    if self.orthographic.is_none() && self.perspective.is_none() {
+      Err(format!("One of `camera.perspective` and `camera.orthographic` must be defined!"))?
+    }
+    match self.ty {
+      CameraType::Orthographic => if self.orthographic.is_none() {
+        Err(format!("`camera.orthographic` must be defined when `camera.type` is `orthographic`!"))?
+      },
+      CameraType::Perspective => if self.perspective.is_none() {
+        Err(format!("`camera.perspective` must be defined when `camera.type` is `perspective`!"))?
+      },
+      CameraType::Undefined => Err(format!("Invalid `camera.type`"))?
+    }
+    if let Some(orthographic) = &self.orthographic { orthographic.is_valid(base)? };
+    if let Some(perspective) = &self.perspective { perspective.is_valid(base)? };
+    Ok(())
   }
 }
 
@@ -327,6 +420,7 @@ pub struct Image {
   // The URI (or IRI) of the image.  Relative paths are relative to the current glTF asset.  
   // Instead of referencing an external file, this field **MAY** contain a `data:`-URI. 
   // This field **MUST NOT** be defined when `bufferView` is defined.
+  #[serde(default, deserialize_with = "deserialize_string_to_iri")]
   uri: Option<String>, // format: iri-reference, gltf_uriType: image
   // The image's media type. This field **MUST** be defined when `bufferView` is defined.
   #[serde(rename = "mimeType",
@@ -343,7 +437,7 @@ pub struct Image {
   extras: Option<Extra>,
 }
 impl Validatable for Image {
-  fn is_valid(&self) -> Result<(), String> {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
       Ok(())
   }
 }
@@ -400,7 +494,7 @@ pub struct Material {
   extras: Option<Extra>,
 }
 impl Validatable for Material {
-  fn is_valid(&self) -> Result<(), String> {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
       Ok(())
   }
 }
@@ -418,7 +512,7 @@ pub struct Mesh {
   extras: Option<Extra>,
 }
 impl Validatable for Mesh {
-  fn is_valid(&self) -> Result<(), String> {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
       Ok(())
   }
 }
@@ -470,7 +564,7 @@ pub struct Node {
   extras: Option<Extra>,
 }
 impl Validatable for Node {
-  fn is_valid(&self) -> Result<(), String> {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
       Ok(())
   }
 }
@@ -511,7 +605,7 @@ pub struct Sampler {
   extras: Option<Extra>,
 }
 impl Validatable for Sampler {
-  fn is_valid(&self) -> Result<(), String> {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
       Ok(())
   }
 }
@@ -525,7 +619,7 @@ pub struct Scene {
   extras: Option<Extra>,
 }
 impl Validatable for Scene {
-  fn is_valid(&self) -> Result<(), String> {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
     if self.nodes.is_some() {
       let nodes = self.nodes.as_ref().unwrap();
       if nodes.is_empty() {
@@ -564,7 +658,7 @@ pub struct Skin {
   extras: Option<Extra>,
 }
 impl Validatable for Skin {
-  fn is_valid(&self) -> Result<(), String> {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
       Ok(())
   }
 }
@@ -583,7 +677,7 @@ pub struct Texture {
   extras: Option<Extra>,
 }
 impl Validatable for Texture {
-  fn is_valid(&self) -> Result<(), String> {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
       Ok(())
   }
 }
@@ -621,6 +715,36 @@ pub struct AccessorSparseIndices {
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
+impl Validatable for AccessorSparseIndices {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    check_items_for_min_val(&vec![self.buffer_view], 0, "accessor.sparse.indices.bufferView")?;
+    let ref_buf_view: &BufferView = 
+      match base.buffer_views.as_ref().unwrap().iter().nth(
+        match usize::try_from(self.buffer_view) { Ok(v) => v, Err(e) => Err(e.to_string())? }) {
+          Some(v) => v,
+          None => Err(format!("`accessor.sparse.indices.bufferView` is not a valid bufferView!"))?
+        };
+    if ref_buf_view.target.is_some() { 
+      Err(format!(
+        "The referenced bufferView `accessor.sparse.indices.bufferView` must not have its `target` property defined!"
+      ))? 
+    }
+    if ref_buf_view.byte_stride.is_some() { 
+      Err(format!(
+        "The referenced bufferView `accessor.sparse.indices.bufferView` must not have its `byteStride` property defined!"
+      ))? 
+    }
+    check_items_for_min_val(&vec![self.byte_offset], 0, "accessor.sparse.indices.byteOffset")?;
+    let valid_component_type = 
+      [ComponentType::UnsignedByte, ComponentType::UnsignedShort, ComponentType::UnsignedInt]
+        .iter().any(|&ty| ty == self.component_type);
+    if !valid_component_type { 
+      Err(format!(
+        "`accessor.sparse.indices.componentType` must be any of `UNSIGNED_BYTE`, `UNSIGNED_SHORT`, or `UNSIGNED_INT`"))? 
+    }
+    Ok(())
+  }
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AccessorSparseValues {
@@ -634,6 +758,28 @@ pub struct AccessorSparseValues {
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
+impl Validatable for AccessorSparseValues {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    check_items_for_min_val(&vec![self.buffer_view], 0, "accessor.sparse.values.bufferView")?;
+    let ref_buf_view: &BufferView = 
+      base.buffer_views.as_ref().unwrap().iter().nth(
+        match usize::try_from(self.buffer_view) { Ok(v) => v, Err(e) => Err(e.to_string())? })
+        .expect("`accessor.sparse.values.bufferView` is not a valid bufferView!");
+    if ref_buf_view.target.is_some() { 
+      Err(format!(
+        "The referenced bufferView `accessor.sparse.values.bufferView` must not have its `target` property defined!"
+      ))? 
+    }
+    if ref_buf_view.byte_stride.is_some() { 
+      Err(format!(
+        "The referenced bufferView `accessor.sparse.values.bufferView` must not have its `byteStride` property defined!"
+      ))? 
+    }
+    check_items_for_min_val(&vec![self.byte_offset], 0, "accessor.sparse.values.byteOffset")?;
+    Ok(())
+  }
+}
+
 // Sparse storage of accessor values that deviate from their initialization value.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AccessorSparse {
@@ -646,6 +792,14 @@ pub struct AccessorSparse {
   values: AccessorSparseValues,
   extensions: Option<Extension>,
   extras: Option<Extra>,
+}
+impl Validatable for AccessorSparse {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    check_items_for_min_val(&vec![self.count], 1, "accessor.sparse.count")?;
+    self.indices.is_valid(base)?;
+    self.values.is_valid(base)?;
+    Ok(())
+  }
 }
 
 // The descriptor of the animated property.
@@ -665,6 +819,13 @@ pub struct AnimationChannelTarget {
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
+impl Validatable for AnimationChannelTarget {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    if let Some(node) = self.node { check_items_for_min_val(&vec![node], 0, "animation.channel.target.node")? };
+    Ok(())
+  }
+}
+
 // An animation channel combines an animation sampler with a target property being animated.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AnimationChannel {
@@ -676,6 +837,14 @@ pub struct AnimationChannel {
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
+impl Validatable for AnimationChannel {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    check_items_for_min_val(&vec![self.sampler], 0, "animation.channel.sampler")?;
+    self.target.is_valid(base)?;
+    Ok(())
+  }
+}
+
 // An animation sampler combines timestamps with a sequence of output values and defines an interpolation algorithm.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AnimationSampler {
@@ -693,6 +862,24 @@ pub struct AnimationSampler {
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
+impl Validatable for AnimationSampler {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    check_items_for_min_val(&vec![self.input], 0, "animation.sampler.input")?;
+    check_items_for_min_val(&vec![self.output], 0, "animation.sampler.output")?;
+    if let Some(accessors) = &base.accessors { 
+      let input_accessor: &Accessor = 
+        match accessors.iter().nth(match usize::try_from(self.input) { Ok(v) => v, Err(e) => Err(e.to_string())?}) {
+          Some(v) => v,
+          None => Err(format!("`animation.sampler.input` must reference a valid accessor!"))?
+        }; 
+      if input_accessor.ty != AccessorType::Scalar || input_accessor.component_type != ComponentType::Float {
+        Err(format!("The referenced accessor `animation.sampler.input` must be of scalar type with floating-point components!"))?
+      }
+    }
+    Ok(())
+  }
+}
+
 // An orthographic camera containing properties to create an orthographic projection matrix.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Orthographic {
@@ -710,6 +897,17 @@ pub struct Orthographic {
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
+impl Validatable for Orthographic {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    if self.xmag == 0.0 { Err(format!("`camera.orthographic.xmag` must not be equal to 0.0!"))? }
+    if self.ymag == 0.0 { Err(format!("`camera.orthographic.ymag` must not be equal to 0.0!"))? }
+    if self.zfar <= 0.0 { Err(format!("`camera.orthographic.zfar` must be greater than 0.0!"))? }
+    if self.zfar <= self.znear { Err(format!("`camera.orthographic.zfar` must be greater than `camera.orthographic.znear`"))? }
+    if self.znear < 0.0 { Err(format!("`camera.orthographic.znear` must be greater than or equal to 0.0!"))? }
+    Ok(())
+  }
+}
+
 // A perspective camera containing properties to create a perspective projection matrix.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Perspective {
@@ -727,6 +925,20 @@ pub struct Perspective {
   znear: f32, // exclusiveMin: 0.0
   extensions: Option<Extension>,
   extras: Option<Extra>,
+}
+impl Validatable for Perspective {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    if let Some(aspect_ratio) = self.aspect_ratio { 
+      if aspect_ratio <= 0.0 { Err(format!("`camera.perspective.aspect_ratio` must be greater than 0.0!"))?}
+    }
+    if self.yfov == 0.0 { Err(format!("`camera.perspective.yfov` must be equal to 0.0!"))?}
+    if let Some(zfar) = self.zfar {
+      if zfar <= 0.0 { Err(format!("`camera.perspective.zfar` must be greater than 0.0!"))? }
+      if zfar <= self.znear { Err(format!("When defined, `camera.perspective.zfar` must be greater than `camera.perspective.znear`"))? }
+    }
+    if self.znear < 0.0 { Err(format!("`camera.perspective.znear` must be greater than or equal to 0.0!"))? }
+    Ok(())
+  }
 }
 
 // Reference to a texture.

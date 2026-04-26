@@ -1,0 +1,302 @@
+Validation after deserialization:
+AccessorSparseIndices: {
+	buffer_view: { 
+		min: 0,
+		notes: "The referenced buffer view MUST NOT have its 'target' or 'byteStride' properties defined. The buffer view and the optional 'byteOffset' MUST be aligned to the 'componentType' byte length.
+	},
+	byte_offset: { min: 0},
+	component_type: { anyOf: UNSIGNED_BYTE, UNSIGNED_SHORT, UNSIGNED_INT }
+	notes: "The number of indices is equal to `accessor.sparse.count`. Indices **MUST** strictly increase."
+},
+AccessorSparseValues: {
+	buffer_view: { 
+		min: 0, 
+		notes: "The referenced buffer view MUST NOT have its 'target' or 'byteStride' properties defined."
+	},
+	byte_offset: { min: 0 }
+},
+AccessorSparse: {
+	count: { min: 1 }
+},
+Accessor: {
+	buffer_view: { min: 0 },
+	byte_offset: { 
+		min: 0,
+		notes: "This MUST be a multiple of the size of the component datatype. This property MUST NOT be defined when 'bufferView' is undefined." 
+	},
+	component_type: {
+		notes: "UNSIGNED_INT type MUST NOT be used for any accessor that is not referenced by 'mesh.primitive.indices'."
+	},
+	normalized: {
+		notes: "This property MUST NOT be set to 'true' for accessors with FLOAT or UNSIGNED_INT component type."
+	},
+	count: { min: 1 },
+	max: {
+		min_items: 1, 
+		max_items: 16,
+		notes: "Both 'min' and 'max' have the same length. The length is determined by the value of the 'type' property; it can be 1, 2, 3, 4, 9, or 16. When the accessor is sparse, this property MUST contain maximum values of accessor data with sparse substitution applied."
+	},
+	min: {
+		min_items: 1, 
+		max_items: 16,
+		notes: "Array elements MUST be treated as having the same data type as accessor's 'componentType'. Both 'min' and 'max' have the same length. The length is determined by the value of the 'type' property; it can be 1, 2, 3, 4, 9, or 16. When the accessor is sparse, this property MUST contain minimum values of accessor data with sparse substitution applied."
+	},
+},
+AnimationChannelTarget: {
+	node: {
+		min: 0,
+		notes: "When undefined, the animated object MAY be defined by an extension."
+	}
+},
+AnimationChannel: {
+	sampler: { min: 0 }
+},
+AnimationSampler: {
+	input: {
+		min: 0,
+		notes: "The accessor MUST be of scalar type with floating-point components."
+	},
+	output: { min: 0 }
+},
+Animation: {
+	channels: {
+		min_items: 1,
+		notes: "Different channels of the same animation MUST NOT have the same targets."
+	},
+	samplers: { min_items: 1 }
+},
+Asset: {
+	version: { pattern: ^[0-9]+\\.[0-9]+$ },
+	min_version: {
+		pattern: ^[0-9]+\\.[0-9]+$,
+		notes: "This property MUST NOT be greater than the asset version."
+	}
+},
+Buffer: {
+	uri: {
+		format: iri-reference,
+		gltf_uriType: application,
+		notes: "Instead of referencing an external file, this field MAY contain a `data:`-URI."
+	},
+	byte_length: { min: 1 }
+},
+BufferView: {
+	buffer: { min: 0 },
+	byte_offset: { min: 0 },
+	byte_length: { min: 1 },
+	byte_stride: {
+		min: 4,
+		max: 252,
+		multipleOf: 4,
+		notes: "When two or more accessors use the same buffer view, this field MUST be defined."
+	}
+},
+Orthographic: {
+	xmag: {
+		notes: "This value MUST NOT be equal to zero. This value SHOULD NOT be negative."
+	},
+	ymag: {
+		notes: "This value MUST NOT be equal to zero. This value SHOULD NOT be negative."
+	},
+	zfar: {
+		exclusiveMin: 0.0,
+		notes: "This value MUST NOT be equal to zero. 'zfar' MUST be greater than 'znear'."
+	},
+	znear: { min: 0.0 }
+},
+Perspective: {
+	aspect_ratio: {
+		exclusiveMin: 0.0,
+		notes: "When undefined, the aspect ratio of the rendering viewport MUST be used."
+	},
+	yfox: {
+		exclusiveMin: 0.0,
+		notes: "This value SHOULD be less than π."
+	},
+	zfar: {
+		exclusiveMin: 0.0,
+		notes: "When defined, 'zfar' MUST be greater than 'znear'."
+	},
+	znear: { exclusiveMin: 0.0 }
+},
+Camera: {
+	orthographic: {
+		notes: "This property MUST NOT be defined when 'perspective' is defined."
+	},
+	perspective: {
+		notes: "This property MUST NOT be defined when 'orthographic' is defined."
+	},
+	ty: {
+		notes: "Based on this, either the camera's 'perspective' or 'orthographic' property MUST be defined."
+	}
+},
+Image: {
+	uri: {
+		format: iri-reference,
+		gltf_uriType: application,
+		notes: "Instead of referencing an external file, this field MAY contain a `data:`-URI. This field MUST NOT be defined when 'bufferView' is defined."
+	},
+	mime_type: {
+		notes: "This field MUST be defined when 'bufferView' is defined."
+	},
+	buffer_view: {
+		min: 0,
+		notes: "This field MUST NOT be defined when 'uri' is defined."
+	}
+},
+TextureInfo: {
+	index: { min: 0 },
+	tex_coord: {
+		min: 0,
+		notes: "This integer value is used to construct a string in the format `TEXCOORD_<set index>` which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). A mesh primitive MUST have the corresponding texture coordinate attributes for the material to be applicable to it."
+	}
+},
+MaterialPbrMetallicRoughness: {
+	base_color_factor: {
+		items: {
+			min: 0.0,
+			max: 1.0
+		}
+	},
+	base_color_texture: {
+		notes: "The first three components (RGB) MUST be encoded with the sRGB transfer function. If the fourth component (A) is not present, the alpha coverage is equal to '1.0'. The stored texels MUST NOT be premultiplied."
+	},
+	metallic_factor: { 
+		min: 0.0, 
+		max: 1.0 
+	},
+	roughness_factor: { 
+		min: 0.0, 
+		max: 1.0 
+	}
+},
+MaterialOcclusionTextureInfo: {
+	index: { min: 0 },
+	tex_coord: {
+		min: 0,
+		notes: "This integer value is used to construct a string in the format `TEXCOORD_<set index>` which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). A mesh primitive MUST have the corresponding texture coordinate attributes for the material to be applicable to it."
+	},
+	strength: { 
+		min: 0.0, 
+		max: 1.0 
+	}
+},
+MaterialNormalTextureInfo: {
+	index: { min: 0 },
+	tex_coord: {
+		min: 0,
+		notes: "This integer value is used to construct a string in the format `TEXCOORD_<set index>` which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). A mesh primitive MUST have the corresponding texture coordinate attributes for the material to be applicable to it."
+	}
+},
+Material: {
+	pbr_metallic_roughness: {
+		notes: "When undefined, all the default values of 'pbrMetallicRoughness' MUST apply."
+	},
+	emissive_factor: {
+		items: {
+			min: 0.0,
+			max: 1.0
+		}
+	},
+	alpha_cutoff: {
+		min: 0.0,
+		notes: "When 'alphaMode' is not defined, this value MUST NOT be defined."
+	}
+},
+MeshPrimitive: {
+	indices: {
+		min: 0,
+		notes: "When defined, the accessor MUST have 'SCALAR' type and an unsigned integer component type."
+	},
+	material: { min: 0 },
+	targets: {
+		minItems: 1,
+		notes: "A plain JSON object specifying attributes displacements in a morph target, where each key corresponds to one of the three supported attribute semantic (`POSITION`, `NORMAL`, or `TANGENT`)."
+	}
+},
+Mesh: {
+	primitives: { minItems: 1 }
+},
+Node: {
+	camera: { min: 0 },
+	children: {
+		minItems: 1,
+		uniqueItems,
+		items: { min: 0 }
+	},
+	skin: {
+		min: 0,
+		notes: "When a skin is referenced by a node within a scene, all joints used by the skin MUST belong to the same scene. When defined, 'mesh' MUST also be defined."
+	},
+	mesh: { min: 0 },
+	rotation: {
+		items: {
+			min: -1.0,
+			max: 1.0
+		}
+	},
+	weights: {
+		minItems: 1,
+		notes: "The number of array elements MUST match the number of morph targets of the referenced mesh. When defined, 'mesh' MUST also be defined."
+	},
+	notes: "When a node is targeted for animation (referenced by an animation.channel.target), 'matrix' MUST NOT be present."
+},
+Sampler: {
+	mag_filter: { anyOf: [NEAREST, LINEAR] }
+},
+Scene: {
+	nodes: {
+		minItems: 1,
+		uniqueItems,
+		items: { min: 0 }
+	}
+},
+Skin: {
+	inverse_bind_matrices: {
+		min: 0,
+		notes: "The accessor at this index MUST have a 'count' property greater than or equal to the number of elements of the 'joints' array."
+	},
+	skeleton: {
+		min: 0,
+		notes: "The node at this index MUST be the closest common root of the joints hierarchy or a direct or indirect parent node of the closest common root."
+	},
+	joints: {
+		minItems: 1,
+		uniqueItems,
+		items: { min: 0 }
+	}
+},
+Texture: {
+	sampler: { min: 0 },
+	source: {
+		min: 0,
+		notes: "When undefined, an extension or other mechanism SHOULD supply an alternate texture source, otherwise behaviour is undefined."
+	}
+},
+GltfLoader: {
+	extensions_used: {
+		minItems: 1,
+		uniqueItems,
+	},
+	extensions_required: {
+		minItems: 1,
+		uniqueItems,
+	},
+	accessors: { minItems: 1 },
+	animations: { minItems: 1 },
+	buffers: { minItems: 1 },
+	buffer_views: { minItems: 1 },
+	cameras: { minItems: 1 },
+	images: { minItems: 1 },
+	materials: { minItems: 1 },
+	meshes: { minItems: 1 },
+	nodes: { minItems: 1 },
+	samplers: { minItems: 1 },
+	scene: {
+		min: 0,
+		notes: "This property MUST NOT be defined, when 'scenes' is undefined."
+	}
+	scenes: { minItems: 1 },
+	skins: { minItems: 1 },
+	textures: { minItems: 1 }
+}
