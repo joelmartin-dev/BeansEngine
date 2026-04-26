@@ -442,13 +442,6 @@ fn parse_test() {
     // }
     if parsed.is_ok() {
       let loaded = parsed.unwrap();
-      if loaded.asset.min_version.is_some() {
-        println!("{}", loaded.asset.min_version.unwrap());
-      }
-      // if loaded.accessors.is_some() {
-      //   let accessor = &loaded.accessors.unwrap()[0];
-      //   println!("{:?}", accessor.ty);
-      // }
     }
     else {
       println!("{}", parsed.unwrap_err());

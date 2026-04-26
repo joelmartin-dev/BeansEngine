@@ -1,62 +1,61 @@
-use std::{any::type_name, fs, path::PathBuf};
+use std::{any::{Any, type_name}, fs, path::PathBuf};
 
-use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 
-use crate::gltf_loader::{GltfLoader, enums::{
-  AccessorType, AnimationChannelTargetPath, AnimationSamplerInterpolationType, BufferViewTarget, CameraType, ComponentType, ImageMimeType, MaterialAlphaMode, MeshPrimitiveMode, SamplerFilter, SamplerWrap, Undefinable
-}};
+use crate::gltf_loader::{GltfLoader, Validatable, enums::{MeshPrimitiveMode, Undefinable}};
 
 impl GltfLoader {
   pub fn load(path: &PathBuf) -> Result<Self, String> {
     let parsed: Result<GltfLoader, serde_json::Error> = serde_json::from_str(&fs::read_to_string(path).unwrap());
 
-    if parsed.is_ok() 
-    {
-      let loaded = parsed.as_ref().unwrap();
-      // Root Validation
-      {
-        if loaded.scene.is_some() {
-          if loaded.scenes.is_none() {
-            return Err(format!("`scene` must not be defined, when `scenes` is not defined!"));
-          }
-          if *(loaded.scene.as_ref().unwrap()) < 0 {
-            return Err(format!("`scene` must be greater than or equal to zero!"));
-          }
-        }
-      }
-
-      // Asset Validation
-      {
-        let asset = &loaded.asset;
-        let version_regex = Regex::new("^[0-9]+\\.[0-9]+$").unwrap();
-        if !version_regex.is_match(&asset.version) {
-          return Err(format!("`asset.version` must match regex: ^[0-9]+\\.[0-9]+$"))
-        }
-        if asset.min_version.is_some() {
-          let min_version = asset.min_version.as_ref().unwrap();
-          if !version_regex.is_match(min_version) {
-            return Err(format!("`asset.version` must match regex: ^[0-9]+\\.[0-9]+$"))
-          }
-          let version_parts: Vec<&str> = asset.version.split(".").collect();
-          let min_version_parts: Vec<&str> = min_version.split(".").collect();
-          if version_parts.len() == 2 && version_parts.len() == min_version_parts.len() {
-            if version_parts[0] >= min_version_parts[0] {
-              if version_parts[1] < min_version_parts[1] {
-                return Err(format!("`asset.min_version` must be less than or equal to `asset.version`"));
-              }
-            }
-            else {
-              return Err(format!("`asset.min_version` must be less than or equal to `asset.version`"));
-            }
-          }
-        }
-      }
-      Ok(parsed.unwrap())
+    if let Ok(loaded) = parsed {
+      loaded.is_valid()?;
+      
+      if let Some(accessors)    = &loaded.accessors     
+        { accessors   .iter().try_for_each(|accessor|     accessor    .is_valid())? };
+      
+      if let Some(animations)   = &loaded.animations    
+        { animations  .iter().try_for_each(|animation|    animation   .is_valid())? };
+      
+      loaded.asset.is_valid()?;
+      
+      if let Some(buffers)      = &loaded.buffers       
+        { buffers     .iter().try_for_each(|buffer|       buffer      .is_valid())? };
+      
+      if let Some(buffer_views) = &loaded.buffer_views  
+        { buffer_views.iter().try_for_each(|buffer_view|  buffer_view .is_valid())? };
+      
+      if let Some(cameras)      = &loaded.cameras       
+        { cameras     .iter().try_for_each(|camera|       camera      .is_valid())? };
+      
+      if let Some(images)       = &loaded.images        
+        { images      .iter().try_for_each(|image|        image       .is_valid())? };
+      
+      if let Some(materials)    = &loaded.materials     
+        { materials   .iter().try_for_each(|material|     material    .is_valid())? };
+      
+      if let Some(meshes)       = &loaded.meshes        
+        { meshes      .iter().try_for_each(|mesh|         mesh        .is_valid())? };
+      
+      if let Some(nodes)        = &loaded.nodes         
+        { nodes       .iter().try_for_each(|node|         node        .is_valid())? };
+      
+      if let Some(samplers)     = &loaded.samplers      
+        { samplers    .iter().try_for_each(|sampler|      sampler     .is_valid())? };
+      
+      if let Some(scenes)       = &loaded.scenes        
+        { scenes      .iter().try_for_each(|scene|        scene       .is_valid())? };
+      
+      if let Some(skins)        = &loaded.skins         
+        { skins       .iter().try_for_each(|skin|         skin        .is_valid())? };
+      
+      if let Some(textures)     = &loaded.textures      
+        { textures    .iter().try_for_each(|texture|      texture     .is_valid())? };
+      
+      Ok(loaded)
     }
-    else
-    {
-      Err(format!("biffed it!"))
+    else {
+      Err(parsed.unwrap_err().to_string())
     }
   }
 }
