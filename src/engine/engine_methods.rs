@@ -1,7 +1,7 @@
 use std::ffi::{CStr, CString, c_void};
 use std::fs::{self, File};
 use std::io::{Write};
-use std::path::{Path};
+use std::path::{Path, PathBuf};
 use std::{u64, f32};
 
 use crate::app_options::AppOptions;
@@ -14,13 +14,13 @@ use crate::engine::{
   SHADER_ROOT_PATH, VALIDATION_LAYERS, VertexData
 };
 use crate::camera::Camera;
+use crate::gltf_loader::GltfLoader;
 use crate::model::CUBE;
 use crate::vertex::Vertex;
 use ash::util::Align;
 use image::EncodableLayout;
 use ::image::ImageReader;
-use imgui::sys::igGetContentRegionAvail;
-use imgui::{Condition, Context, DrawData, Ui};
+use imgui::{Condition, Context, DrawData};
 use imgui_rs_vulkan_renderer::{DynamicRendering, Options, Renderer};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use shader_slang::{self as slang, Downcast};
@@ -61,7 +61,7 @@ unsafe extern "system" fn debug_callback(
 
 impl Engine
 {
-  pub fn new(window: &Window, options: AppOptions) -> Self
+  pub fn new(window: &Window, options: AppOptions) -> Result<Self, String>
   {
     /*============================================= INSTANTIATION ORDER ==============================================//
       SETUP VULKAN CONTEXT
@@ -237,7 +237,7 @@ impl Engine
       options.resolution.0, options.resolution.1, glm::vec3(0.0, 0.0, 5.0), 0.0, glm::half_pi::<f32>()
     );
 
-    Self {
+    Ok(Self {
       options,
       context: Some(context),
       debug_gui_context: Some(debug_gui_context),
@@ -279,7 +279,7 @@ impl Engine
       sun_dir: glm::normalize(&glm::vec3(0.6, 0.6, 0.6)),
       old_view: Default::default(),
       interval: 10.0,
-    }
+    })
   }
 
   // Set up base Vulkan instance and RAII context
@@ -412,19 +412,13 @@ impl Engine
       );
       if !supports_all_required_extensions { println!("{:?} does not support required extensions", *physical_device); return false; }
 
-      let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default();
-      let mut acceleration_structure_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default();
       let mut extended_dynamic_state_features = vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT::default();
       let mut vulkan_13_features = vk::PhysicalDeviceVulkan13Features::default();
       let mut vulkan_12_features = vk::PhysicalDeviceVulkan12Features::default();
 
       // Build the pNext chain (in reverse order)
       // Each structure's pNext points to the next one in the chain
-      ray_query_features.p_next = std::ptr::null_mut();
-      acceleration_structure_features.p_next = 
-        &mut ray_query_features as *mut _ as *mut c_void;
-      extended_dynamic_state_features.p_next = 
-        &mut acceleration_structure_features as *mut _ as *mut c_void;
+      extended_dynamic_state_features.p_next = std::ptr::null_mut();
       vulkan_13_features.p_next = 
         &mut extended_dynamic_state_features as *mut _ as *mut c_void;
       vulkan_12_features.p_next = 
@@ -464,10 +458,7 @@ impl Engine
         vulkan_12_features.runtime_descriptor_array != vk::FALSE &&
         vulkan_12_features.shader_sampled_image_array_non_uniform_indexing != vk::FALSE &&
         vulkan_12_features.host_query_reset != vk::FALSE &&
-        vulkan_12_features.buffer_device_address != vk::FALSE &&
-        acceleration_structure_features.acceleration_structure != vk::FALSE &&
-        acceleration_structure_features.descriptor_binding_acceleration_structure_update_after_bind != vk::FALSE &&
-        ray_query_features.ray_query != vk::FALSE;
+        vulkan_12_features.buffer_device_address != vk::FALSE;
 
       return supports_vulkan_1_3 &&
         supports_sampler_anisotropy &&
@@ -521,21 +512,10 @@ impl Engine
       .dynamic_rendering(true);
     let mut extended_dynamic_state_features = vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT::default()
       .extended_dynamic_state(true);
-    let mut acceleration_structure_features = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
-      .acceleration_structure(true)
-      .descriptor_binding_acceleration_structure_update_after_bind(true);
-    let mut ray_query_features = vk::PhysicalDeviceRayQueryFeaturesKHR::default()
-      .ray_query(true);
 
     // Build the pNext chain (in reverse order)
     // Each structure's pNext points to the next one in the chain
-    // compute_shader_derivatives_features.p_next = std::ptr::null_mut();
-    ray_query_features.p_next = std::ptr::null_mut();
-        // &mut compute_shader_derivatives_features as *mut _ as *mut c_void;
-    acceleration_structure_features.p_next = 
-        &mut ray_query_features as *mut _ as *mut c_void;
-      extended_dynamic_state_features.p_next = 
-        &mut acceleration_structure_features as *mut _ as *mut c_void;
+    extended_dynamic_state_features.p_next = std::ptr::null_mut();
     vulkan_13_features.p_next = 
       &mut extended_dynamic_state_features as *mut _ as *mut c_void;
     vulkan_12_features.p_next = 
@@ -1538,7 +1518,7 @@ impl Engine
         if ui.is_item_deactivated_after_edit() {
           match fs::write(&debug_gui_context.slang_path, &debug_gui_context.slang_content) {
             Err(e) => println!("{}", e.to_string()),
-            _ => println!("Wrote shader to file!")
+            _ => ()//println!("Wrote shader to file!")
           }
         }
       };
@@ -2439,6 +2419,15 @@ impl Engine
     unsafe { 
       device.cmd_copy_buffer_to_image(command_buffer, buffer, image, vk::ImageLayout::TRANSFER_DST_OPTIMAL, &regions) 
     };
+  }
+
+  pub fn load_gltf(&mut self, path: &PathBuf) -> Result<(), String>
+  {
+    let base: GltfLoader = GltfLoader::load(path)?;
+    if let Some(context) = &self.context {
+      unsafe { context.device.queue_wait_idle(context.queue) };
+    };
+    Ok(())
   }
 }
 

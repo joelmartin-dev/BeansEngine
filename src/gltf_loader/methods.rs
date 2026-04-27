@@ -1,7 +1,7 @@
-use std::{any::{Any, type_name}, fs, path::PathBuf};
+use std::{any::{type_name}, fs, path::PathBuf};
 
-use pct_str::{Encoder, PctString, UriReserved};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
+use pct_str::{PctString, UriReserved};
+use serde::{Deserialize, Deserializer, Serializer, de::Error};
 
 use crate::gltf_loader::{GltfLoader, Validatable, enums::{MeshPrimitiveMode, Undefinable}};
 

@@ -14,7 +14,7 @@ impl ApplicationHandler for App {
         .with_title("Beans Engine")
         .with_inner_size(PhysicalSize::new(options.resolution.0, options.resolution.1))
       ).unwrap();
-      self.engine = Some(Engine::new(&window, options));
+      self.engine = match Engine::new(&window, options) { Ok(v) => Some(v), Err(e) => { println!("{}", e); None }};
       self.window = Some(window);
   }
 
@@ -89,6 +89,12 @@ impl ApplicationHandler for App {
           debug_ui_context.delta = frame_end.duration_since(frame_start).as_micros();
 
           self.window.as_ref().unwrap().request_redraw();
+        },
+        WindowEvent::DroppedFile(path) => {
+          match engine.load_gltf(&path) {
+            Err(e) => println!("{}", e),
+            _ => println!("Loaded: {:?}", path)
+          };
         }
         _ => ()
       }

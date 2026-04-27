@@ -2,11 +2,11 @@ mod enums;
 mod methods;
 mod test;
 
-use std::{collections::HashMap, fmt::Display, fs};
+use std::{collections::HashMap, fmt::Display};
 
-use iref::{Iri, Uri, iri::{self, Path}};
+use iref::{iri};
 use regex::Regex;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, Map};
 use enums::{
   AccessorType, ComponentType, AnimationChannelTargetPath, AnimationSamplerInterpolationType, 
@@ -111,7 +111,7 @@ pub struct GltfLoader {
   extras: Option<Extra>,
 }
 impl Validatable for GltfLoader {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     if let Some(ext_used)     = &self.extensions_used     { check_if_empty(ext_used,      "extensionsUsed"    )? ; 
                                                             check_for_dup_items(ext_used, "extensionsUsed"    )? ;
                                                             Err(format!("Unsupported extensions found: {:?}", ext_used))? }
@@ -289,7 +289,7 @@ pub struct Asset {
   extras: Option<Extra>,
 }
 impl Validatable for Asset {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     let version_regex = Regex::new("^[0-9]+\\.[0-9]+$").unwrap();
     if !version_regex.is_match(&self.version) {
       return Err(format!("`asset.version` must match regex: ^[0-9]+\\.[0-9]+$"))
@@ -331,7 +331,7 @@ pub struct Buffer {
   extras: Option<Extra>,
 }
 impl Validatable for Buffer {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     
     if let Some(uri) = &self.uri {
       match iri::Path::new(&uri) { Err(e) => Err(e.to_string())?, _ => () } }
@@ -368,7 +368,7 @@ pub struct BufferView {
   extras: Option<Extra>,
 }
 impl Validatable for BufferView {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     check_items_for_min_val(&[self.buffer], 0, "bufferView.buffer")?;
     if let Some(byte_offset) = self.byte_offset { check_items_for_min_val(&[byte_offset], 0, "bufferView.byteOffset")? };
     check_items_for_min_val(&[self.byte_length], 1, "bufferView.byteLength")?;
@@ -447,7 +447,7 @@ pub struct Image {
   extras: Option<Extra>,
 }
 impl Validatable for Image {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     if self.uri.is_some() && self.buffer_view.is_some() {
       Err(format!("`image.uri` and `image.bufferView` must not both be defined!"))?
     }
@@ -542,7 +542,7 @@ pub struct Mesh {
   extras: Option<Extra>,
 }
 impl Validatable for Mesh {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     check_if_empty(&self.primitives, "mesh.primitives")?;
     if let Some(weights) = &self.weights { check_if_empty(weights, "mesh.weights")? }
     Ok(())
@@ -596,7 +596,7 @@ pub struct Node {
   extras: Option<Extra>,
 }
 impl Validatable for Node {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     if let Some(camera) = self.camera { check_items_for_min_val(&[camera], 0, "node.camera")? }
     if let Some(children) = &self.children { 
       check_if_empty(&children, "node.children")?;
@@ -654,7 +654,7 @@ pub struct Sampler {
   extras: Option<Extra>,
 }
 impl Validatable for Sampler {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     if let Some(mag_filter) = self.mag_filter {
       match mag_filter {
         SamplerFilter::Nearest => (),
@@ -675,7 +675,7 @@ pub struct Scene {
   extras: Option<Extra>,
 }
 impl Validatable for Scene {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     if self.nodes.is_some() {
       let nodes = self.nodes.as_ref().unwrap();
       if nodes.is_empty() {
@@ -755,7 +755,7 @@ pub struct Texture {
   extras: Option<Extra>,
 }
 impl Validatable for Texture {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     if let Some(sampler) = self.sampler { check_items_for_min_val(&[sampler], 0, "texture.sampler")?}
     if let Some(source) = self.source { check_items_for_min_val(&[source], 0, "texture.source")?}
     Ok(())
@@ -993,7 +993,7 @@ pub struct Orthographic {
   extras: Option<Extra>,
 }
 impl Validatable for Orthographic {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     if self.xmag == 0.0 { Err(format!("`camera.orthographic.xmag` must not be equal to 0.0!"))? }
     if self.ymag == 0.0 { Err(format!("`camera.orthographic.ymag` must not be equal to 0.0!"))? }
     if self.zfar <= 0.0 { Err(format!("`camera.orthographic.zfar` must be greater than 0.0!"))? }
@@ -1022,7 +1022,7 @@ pub struct Perspective {
   extras: Option<Extra>,
 }
 impl Validatable for Perspective {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     if let Some(aspect_ratio) = self.aspect_ratio { 
       if aspect_ratio <= 0.0 { Err(format!("`camera.perspective.aspect_ratio` must be greater than 0.0!"))?}
     }
@@ -1050,7 +1050,7 @@ pub struct TextureInfo {
   extras: Option<Extra>,
 }
 impl Validatable for TextureInfo {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     check_items_for_min_val(&[self.index], 0, "textureInfo.index")?;
     check_items_for_min_val(&[self.tex_coord], 0, "textureInfo.texCoord")?;
     Ok(())
@@ -1119,7 +1119,7 @@ pub struct MaterialOcclusionTextureInfo {
   extras: Option<Extra>,
 }
 impl Validatable for MaterialOcclusionTextureInfo {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     check_items_for_min_val(&[self.index], 0, "material.occlusionTextureInfo.index")?;
     check_items_for_min_val(&[self.tex_coord], 0, "material.occlusionTextureInfo.texCoord")?;
     check_items_for_min_val(&[self.strength], 0.0, "material.occlusionTextureInfo.strength")?;
@@ -1146,7 +1146,7 @@ pub struct MaterialNormalTextureInfo {
   extras: Option<Extra>,
 }
 impl Validatable for MaterialNormalTextureInfo {
-  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+  fn is_valid(&self, _base: &GltfLoader) -> Result<(), String> {
     check_items_for_min_val(&[self.index], 0, "material.normalTextureInfo.index")?;
     check_items_for_min_val(&[self.tex_coord], 0, "material.normalTextureInfo.texCoord")?;
     Ok(())
