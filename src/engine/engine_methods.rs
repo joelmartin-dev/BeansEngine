@@ -19,7 +19,8 @@ use crate::vertex::Vertex;
 use ash::util::Align;
 use image::EncodableLayout;
 use ::image::ImageReader;
-use imgui::{Condition, Context, DrawData};
+use imgui::sys::igGetContentRegionAvail;
+use imgui::{Condition, Context, DrawData, Ui};
 use imgui_rs_vulkan_renderer::{DynamicRendering, Options, Renderer};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use shader_slang::{self as slang, Downcast};
@@ -152,11 +153,12 @@ impl Engine
     ).unwrap();
 
     // Initialise the data ImGui can change
-    let slang_path = String::from(DEFAULT_SLANG_PATH);
+    let slang_path = format!("{}/{}", SHADER_ROOT_PATH, DEFAULT_SLANG_PATH);
     let spirv_path = String::from(DEFAULT_SPIRV_PATH);
+    let slang_content = { fs::read_to_string(&slang_path).unwrap_or(String::from("Failed to get content!")) };
     let delta = 0;
 
-    let debug_gui_context = DebugGuiContext { imgui, platform, renderer, slang_path, spirv_path, delta };
+    let debug_gui_context = DebugGuiContext { imgui, platform, renderer, slang_path, spirv_path, slang_content, delta };
 
     let fallback_texture_data = {
       let command_buffer = Self::begin_single_time_commands(&context.device, context.command_pool);
@@ -1523,14 +1525,22 @@ impl Engine
       .window("Shaders")
       .title_bar(true)
       .resizable(true)
-      .always_auto_resize(true)
+      // .always_auto_resize(true)
       .movable(true)
       .collapsible(true)
       .position([1110.0, 20.0], Condition::FirstUseEver)
       .begin()
       {
         ui.input_text("Slang Path", &mut debug_gui_context.slang_path).build();
-        ui.input_text("SPIR-V Path", &mut debug_gui_context.spirv_path).build();      
+        ui.input_text("SPIR-V Path", &mut debug_gui_context.spirv_path).build();
+        ui.input_text_multiline("Slang Content", &mut debug_gui_context.slang_content, ui.content_region_avail()).build();
+        
+        if ui.is_item_deactivated_after_edit() {
+          match fs::write(&debug_gui_context.slang_path, &debug_gui_context.slang_content) {
+            Err(e) => println!("{}", e.to_string()),
+            _ => println!("Wrote shader to file!")
+          }
+        }
       };
 
     platform.prepare_render(ui, window);

@@ -138,6 +138,7 @@ pub struct DebugGuiContext {
   // Data to change at runtime
   slang_path: String,
   spirv_path: String,
+  slang_content: String,
   delta: u128,
 }
 
