@@ -4,7 +4,7 @@ mod vertex;
 mod model;
 mod buffer_structs;
 mod app_options;
-
+mod gltf_loader;
 
 use winit::{event_loop::{ControlFlow, EventLoop}, keyboard::ModifiersState};
 use crate::{engine::App};
