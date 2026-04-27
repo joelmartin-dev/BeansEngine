@@ -44,19 +44,27 @@ fn check_if_empty<T>(v: &Vec<T>, name: &str) -> Result<(), String>
   Ok(())
 }
 
-fn check_items_for_min_val<T>(v: &Vec<T>, min: T, name: &str) -> Result<(), String>
+fn check_items_for_min_val<T>(v: &[T], min: T, name: &str) -> Result<(), String>
 where T: PartialOrd + Display + Copy
 {
   let has_lt_min = v.iter().any(|&item| item < min); 
-  if has_lt_min { Err(format!("Each item of `{}` must be greater than or equal to {}!", name, min))? };
+  if has_lt_min { if v.len() > 1 {
+    Err(format!("Each item of `{}` must be greater than or equal to {}!", name, min))?
+  } else {
+    Err(format!("`{}` must be greater than or equal to {}!", name, min))?
+  }};
   Ok(())
 }
 
-fn check_items_for_max_val<T>(v: &Vec<T>, max: T, name: &str) -> Result<(), String>
+fn check_items_for_max_val<T>(v: &[T], max: T, name: &str) -> Result<(), String>
 where T: PartialOrd + Display + Copy
 {
   let has_gt_max = v.iter().any(|&item| item > max); 
-  if has_gt_max { Err(format!("Each item of `{}` must be less than or equal to {}!", name, max))? };
+  if has_gt_max { if v.len() > 1 {
+    Err(format!("Each item of `{}` must be less than or equal to {}!", name, max))? 
+  } else {
+    Err(format!("`{}` must be less than or equal to {}!", name, max))? 
+  }};
   Ok(())
 }
 
@@ -105,9 +113,11 @@ pub struct GltfLoader {
 impl Validatable for GltfLoader {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
     if let Some(ext_used)     = &self.extensions_used     { check_if_empty(ext_used,      "extensionsUsed"    )? ; 
-                                                            check_for_dup_items(ext_used, "extensionsUsed"    )? }
+                                                            check_for_dup_items(ext_used, "extensionsUsed"    )? ;
+                                                            Err(format!("Unsupported extensions found: {:?}", ext_used))? }
     if let Some(ext_req)      = &self.extensions_required { check_if_empty(ext_req,       "extensionsRequired")? ; 
-                                                            check_for_dup_items(ext_req,  "extensionsRequired")? }
+                                                            check_for_dup_items(ext_req,  "extensionsRequired")? ;
+                                                            Err(format!("Unsupported extensions found: {:?}", ext_req))?  }
     if let Some(accessors)    = &self.accessors           { check_if_empty(accessors,     "accessors"         )? }
     if let Some(animations)   = &self.animations          { check_if_empty(animations,    "animations"        )? }
     if let Some(buffers)      = &self.buffers             { check_if_empty(buffers,       "buffers"           )? }
@@ -187,13 +197,13 @@ pub struct Accessor {
 impl Validatable for Accessor {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
     if let Some(buffer_view) = 
-      self.buffer_view { check_items_for_min_val(&vec![buffer_view], 0, "accessor.bufferView")? };
+      self.buffer_view { check_items_for_min_val(&[buffer_view], 0, "accessor.bufferView")? };
     if let Some(byte_offset) = 
       self.byte_offset { 
         if self.buffer_view.is_none() { 
           Err(format!("`accessor.byteOffset` must not be defined when `accessor.bufferView` is undefined!"))? 
         }
-        check_items_for_min_val(&vec![byte_offset], 0, "accessor.byteOffset")?;
+        check_items_for_min_val(&[byte_offset], 0, "accessor.byteOffset")?;
         match self.component_type {
           ComponentType::Short => { if byte_offset % 2 != 0 { Err(format!(
             "`accessor.byteOffset` must be a multiple of the `accessor.componentType` datatype!"))?
@@ -214,7 +224,7 @@ impl Validatable for Accessor {
     if self.normalized && (self.component_type == ComponentType::UnsignedInt || self.component_type == ComponentType::Float) {
       Err(format!("`accessor.normalized` must not be `true` for accessors with `FLOAT` or `UNSIGNED_INT` component type!"))?
     }
-    check_items_for_min_val(&vec![self.count], 1, "`accessor.count`")?;
+    check_items_for_min_val(&[self.count], 1, "`accessor.count`")?;
     if (self.min.is_none() && self.max.is_some()) || (self.min.is_some() && self.max.is_none()) {
       Err(format!("`accessor.min` and `accessor.max` must have same length!"))?
     }
@@ -325,7 +335,7 @@ impl Validatable for Buffer {
     
     if let Some(uri) = &self.uri {
       match iri::Path::new(&uri) { Err(e) => Err(e.to_string())?, _ => () } }
-    check_items_for_min_val(&vec![self.byte_length], 1, "buffer.byteLength")?;
+    check_items_for_min_val(&[self.byte_length], 1, "buffer.byteLength")?;
     Ok(())
   }
 }
@@ -359,12 +369,12 @@ pub struct BufferView {
 }
 impl Validatable for BufferView {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-    check_items_for_min_val(&vec![self.buffer], 0, "bufferView.buffer")?;
-    if let Some(byte_offset) = self.byte_offset { check_items_for_min_val(&vec![byte_offset], 0, "bufferView.byteOffset")? };
-    check_items_for_min_val(&vec![self.byte_length], 1, "bufferView.byteLength")?;
+    check_items_for_min_val(&[self.buffer], 0, "bufferView.buffer")?;
+    if let Some(byte_offset) = self.byte_offset { check_items_for_min_val(&[byte_offset], 0, "bufferView.byteOffset")? };
+    check_items_for_min_val(&[self.byte_length], 1, "bufferView.byteLength")?;
     if let Some(byte_stride) = self.byte_stride {
-      check_items_for_min_val(&vec![byte_stride], 4, "bufferView.byteStride")?;
-      check_items_for_max_val(&vec![byte_stride], 252, "bufferView.byteStride")?;
+      check_items_for_min_val(&[byte_stride], 4, "bufferView.byteStride")?;
+      check_items_for_max_val(&[byte_stride], 252, "bufferView.byteStride")?;
       if byte_stride % 4 != 0 { Err(format!("`bufferView.byteStride` must be a multiple of 4!"))? }
     }
     Ok(())
@@ -438,7 +448,18 @@ pub struct Image {
 }
 impl Validatable for Image {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-      Ok(())
+    if self.uri.is_some() && self.buffer_view.is_some() {
+      Err(format!("`image.uri` and `image.bufferView` must not both be defined!"))?
+    }
+    if self.mime_type.is_some() && self.buffer_view.is_some() {
+      Err(format!("`image.mimeType` must not be defined when `image.bufferView` is defined!"))?
+    }
+    if let Some(buffer_view) = self.buffer_view {
+      check_items_for_min_val(&[buffer_view], 0, "image.bufferView")?
+    }
+    if let Some(uri) = &self.uri {
+      match iri::Path::new(&uri) { Err(e) => Err(e.to_string())?, _ => () } }
+    Ok(())
   }
 }
 
@@ -495,7 +516,16 @@ pub struct Material {
 }
 impl Validatable for Material {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-      Ok(())
+    check_items_for_min_val(&self.emissive_factor, 0.0, "material.emissiveFactor")?;
+    check_items_for_max_val(&self.emissive_factor, 1.0, "material.emissiveFactor")?;
+    if self.alpha_cutoff != 0.5 && self.alpha_mode != MaterialAlphaMode::Opaque {
+      Err(format!("`material.alphaCutoff` must not be defined when `material.alphaMode` is not defined!"))?
+    }
+    if let Some(emissive_tex_info) = &self.emissive_texture { emissive_tex_info.is_valid(base)? };
+    if let Some(pbr_met_rough) = &self.pbr_metallic_roughness { pbr_met_rough.is_valid(base)? };
+    if let Some(occ_tex_info) = &self.occlusion_texture { occ_tex_info.is_valid(base)? };
+    if let Some(nrm_tex_info) = &self.normal_texture { nrm_tex_info.is_valid(base)? };
+    Ok(())
   }
 }
 
@@ -513,7 +543,9 @@ pub struct Mesh {
 }
 impl Validatable for Mesh {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-      Ok(())
+    check_if_empty(&self.primitives, "mesh.primitives")?;
+    if let Some(weights) = &self.weights { check_if_empty(weights, "mesh.weights")? }
+    Ok(())
   }
 }
 
@@ -565,7 +597,24 @@ pub struct Node {
 }
 impl Validatable for Node {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-      Ok(())
+    if let Some(camera) = self.camera { check_items_for_min_val(&[camera], 0, "node.camera")? }
+    if let Some(children) = &self.children { 
+      check_if_empty(&children, "node.children")?;
+      check_items_for_min_val(&children, 0, "node.children")?;
+      check_for_dup_items(children.as_ref(), "node.children")?;
+    }
+    if let Some(skin) = self.skin {
+      check_items_for_min_val(&[skin], 0, "node.skin")?;
+      if self.mesh.is_none() { Err(format!("`node.mesh` must be defined when `node.skin` is defined!"))?}
+    }
+    if let Some(mesh) = self.mesh { check_items_for_min_val(&[mesh], 0, "node.mesh")? }
+    check_items_for_min_val(&self.rotation, -1.0, "node.rotation")?;
+    check_items_for_max_val(&self.rotation, 1.0, "node.rotation")?;
+    if let Some(weights) = &self.weights {
+      check_if_empty(&weights, "node.weights")?;
+      if self.mesh.is_none() { Err(format!("`node.mesh` must be defined when `node.weights` is defined!"))?}
+    }
+    Ok(())
   }
 }
 
@@ -606,7 +655,14 @@ pub struct Sampler {
 }
 impl Validatable for Sampler {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-      Ok(())
+    if let Some(mag_filter) = self.mag_filter {
+      match mag_filter {
+        SamplerFilter::Nearest => (),
+        SamplerFilter::Linear => (),
+        _ => Err(format!("Invalid `sampler.magFilter` type: {:?}!", mag_filter))?
+      }
+    }
+    Ok(())
   }
 }
 
@@ -659,7 +715,29 @@ pub struct Skin {
 }
 impl Validatable for Skin {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-      Ok(())
+    if let Some(inv_bind_mat) = 
+      self.inverse_bind_matrices { 
+        check_items_for_min_val(&[inv_bind_mat], 0, "skin.inverseBindMatrices")?;
+      let ref_accessor: &Accessor = 
+      match base.accessors.as_ref().unwrap().iter().nth(
+        match usize::try_from(inv_bind_mat) { Ok(v) => v, Err(e) => Err(e.to_string())? }) {
+          Some(v) => v,
+          None => Err(format!("`skin.inverseBindMatrices` is not a valid accessor!"))?
+        };
+      if ref_accessor.count < match i32::try_from(self.joints.len()) { Ok(v) => v, Err(e) => Err(e.to_string())? } {
+        Err(format!(
+          "The count of referenced accessor `skin.inverseBindMatrices` must be greater than or equal to the number of elements of the `skin.joints` array!"
+        ))?
+      }
+    }
+    if let Some(skeleton) = 
+      self.skeleton { check_items_for_min_val(&[skeleton], 0, "skin.skeleton")?}
+    
+    check_if_empty(&self.joints, "skin.joints")?;
+    check_items_for_min_val(&self.joints, 0, "skin.joints")?;
+    check_for_dup_items(self.joints.as_ref(), "skin.joints")?;
+    
+    Ok(())
   }
 }
 
@@ -678,7 +756,9 @@ pub struct Texture {
 }
 impl Validatable for Texture {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-      Ok(())
+    if let Some(sampler) = self.sampler { check_items_for_min_val(&[sampler], 0, "texture.sampler")?}
+    if let Some(source) = self.source { check_items_for_min_val(&[source], 0, "texture.source")?}
+    Ok(())
   }
 }
 
@@ -717,7 +797,7 @@ pub struct AccessorSparseIndices {
 }
 impl Validatable for AccessorSparseIndices {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-    check_items_for_min_val(&vec![self.buffer_view], 0, "accessor.sparse.indices.bufferView")?;
+    check_items_for_min_val(&[self.buffer_view], 0, "accessor.sparse.indices.bufferView")?;
     let ref_buf_view: &BufferView = 
       match base.buffer_views.as_ref().unwrap().iter().nth(
         match usize::try_from(self.buffer_view) { Ok(v) => v, Err(e) => Err(e.to_string())? }) {
@@ -734,7 +814,7 @@ impl Validatable for AccessorSparseIndices {
         "The referenced bufferView `accessor.sparse.indices.bufferView` must not have its `byteStride` property defined!"
       ))? 
     }
-    check_items_for_min_val(&vec![self.byte_offset], 0, "accessor.sparse.indices.byteOffset")?;
+    check_items_for_min_val(&[self.byte_offset], 0, "accessor.sparse.indices.byteOffset")?;
     let valid_component_type = 
       [ComponentType::UnsignedByte, ComponentType::UnsignedShort, ComponentType::UnsignedInt]
         .iter().any(|&ty| ty == self.component_type);
@@ -760,11 +840,14 @@ pub struct AccessorSparseValues {
 }
 impl Validatable for AccessorSparseValues {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-    check_items_for_min_val(&vec![self.buffer_view], 0, "accessor.sparse.values.bufferView")?;
+    check_items_for_min_val(&[self.buffer_view], 0, "accessor.sparse.values.bufferView")?;
     let ref_buf_view: &BufferView = 
-      base.buffer_views.as_ref().unwrap().iter().nth(
+      match base.buffer_views.as_ref().unwrap().iter().nth(
         match usize::try_from(self.buffer_view) { Ok(v) => v, Err(e) => Err(e.to_string())? })
-        .expect("`accessor.sparse.values.bufferView` is not a valid bufferView!");
+        {
+          Some(v) => v,
+          None => Err(format!("`accessor.sparse.values.bufferView` is not a valid bufferView!")) ?
+        };
     if ref_buf_view.target.is_some() { 
       Err(format!(
         "The referenced bufferView `accessor.sparse.values.bufferView` must not have its `target` property defined!"
@@ -775,7 +858,7 @@ impl Validatable for AccessorSparseValues {
         "The referenced bufferView `accessor.sparse.values.bufferView` must not have its `byteStride` property defined!"
       ))? 
     }
-    check_items_for_min_val(&vec![self.byte_offset], 0, "accessor.sparse.values.byteOffset")?;
+    check_items_for_min_val(&[self.byte_offset], 0, "accessor.sparse.values.byteOffset")?;
     Ok(())
   }
 }
@@ -795,7 +878,7 @@ pub struct AccessorSparse {
 }
 impl Validatable for AccessorSparse {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-    check_items_for_min_val(&vec![self.count], 1, "accessor.sparse.count")?;
+    check_items_for_min_val(&[self.count], 1, "accessor.sparse.count")?;
     self.indices.is_valid(base)?;
     self.values.is_valid(base)?;
     Ok(())
@@ -821,7 +904,19 @@ pub struct AnimationChannelTarget {
 }
 impl Validatable for AnimationChannelTarget {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-    if let Some(node) = self.node { check_items_for_min_val(&vec![node], 0, "animation.channel.target.node")? };
+    if let Some(node) = self.node { 
+      check_items_for_min_val(&[node], 0, "animation.channel.target.node")?; 
+      let ref_node: &Node = 
+        match base.nodes.as_ref().unwrap().iter().nth(
+          match usize::try_from(node) { Ok(v) => v, Err(e) => Err(e.to_string())? }
+        ){
+          Some(v) => v,
+          None => Err(format!("`animation.channel.target.node` is not a valid node!"))?
+        };
+      if ref_node.matrix != default_matrix() {
+        Err(format!("When a node is target for animation, `matrix` must not be present!"))?
+      }
+    };
     Ok(())
   }
 }
@@ -839,7 +934,7 @@ pub struct AnimationChannel {
 }
 impl Validatable for AnimationChannel {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-    check_items_for_min_val(&vec![self.sampler], 0, "animation.channel.sampler")?;
+    check_items_for_min_val(&[self.sampler], 0, "animation.channel.sampler")?;
     self.target.is_valid(base)?;
     Ok(())
   }
@@ -864,8 +959,8 @@ pub struct AnimationSampler {
 }
 impl Validatable for AnimationSampler {
   fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
-    check_items_for_min_val(&vec![self.input], 0, "animation.sampler.input")?;
-    check_items_for_min_val(&vec![self.output], 0, "animation.sampler.output")?;
+    check_items_for_min_val(&[self.input], 0, "animation.sampler.input")?;
+    check_items_for_min_val(&[self.output], 0, "animation.sampler.output")?;
     if let Some(accessors) = &base.accessors { 
       let input_accessor: &Accessor = 
         match accessors.iter().nth(match usize::try_from(self.input) { Ok(v) => v, Err(e) => Err(e.to_string())?}) {
@@ -954,6 +1049,14 @@ pub struct TextureInfo {
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
+impl Validatable for TextureInfo {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    check_items_for_min_val(&[self.index], 0, "textureInfo.index")?;
+    check_items_for_min_val(&[self.tex_coord], 0, "textureInfo.texCoord")?;
+    Ok(())
+  }
+}
+
 // A set of parameter values that are used to define the metallic-roughness material model from Physically-Based Rendering (PBR) methodology.
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MaterialPbrMetallicRoughness {
@@ -984,6 +1087,20 @@ pub struct MaterialPbrMetallicRoughness {
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
+impl Validatable for MaterialPbrMetallicRoughness {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    check_items_for_min_val(&self.base_color_factor, 0.0, "material.pbrMetallicRoughness.baseColorFactor")?;
+    check_items_for_max_val(&self.base_color_factor, 1.0, "material.pbrMetallicRoughness.baseColorFactor")?;
+    if let Some(base_color_tex_info) = &self.base_color_texture { base_color_tex_info.is_valid(base)? };
+    check_items_for_min_val(&[self.metallic_factor], 0.0, "material.pbrMetallicRoughness.metallicFactor")?;
+    check_items_for_max_val(&[self.metallic_factor], 1.0, "material.pbrMetallicRoughness.metallicFactor")?;
+    check_items_for_min_val(&[self.roughness_factor], 0.0, "material.pbrMetallicRoughness.roughnessFactor")?;
+    check_items_for_max_val(&[self.roughness_factor], 1.0, "material.pbrMetallicRoughness.roughnessFactor")?;
+    if let Some(metal_rough_tex_info) = &self.metallic_roughness_texture { metal_rough_tex_info.is_valid(base)? };
+    Ok(())
+  }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MaterialOcclusionTextureInfo {
   // The index of the texture.
@@ -1001,6 +1118,16 @@ pub struct MaterialOcclusionTextureInfo {
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
+impl Validatable for MaterialOcclusionTextureInfo {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    check_items_for_min_val(&[self.index], 0, "material.occlusionTextureInfo.index")?;
+    check_items_for_min_val(&[self.tex_coord], 0, "material.occlusionTextureInfo.texCoord")?;
+    check_items_for_min_val(&[self.strength], 0.0, "material.occlusionTextureInfo.strength")?;
+    check_items_for_max_val(&[self.strength], 1.0, "material.occlusionTextureInfo.strength")?;
+    Ok(())
+  }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MaterialNormalTextureInfo {
   // The index of the texture.
@@ -1008,8 +1135,8 @@ pub struct MaterialNormalTextureInfo {
   // This integer value is used to construct a string in the format `TEXCOORD_<set index>` 
   // which is a reference to a key in `mesh.primitives.attributes` (e.g. a value of `0` corresponds to `TEXCOORD_0`). 
   // A mesh primitive **MUST** have the corresponding texture coordinate attributes for the material to be applicable to it.
-  #[serde(rename = "texCoord")]
-  tex_coord: Option<i32>, // min: 0, default: 0
+  #[serde(rename = "texCoord", default)]
+  tex_coord: i32, // min: 0, default: 0
   // The scalar parameter applied to each normal vector of the texture. 
   // This value scales the normal vector in X and Y directions using the formula: 
   // `scaledNormal =  normalize((<sampled normal texture value> * 2.0 - 1.0) * vec3(<normal scale>, <normal scale>, 1.0))`.
@@ -1018,6 +1145,14 @@ pub struct MaterialNormalTextureInfo {
   extensions: Option<Extension>,
   extras: Option<Extra>,
 }
+impl Validatable for MaterialNormalTextureInfo {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    check_items_for_min_val(&[self.index], 0, "material.normalTextureInfo.index")?;
+    check_items_for_min_val(&[self.tex_coord], 0, "material.normalTextureInfo.texCoord")?;
+    Ok(())
+  }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MeshPrimitive {
   // A plain JSON object, where each key corresponds to a mesh attribute semantic 
@@ -1042,4 +1177,24 @@ pub struct MeshPrimitive {
   targets: Option<Vec<HashMap<String, i32>>>, // minItems: 1
   extensions: Option<Extension>,
   extras: Option<Extra>,
+}
+impl Validatable for MeshPrimitive {
+  fn is_valid(&self, base: &GltfLoader) -> Result<(), String> {
+    if let Some(indices) = self.indices { 
+      check_items_for_min_val(&[indices], 0, "mesh.primitive.indices")?;
+      let ref_accessor: &Accessor = 
+        match base.accessors.as_ref().unwrap().iter().nth(
+          match usize::try_from(indices) { Ok(v) => v, Err(e) => Err(e.to_string())? }
+        ){
+          Some(v) => v,
+          None => Err(format!("`mesh.primitive.indices` is not a valid accessor!"))?
+        };
+      if ref_accessor.ty != AccessorType::Scalar || ref_accessor.component_type != ComponentType::UnsignedInt {
+        Err(format!("The referenced accessor `mesh.primitive.indices` must be a `SCALAR` of `UNSIGNED_INT` component type!"))?
+      }
+    };
+    if let Some(material) = self.material { check_items_for_min_val(&[material], 0, "mesh.primitive.material")? };
+    if let Some(targets) = &self.targets { check_if_empty(targets, "mesh.primitive.targets")? }
+    Ok(())
+  }
 }

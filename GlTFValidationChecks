@@ -2,7 +2,7 @@ Validation after deserialization:
 AccessorSparseIndices: {
 	buffer_view: { 
 		min: 0,
-		notes: "The referenced buffer view MUST NOT have its 'target' or 'byteStride' properties defined. The buffer view and the optional 'byteOffset' MUST be aligned to the 'componentType' byte length.
+		notes: "The referenced buffer view MUST NOT have its 'target' or 'byteStride' properties defined. The buffer view and the optional 'byteOffset' MUST be aligned to the 'componentType' byte length."
 	},
 	byte_offset: { min: 0},
 	component_type: { anyOf: UNSIGNED_BYTE, UNSIGNED_SHORT, UNSIGNED_INT }
